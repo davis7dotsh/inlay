@@ -4,19 +4,19 @@ V07's native Swift macOS client handles microphone capture, shortcuts, and curso
 
 ## Code map
 
-| Component | Responsibility |
-| --- | --- |
-| `Sources/V07` | SwiftUI/AppKit app, device settings, HTTP client, capture, and guarded delivery. |
-| `Sources/V07Core` | Mac configuration, audio metering, microphone selection, and model manifests. |
-| `Sources/V07API` | Shared wire types and limits. |
-| `Sources/V07APIWire` | Generated Swift transport types used through the API facade. |
-| `Server/api/openapi.yaml` | Language-neutral HTTP and wire-model contract. |
-| `Server/src` | Packaged TypeScript HTTP server, durable coordinator, text pipeline, and helper management. |
-| `Sources/V07Domain` | Dictionary, list formatting, rewrite validation, and composition. |
-| `Sources/V07ServerKit` | Reference Swift server retained for migration parity tests. |
-| `Sources/V07Server` | Reference Swift server command-line entry point. |
-| `Engine` | Persistent Parakeet speech helper (vendored whisper.cpp); Metal on Mac, CPU/CUDA on Linux. |
-| `TextEngine` | Persistent Qwen helper; Swift MLX on Mac, llama.cpp on Linux. |
+| Component                 | Responsibility                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------- |
+| `Sources/V07`             | SwiftUI/AppKit app, device settings, HTTP client, capture, and guarded delivery.            |
+| `Sources/V07Core`         | Mac configuration, audio metering, microphone selection, and model manifests.               |
+| `Sources/V07API`          | Shared wire types and limits.                                                               |
+| `Sources/V07APIWire`      | Generated Swift transport types used through the API facade.                                |
+| `Server/api/openapi.yaml` | Language-neutral HTTP and wire-model contract.                                              |
+| `Server/src`              | Packaged TypeScript HTTP server, durable coordinator, text pipeline, and helper management. |
+| `Sources/V07Domain`       | Dictionary, list formatting, rewrite validation, and composition.                           |
+| `Sources/V07ServerKit`    | Reference Swift server retained for source comparison.                                      |
+| `Sources/V07Server`       | Reference Swift server command-line entry point.                                            |
+| `Engine`                  | Persistent Parakeet speech helper (vendored whisper.cpp); Metal on Mac, CPU/CUDA on Linux.  |
+| `TextEngine`              | Persistent Qwen helper; Swift MLX on Mac, llama.cpp on Linux.                               |
 
 The server talks to helpers over bounded JSON-lines pipes. Models warm at startup and stay loaded. The client contains no model helpers; it never starts or stops the server. The application has no Python runtime dependency.
 
@@ -44,11 +44,11 @@ With **Mute system audio while recording** enabled under **This Mac**, the defau
 
 ## Settings
 
-| Scope | Where to edit | What it owns |
-| --- | --- | --- |
-| This Mac | **This Mac** and **Microphone** | Endpoint/token, device name, shortcut, launch at login, output muting while recording, microphone priority/selection. |
-| Shared server | **Server preferences** | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention. |
-| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md). |
+| Scope          | Where to edit                    | What it owns                                                                                                          |
+| -------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, microphone priority/selection. |
+| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                      |
+| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).          |
 
 Shared saves use revisions to reject stale concurrent edits. Settings are snapshotted when the server accepts a take; changes affect future recordings. Update shared settings through the UI/API rather than editing files while the server runs.
 

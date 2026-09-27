@@ -7,7 +7,13 @@
 After loading Parakeet and Silero VAD, the helper emits a `ready` JSON object with a `parakeet.cpp/` engine version. Send one UTF-8 JSON object per line on stdin; replies are flushed JSON lines on stdout. Diagnostics go to stderr without transcript text.
 
 ```json
-{"type":"transcribe","id":"request-1","path":"/absolute/path/to/recording.wav","language":"en","vocabularyTerms":["V07","SwiftUI","Metal"]}
+{
+  "type": "transcribe",
+  "id": "request-1",
+  "path": "/absolute/path/to/recording.wav",
+  "language": "en",
+  "vocabularyTerms": ["V07", "SwiftUI", "Metal"]
+}
 ```
 
 - `language` defaults to `en`. Accepts `auto` and the model's 25 supported language codes: `bg`, `hr`, `cs`, `da`, `nl`, `en`, `et`, `fi`, `fr`, `de`, `el`, `hu`, `it`, `lv`, `lt`, `mt`, `pl`, `pt`, `ro`, `sk`, `sl`, `es`, `sv`, `ru`, `uk`. Legacy preferences `ja`, `zh`, `ko`, `hi`, and `ar` also remain accepted for proofreading; they do not expand speech recognition support. Recognition always chooses the spoken language automatically. Results return `language: "auto"` because this runtime exposes no language ID. The server omits detected-language metadata and uses the preference only for Qwen proofreading.
@@ -27,9 +33,4 @@ The server keeps the model warm. Terminating the helper cancels active work. `{"
 
 ## Verify
 
-```sh
-./scripts/build-server.sh
-python3 scripts/test-engine.py --model .local/models/ggml-parakeet-tdt-0.6b-v3-f16.bin
-```
-
-The test harness exercises protocol bounds, public sample recordings, honest hint diagnostics, passage retention, and process lifetime. For the full API path, use `scripts/smoke-test.sh` against an idle Dev server.
+Build with `./scripts/build-server.sh`, then use **V07 Dev** to record speech and inspect progress, transcripts, and the unavailable recognition-vocabulary status in history. Verify cancellation and subsequent recordings interactively when changing helper lifecycle behavior. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.

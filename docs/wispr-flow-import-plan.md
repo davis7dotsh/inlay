@@ -54,7 +54,7 @@ Index `(provider, sourceID)` at server startup. Repeated imports skip unchanged 
 
 Add the button, preview sheet, progress/cancel state, and import summary to [`HistoryPage.swift`](../Sources/V07/Views/HistoryPage.swift), with orchestration in [`V07Controller.swift`](../Sources/V07/V07Controller.swift) and transport in [`ServerClient.swift`](../Sources/V07/ServerClient.swift). Show an **Imported from Wispr Flow** label, source text variants, and available attachment actions in detail. Add a source filter so imported sessions remain findable among the existing 50-record History pages. Cancellation releases the sheet immediately while background extraction stops and cleans its snapshot. Keep the list's dimensions steady while preview/progress changes.
 
-Verify with synthetic SQLite fixtures covering text-only rows, audio rows, metadata-only attempts, duplicate IDs across backups, a WAL-mode source, and reruns that enrich rather than duplicate. Confirm preview counts and media extraction against read-only local snapshots; leave the actual import to the user's explicit test. Preserve V07's existing `swift test` and server checks.
+Use computer use to inspect import previews against read-only local snapshots, including text-only rows, audio rows, metadata-only attempts, duplicate IDs, and reruns that enrich rather than duplicate. Only import into an isolated development archive. Run static checks and compile the client; automated tests and fixtures are not allowed.
 
 ## Recovery boundary
 

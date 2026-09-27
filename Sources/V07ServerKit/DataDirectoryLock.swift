@@ -5,8 +5,8 @@ import Darwin
 import Glibc
 #endif
 
-/// A runner holds this advisory lock for its entire lifetime. Store fixtures can
-/// open archives directly, but two independent runners cannot mutate one archive.
+/// A runner holds this advisory lock for its entire lifetime so two independent
+/// runners cannot mutate one archive.
 final class DataDirectoryLock {
     private var descriptor: Int32?
 

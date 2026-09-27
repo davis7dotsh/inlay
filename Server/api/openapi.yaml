@@ -5,11 +5,9 @@ info:
   version: "1.0.0"
   description: "Shared transport contract for the Swift client and TypeScript server. Optional properties are omitted rather than encoded as null. Dates use whole-second ISO8601 UTC timestamps."
 servers:
-  -
-    url: "http://localhost:8391"
+  - url: "http://localhost:8391"
 security:
-  -
-    bearerAuth: []
+  - bearerAuth: []
 x-v07-apiVersion: 1
 x-v07-defaultPort: 8391
 x-v07-maximumRecordingSeconds: 180
@@ -73,8 +71,7 @@ paths:
         default:
           "$ref": "#/components/responses/APIError"
       parameters:
-        -
-          name: "limit"
+        - name: "limit"
           in: "query"
           required: false
           schema:
@@ -82,14 +79,12 @@ paths:
             minimum: 1
             maximum: 100
             default: 50
-        -
-          name: "before"
+        - name: "before"
           in: "query"
           required: false
           schema:
             type: "string"
-        -
-          name: "source"
+        - name: "source"
           in: "query"
           required: false
           schema:
@@ -128,8 +123,7 @@ paths:
         default:
           "$ref": "#/components/responses/APIError"
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -142,8 +136,7 @@ paths:
         default:
           "$ref": "#/components/responses/APIError"
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -161,36 +154,31 @@ paths:
         default:
           "$ref": "#/components/responses/APIError"
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
             "$ref": "#/components/schemas/UUID"
-        -
-          name: "kind"
+        - name: "kind"
           in: "path"
           required: true
           schema:
             "$ref": "#/components/schemas/AudioKind"
-        -
-          name: "sequence"
+        - name: "sequence"
           in: "query"
           required: true
           schema:
             type: "integer"
             minimum: 0
             maximum: 4095
-        -
-          name: "sampleRate"
+        - name: "sampleRate"
           in: "query"
           required: true
           schema:
             type: "integer"
             minimum: 8000
             maximum: 192000
-        -
-          name: "channels"
+        - name: "channels"
           in: "query"
           required: true
           schema:
@@ -226,8 +214,7 @@ paths:
               "$ref": "#/components/schemas/FinishGenerationRequest"
         x-maximumBytes: 262144
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -245,8 +232,7 @@ paths:
         default:
           "$ref": "#/components/responses/APIError"
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -271,8 +257,7 @@ paths:
               "$ref": "#/components/schemas/DeliveryReceipt"
         x-maximumBytes: 262144
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -293,8 +278,7 @@ paths:
           "$ref": "#/components/responses/APIError"
       description: "A bounded NDJSON stream of complete GenerationRecord values, with the latest record repeated as a two-second heartbeat. Ends after a terminal record."
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -328,14 +312,12 @@ paths:
         default:
           "$ref": "#/components/responses/APIError"
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
             "$ref": "#/components/schemas/UUID"
-        -
-          name: "filename"
+        - name: "filename"
           in: "path"
           required: true
           schema:
@@ -420,14 +402,12 @@ paths:
         default:
           "$ref": "#/components/responses/APIError"
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
             "$ref": "#/components/schemas/UUID"
-        -
-          name: "filename"
+        - name: "filename"
           in: "path"
           required: true
           schema:
@@ -465,8 +445,7 @@ paths:
         default:
           "$ref": "#/components/responses/APIError"
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -480,8 +459,7 @@ paths:
         default:
           "$ref": "#/components/responses/APIError"
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:

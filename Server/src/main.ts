@@ -2,18 +2,18 @@ import { acquireDataDirectoryLock } from "./data-lock.ts";
 import { parseConfiguration, usage, type ServerConfiguration } from "./configuration.ts";
 import { createHTTPServer } from "./http-server.ts";
 import { GenerationService, defaultProofreadingPrompt } from "./generation-service.ts";
-import { NativeInference, type InferenceBackend } from "./inference/native-inference.ts";
+import { NativeInference } from "./inference/native-inference.ts";
 
-export async function startServer(configuration: ServerConfiguration, backend?: InferenceBackend) {
+export async function startServer(configuration: ServerConfiguration) {
   const lock = acquireDataDirectoryLock(configuration.dataDirectory);
   let service: GenerationService | undefined;
   try {
     service = await GenerationService.open(
       configuration,
-      backend ?? new NativeInference(configuration.inference),
+      new NativeInference(configuration.inference),
     );
     const app = createHTTPServer(service, configuration.token);
-    await service.start();
+    service.start();
     const address = await app.listen({ host: configuration.host, port: configuration.port });
     let closing: Promise<void> | undefined;
     const close = () =>

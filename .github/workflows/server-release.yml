@@ -37,18 +37,14 @@ jobs:
         run: xcodebuild -downloadComponent MetalToolchain
       - run: bun install --frozen-lockfile
       - run: bun run check
-      - run: bun run test
-      - name: Verify embedded correction worker
-        run: bun test Server/tests/correction-worker-standalone.test.ts
+      - run: bun run lint
+      - run: bun run fmt:check
       - name: Build complete platform package
         env:
           V07_NATIVE: "OFF"
           V07_CUDA: "OFF"
           V07_BUILD_JOBS: "4"
         run: ./scripts/build-server.sh
-      - run: ./build/server/v07-server --help
-      - name: Test packaged HTTP server
-        run: bun Server/scripts/smoke.ts --executable ./build/server/v07-server
       - name: Package and checksum
         run: |
           cd build

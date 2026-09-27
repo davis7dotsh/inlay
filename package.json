@@ -6,12 +6,18 @@
     "Server"
   ],
   "scripts": {
+    "dev": "bun Server/scripts/dev.ts",
     "dev:server": "bun run --cwd Server dev",
     "build:server": "bun run --cwd Server build",
     "generate:api": "bun run --cwd Server generate",
-    "fmt": "bun run --cwd Server fmt",
-    "fmt:check": "bun run --cwd Server fmt:check",
-    "check": "bun run --cwd Server typecheck",
-    "test": "bun run --cwd Server test"
+    "fmt": "prettier --write .",
+    "fmt:check": "prettier --check .",
+    "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives Server",
+    "check": "bun run --cwd Server typecheck && bun run generate:api --check --typescript-only"
+  },
+  "devDependencies": {
+    "oxlint": "1.85.0",
+    "oxlint-tsgolint": "7.0.2003",
+    "prettier": "3.9.6"
   }
 }

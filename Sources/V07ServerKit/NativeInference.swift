@@ -22,8 +22,6 @@ public struct InferenceConfiguration: Sendable {
     public var speechTimeout: Double
     public var proofLoadTimeout: Double
     public var proofTimeout: Double
-    // Internal injection for subprocess fixtures. The runner exposes no bypass.
-    var modelVerification: InferenceModelVerification = .pinned
 
     public init(speechHelper: URL, speechModel: URL, vadModel: URL, proofHelper: URL,
                 proofModel: URL, threads: Int = min(8, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)),
@@ -233,44 +231,30 @@ public actor NativeInference {
     }
 
     private var speechPin: InferenceModelPin? {
-        switch configuration.modelVerification {
-        case .pinned:
-            // Sources/V07Core/SpeechModel.swift: SpeechModel.parakeet.
-            return InferenceModelPin(bytes: 1_255_897_319,
-                sha256: "833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f")
-        case .fixture(let speechSHA256, _): return speechSHA256.map { InferenceModelPin(bytes: nil, sha256: $0) }
-        }
+        // Sources/V07Core/SpeechModel.swift: SpeechModel.parakeet.
+        InferenceModelPin(bytes: 1_255_897_319,
+            sha256: "833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f")
     }
 
     private var proofPin: InferenceModelPin? {
-        switch configuration.modelVerification {
-        case .pinned:
-            #if os(macOS)
-            // The MLX helper verifies all six files against TextModel.qwen before
-            // emitting ready. Avoid hashing its 2 GB weights twice on startup.
-            return nil
-            #else
-            // Pinned Unsloth Qwen3-4B-Instruct-2507 Q4_K_M, Server/README.md.
-            return InferenceModelPin(bytes: 2_497_281_120,
-                sha256: "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597")
-            #endif
-        case .fixture(_, let proofSHA256): return proofSHA256.map { InferenceModelPin(bytes: nil, sha256: $0) }
-        }
+        #if os(macOS)
+        // The MLX helper verifies all six files against TextModel.qwen before
+        // emitting ready. Avoid hashing its 2 GB weights twice on startup.
+        return nil
+        #else
+        // Pinned Unsloth Qwen3-4B-Instruct-2507 Q4_K_M, Server/README.md.
+        return InferenceModelPin(bytes: 2_497_281_120,
+            sha256: "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597")
+        #endif
     }
 
     private var proofManifestSHA256: String? {
         #if os(macOS)
-        if case .pinned = configuration.modelVerification {
-            return "6689706a7d1a746920df5c5d5dc1e8ed3280790a542085d6e3c870c565e77307"
-        }
-        #endif
+        return "6689706a7d1a746920df5c5d5dc1e8ed3280790a542085d6e3c870c565e77307"
+        #else
         return nil
+        #endif
     }
-}
-
-enum InferenceModelVerification: Sendable {
-    case pinned
-    case fixture(speechSHA256: String?, proofSHA256: String?)
 }
 
 private struct InferenceModelPin: Hashable, Sendable {

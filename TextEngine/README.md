@@ -27,12 +27,4 @@ Diagnostics use stderr and omit transcripts. The server drains them without stor
 
 ## Verify
 
-With a built package and `V07_TEXT_MODEL` set to its model directory/file:
-
-```sh
-./scripts/test-corrections.sh
-```
-
-This selects the platform's harness and exports the canonical default from `build/server/v07-server`. To test a custom prompt, add `--prompt /absolute/path/to/prompt.txt`; the file is used exactly, including any trailing newlines. Use `--server` when running `test-text-engine.py` or `test-llama-engine.py` directly against a different server build.
-
-The suites use synthetic text to check corrections, numbers/negations, names, literal role markers, bounds, request isolation, and process shutdown. Portable Swift tests cover server lifecycle and output validation without model files. These checks do not establish microphone or cross-app insertion behavior.
+Build with `./scripts/build-server.sh`, set `V07_TEXT_MODEL` to its model directory/file, and use **V07 Dev** to dictate with proofreading enabled. Inspect raw and cleaned transcripts, cleanup outcomes, dictionary names, numbers, and negations in history. Edit **Cleanup instructions**, save shared preferences, and record another take to exercise custom prompts. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.

@@ -4,27 +4,27 @@ API version 1, default port **8391**. [`Server/api/openapi.yaml`](../Server/api/
 
 ## Routes
 
-| Route | Request / response |
-| --- | --- |
-| `GET /v1/health` | `ServerHealth`; server reachability differs from ready inference. Lightweight health contains no user data. |
-| `GET /v1/preferences` | `PreferencesSnapshot` |
-| `PUT /v1/preferences` | `PreferencesSnapshot` with expected revision; validates and returns incremented snapshot, 409 if stale. |
-| `POST /v1/generations` | `CreateGenerationRequest` → `GenerationRecord` with server UUID and frozen settings. Idempotent requestID scoped to device. Admission occurs before microphone capture. |
+| Route                                                                         | Request / response                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/health`                                                              | `ServerHealth`; server reachability differs from ready inference. Lightweight health contains no user data.                                                                                                                                                 |
+| `GET /v1/preferences`                                                         | `PreferencesSnapshot`                                                                                                                                                                                                                                       |
+| `PUT /v1/preferences`                                                         | `PreferencesSnapshot` with expected revision; validates and returns incremented snapshot, 409 if stale.                                                                                                                                                     |
+| `POST /v1/generations`                                                        | `CreateGenerationRequest` → `GenerationRecord` with server UUID and frozen settings. Idempotent requestID scoped to device. Admission occurs before microphone capture.                                                                                     |
 | `POST /v1/generations/:id/audio/:kind?sequence=0&sampleRate=16000&channels=1` | Binary little-endian interleaved float32 PCM, ≤1 MiB per request. `kind` is `inference` or `original`. Every request has sequence/format; format fixed per stream. Exact repeated chunk idempotent; gaps/conflicting repeats reject. → `AudioChunkReceipt`. |
-| `POST /v1/generations/:id/finish` | `FinishGenerationRequest` with exact frame counts. All chunks must be acknowledged first. Optional previous continuation generation ID. Seals WAV artifacts atomically and submits processing. → `GenerationRecord`. |
-| `GET /v1/generations/:id/events` | `application/x-ndjson`, each line a full `GenerationRecord`; emit current state, updates, and two-second heartbeats until terminal. Disconnecting after complete upload does not cancel inference. |
-| `GET /v1/generations/:id` | `GenerationRecord` |
-| `GET /v1/generations?limit=50&before=CURSOR` | `GenerationPage`, descending creation order, bounded limit/cursor. |
-| `POST /v1/generations/:id/cancel` | Explicit cancellation, terminal idempotency, → `GenerationRecord`. |
-| `POST /v1/generations/:id/delivery` | `DeliveryReceipt`; store actual client outcome separately from inference completion. → `GenerationRecord`. |
-| `GET /v1/generations/:id/artifacts/:filename` | Allowlisted original.wav, inference.wav, transcript.txt, metadata.json, source.json, source.wav, opus.json, screenshot.png, and built-in-audio.bin. Imported artifacts exist only when supplied by the source. |
-| `DELETE /v1/generations/:id` | Explicit history removal; active generation cannot be deleted. 204. |
-| `POST /v1/imports/wispr-flow/known` | Source IDs → known imported source IDs. |
-| `POST /v1/imports/wispr-flow` | Source metadata and checksummed artifact manifests → staging session. 201. |
-| `PUT /v1/imports/wispr-flow/:id/artifacts/:filename` | JSON/WAV/PNG or binary bytes, ≤8 MiB; validates manifest before publishing. |
-| `POST /v1/imports/wispr-flow/:id/complete` | Atomically publishes or reconciles the imported record. |
-| `DELETE /v1/imports/wispr-flow/:id` | Removes unpublished staging session. 204. |
-| `PUT /v1/imports/wispr-flow/dictionary` | Preserves source JSON and immutable digest versions, ≤8 MiB; does not change active dictionary. |
+| `POST /v1/generations/:id/finish`                                             | `FinishGenerationRequest` with exact frame counts. All chunks must be acknowledged first. Optional previous continuation generation ID. Seals WAV artifacts atomically and submits processing. → `GenerationRecord`.                                        |
+| `GET /v1/generations/:id/events`                                              | `application/x-ndjson`, each line a full `GenerationRecord`; emit current state, updates, and two-second heartbeats until terminal. Disconnecting after complete upload does not cancel inference.                                                          |
+| `GET /v1/generations/:id`                                                     | `GenerationRecord`                                                                                                                                                                                                                                          |
+| `GET /v1/generations?limit=50&before=CURSOR`                                  | `GenerationPage`, descending creation order, bounded limit/cursor.                                                                                                                                                                                          |
+| `POST /v1/generations/:id/cancel`                                             | Explicit cancellation, terminal idempotency, → `GenerationRecord`.                                                                                                                                                                                          |
+| `POST /v1/generations/:id/delivery`                                           | `DeliveryReceipt`; store actual client outcome separately from inference completion. → `GenerationRecord`.                                                                                                                                                  |
+| `GET /v1/generations/:id/artifacts/:filename`                                 | Allowlisted original.wav, inference.wav, transcript.txt, metadata.json, source.json, source.wav, opus.json, screenshot.png, and built-in-audio.bin. Imported artifacts exist only when supplied by the source.                                              |
+| `DELETE /v1/generations/:id`                                                  | Explicit history removal; active generation cannot be deleted. 204.                                                                                                                                                                                         |
+| `POST /v1/imports/wispr-flow/known`                                           | Source IDs → known imported source IDs.                                                                                                                                                                                                                     |
+| `POST /v1/imports/wispr-flow`                                                 | Source metadata and checksummed artifact manifests → staging session. 201.                                                                                                                                                                                  |
+| `PUT /v1/imports/wispr-flow/:id/artifacts/:filename`                          | JSON/WAV/PNG or binary bytes, ≤8 MiB; validates manifest before publishing.                                                                                                                                                                                 |
+| `POST /v1/imports/wispr-flow/:id/complete`                                    | Atomically publishes or reconciles the imported record.                                                                                                                                                                                                     |
+| `DELETE /v1/imports/wispr-flow/:id`                                           | Removes unpublished staging session. 204.                                                                                                                                                                                                                   |
+| `PUT /v1/imports/wispr-flow/dictionary`                                       | Preserves source JSON and immutable digest versions, ≤8 MiB; does not change active dictionary.                                                                                                                                                             |
 
 Errors are `APIErrorResponse`; relevant codes 400 invalid input, 401 auth, 404 missing, 409 stale/conflict, 413 limits, 503 unavailable. Bearer authorization on data routes if token configured; nonloopback server binds require a token. Remote connections use HTTPS; localhost and explicit Tailscale endpoints can use HTTP. No credentials in URLs or diagnostics.
 
@@ -44,13 +44,13 @@ Errors are `APIErrorResponse`; relevant codes 400 invalid input, 401 auth, 404 m
 
 GET/PUT use `{ "revision": N, "preferences": { ... } }`. A save must include the current revision; successful validation returns the incremented snapshot. Active generations keep their admission-time snapshot.
 
-| Field | Default / limit |
-| --- | --- |
-| `language` | `en`; `auto` and the languages declared in `ServerPreferences`. |
-| `proofreadingPrompt` | Editable default; nonempty, at most 4,096 UTF-8 bytes. |
-| `vocabulary` | Recognition hints; at most 16 KiB. |
-| `dictionary` | Up to 32 named lists, 500 terms, eight aliases per term. Conflicting mappings reject. |
-| `textCorrectionEnabled` | `true`; toggles Qwen, preserving dictionary/list processing when off. |
-| `keepOriginalAudio` | `true`; affects future uploads and retention, not existing artifacts. |
+| Field                   | Default / limit                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------- |
+| `language`              | `en`; `auto` and the languages declared in `ServerPreferences`.                       |
+| `proofreadingPrompt`    | Editable default; nonempty, at most 4,096 UTF-8 bytes.                                |
+| `vocabulary`            | Recognition hints; at most 16 KiB.                                                    |
+| `dictionary`            | Up to 32 named lists, 500 terms, eight aliases per term. Conflicting mappings reject. |
+| `textCorrectionEnabled` | `true`; toggles Qwen, preserving dictionary/list processing when off.                 |
+| `keepOriginalAudio`     | `true`; affects future uploads and retention, not existing artifacts.                 |
 
 For on-disk layout and client-owned settings, see [architecture](architecture.md).

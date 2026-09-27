@@ -13,7 +13,6 @@ WORKDIR /src
 COPY Package.swift Package.resolved CMakeLists.txt THIRD_PARTY_NOTICES.md ./
 COPY package.json bun.lock ./
 COPY Sources ./Sources
-COPY Tests ./Tests
 COPY Engine ./Engine
 COPY TextEngine ./TextEngine
 COPY vendor ./vendor
@@ -62,7 +61,7 @@ COPY --from=cuda-toolkit /usr/local/cuda-13.0/ /usr/local/cuda/
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64
 ENV NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# CPU is the default target, useful for a portable build/smoke check. Use the
+# CPU is the default target, useful for a portable build. Use the
 # cuda target for a GPU server and install NVIDIA Container Toolkit on its host.
 FROM runtime AS cpu
 COPY --from=cpu-build /src/build/server/ /opt/v07/

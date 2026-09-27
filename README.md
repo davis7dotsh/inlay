@@ -8,7 +8,7 @@ Upgrading from an earlier project name: rebuild both client and server, update e
 
 ## Get started on one Mac
 
-You need Apple Silicon, macOS 14+, full Xcode 26+ with the Metal compiler, Bun 1.4.2, CMake, and Git. Xcode provides Swift; the client/MLX build requires Swift 6.2+. Python 3 is only needed for the test scripts. Bun manages JavaScript dependencies and builds standalone server executables.
+You need Apple Silicon, macOS 14+, full Xcode 26+ with the Metal compiler, Bun 1.4.2, CMake, and Git. Xcode provides Swift; the client/MLX build requires Swift 6.2+. Bun manages JavaScript dependencies and builds standalone server executables.
 
 ```sh
 git clone --recurse-submodules https://github.com/davis7dotsh/v07.git
@@ -44,17 +44,34 @@ Set its URL and token under **This Mac**. Use HTTPS for remote hosts, or HTTP wi
 
 ## Daily development
 
+For server edits on macOS or Linux, install dependencies once and run the source with hot reload:
+
+```sh
+bun install --frozen-lockfile
+bun run dev
+```
+
+This listens on `0.0.0.0:8392`, uses `.local/dev-server/data`, and creates a private token file at `.local/dev-server/token`. Set the model-path exports above and build the native helpers once with `./scripts/build-server.sh` for dictation. Without helpers/models, the server still starts and health reports unavailable inference. On Siva, open [server health](http://siva.otter-hawksbill.ts.net:8392/v1/health).
+
+```sh
+bun run fmt
+bun run fmt:check
+bun run lint
+bun run check
+```
+
+Automated tests are not allowed. Verify behavior by using **V07 Dev** through computer use; this is a native Mac app, so the browser health endpoint alone cannot verify dictation or insertion. See [the development guide](docs/development.md) for setup and verification.
+
+For the packaged Mac app and server:
+
 ```sh
 ./scripts/run-dev.sh start --skip-build   # Start existing builds
 ./scripts/run-dev.sh status
 ./scripts/run-dev.sh stop
 ./scripts/run-dev.sh restart             # Rebuild and restart the server
-swift test
-./scripts/smoke-test.sh                  # Real HTTP/audio test; server must be idle
-./scripts/test-corrections.sh            # Real Qwen helper checks
 ```
 
-Keep the model-path exports set when starting the server or running helper checks. After rebuilding an already-open client, quit and reopen it to load the new executable. Signing uses an available Apple Development identity or ad-hoc signing; ad-hoc rebuilds may require granting permissions again.
+Keep the model-path exports set when starting the server. After rebuilding an already-open client, quit and reopen it to load the new executable. Signing uses an available Apple Development identity or ad-hoc signing; ad-hoc rebuilds may require granting permissions again.
 
 The dev runner stores shared history/settings in `.local/server`, device preferences in `.local/client`, and logs in `.local/server.log`. Keep experiment notes and generated artifacts under the ignored `.local/` directory too. Quitting the app leaves the server running. Recordings require an online, available server and have a three-minute limit.
 

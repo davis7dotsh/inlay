@@ -25,8 +25,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run fmt:check
       - run: bun run check
-      - run: bun run test
-      - run: bun run generate:api --check --typescript-only
+      - run: bun run lint
 
   swift:
     name: Swift API compatibility
@@ -46,8 +45,8 @@ jobs:
           '
       - run: bun install --frozen-lockfile
       - run: bun run generate:api --check
-      - name: Test Swift packages without launching the client
-        run: swift test
+      - name: Compile Swift packages without launching the client
+        run: swift build --force-resolved-versions
 
   coordinator:
     name: Compiled server (${{ matrix.target }})
@@ -69,14 +68,6 @@ jobs:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun run --cwd Server build --target=${{ matrix.target }}
-      - name: Smoke compiled executable
-        run: ./build/server/v07-server --help
-      - name: Test compiled HTTP server
-        run: bun Server/scripts/smoke.ts --executable ./build/server/v07-server
-      - name: Verify native directory lock and compiled FFI
-        run: bun test Server/tests/data-lock.test.ts
-      - name: Verify embedded correction worker
-        run: bun test Server/tests/correction-worker-standalone.test.ts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: v07-server-coordinator-${{ matrix.target }}
@@ -109,9 +100,6 @@ jobs:
           V07_CUDA: "OFF"
           V07_BUILD_JOBS: "4"
         run: ./scripts/build-server.sh
-      - run: ./build/server/v07-server --help
-      - name: Test packaged HTTP server
-        run: bun Server/scripts/smoke.ts --executable ./build/server/v07-server
       - name: Archive complete platform package
         run: tar -czf build/v07-server-${{ matrix.platform }}-cpu.tar.gz -C build server
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

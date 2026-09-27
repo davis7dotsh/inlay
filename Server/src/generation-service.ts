@@ -761,7 +761,6 @@ export class GenerationService {
       }
       return watcher;
     });
-    const service = this;
     const iterator: AsyncIterableIterator<GenerationRecord> = {
       [Symbol.asyncIterator]() {
         return iterator;
@@ -777,14 +776,14 @@ export class GenerationService {
           watcher.wake = undefined;
         }
       },
-      async return() {
+      return: async () => {
         watcher.done = true;
         watcher.queue = [];
         watcher.wake?.();
-        await service.mutate(() => {
-          const group = service.subscribers.get(id);
+        await this.mutate(() => {
+          const group = this.subscribers.get(id);
           group?.delete(watcher);
-          if (!group?.size) service.subscribers.delete(id);
+          if (!group?.size) this.subscribers.delete(id);
         });
         return { value: undefined, done: true };
       },

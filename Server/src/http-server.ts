@@ -62,7 +62,7 @@ export function createHTTPServer(service: GenerationService, token?: string) {
   app.removeContentTypeParser("application/json");
   app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
     if (body === "") done(null, undefined);
-    else parseJSON(request, typeof body === "string" ? body : body.toString("utf8"), done);
+    else void parseJSON(request, typeof body === "string" ? body : body.toString("utf8"), done);
   });
   app.addContentTypeParser(
     "application/octet-stream",

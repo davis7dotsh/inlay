@@ -2,9 +2,9 @@
 
 The server is an independent TypeScript/Fastify HTTP process that owns models, shared preferences, recordings, and history. Bun manages its dependencies and compiles standalone executables with the runtime included. Native inference helpers run separately. This guide covers model installation and running the server separately.
 
-| Server | Speech | Proofreading |
-| --- | --- | --- |
-| Apple Silicon macOS | Parakeet TDT 0.6B v3 / whisper.cpp / Metal | Qwen3-4B-Instruct-2507 / Swift MLX / 4-bit |
+| Server                | Speech                                           | Proofreading                                |
+| --------------------- | ------------------------------------------------ | ------------------------------------------- |
+| Apple Silicon macOS   | Parakeet TDT 0.6B v3 / whisper.cpp / Metal       | Qwen3-4B-Instruct-2507 / Swift MLX / 4-bit  |
 | Linux x86_64 or ARM64 | Parakeet TDT 0.6B v3 / whisper.cpp / CPU or CUDA | Qwen3-4B-Instruct-2507 / llama.cpp / Q4_K_M |
 
 ## Models
@@ -75,9 +75,9 @@ Cross builds live under `build/server-coordinators`. Bun cross-compiles the coor
 
 The release workflow produces complete platform tarballs and SHA-256 checksums. Extract a package, retain its `server` directory together, install the pinned model weights separately, then use the arguments below. Developer ID distribution still requires signing/notarization credentials; the draft Mac build is ad-hoc signed with Bun's executable entitlements.
 
-The archive lock uses Bun FFI to call libc `flock`, matching the reference Swift server. This dependency is tested from source and compiled executables on the supported platforms. A running Swift server and Bun server must never share a data directory.
+The archive lock uses Bun FFI to call libc `flock`, matching the reference Swift server. The lock is held for the server process lifetime. A running Swift server and Bun server must never share a data directory.
 
-`V07_BUILD_JOBS` controls build concurrency. For another CPU/GPU host, use `V07_NATIVE=OFF` and set `V07_CUDA_ARCHITECTURES` for the destination GPU. CPU support is useful for compatibility tests; validate CUDA support, memory, and dictation latency on the selected host.
+`V07_BUILD_JOBS` controls build concurrency. For another CPU/GPU host, use `V07_NATIVE=OFF` and set `V07_CUDA_ARCHITECTURES` for the destination GPU. CPU support is useful for portable builds; validate CUDA support, memory, and dictation latency on the selected host.
 
 ## Run
 
@@ -100,14 +100,14 @@ Check `curl http://localhost:8391/v1/health`; HTTP reachability alone does not m
 
 For server-only development alongside an installed V07 instance, use `--port 8392 --data-dir "$PWD/.local/typescript-server" --dev` with your helper/model arguments. Start the executable directly or use `bun run dev:server` with those arguments. The client dev runner starts the app and defaults to port 8391; avoid it when preserving a running installation.
 
-| Argument | Environment variable |
-| --- | --- |
-| `--host`, `--port` | `V07_SERVER_HOST`, `V07_SERVER_PORT` |
-| `--data-dir`, `--token-file` | `V07_SERVER_DATA_DIR`, `V07_SERVER_TOKEN_FILE` |
-| `--speech-helper`, `--speech-model` | `V07_ENGINE_PATH`, `V07_SPEECH_MODEL` |
-| `--vad-model` | `V07_VAD_PATH` |
-| `--proof-helper`, `--proof-model` | `V07_TEXT_ENGINE_PATH`, `V07_TEXT_MODEL` |
-| `--dev` | `V07_DEV=1` |
+| Argument                            | Environment variable                           |
+| ----------------------------------- | ---------------------------------------------- |
+| `--host`, `--port`                  | `V07_SERVER_HOST`, `V07_SERVER_PORT`           |
+| `--data-dir`, `--token-file`        | `V07_SERVER_DATA_DIR`, `V07_SERVER_TOKEN_FILE` |
+| `--speech-helper`, `--speech-model` | `V07_ENGINE_PATH`, `V07_SPEECH_MODEL`          |
+| `--vad-model`                       | `V07_VAD_PATH`                                 |
+| `--proof-helper`, `--proof-model`   | `V07_TEXT_ENGINE_PATH`, `V07_TEXT_MODEL`       |
+| `--dev`                             | `V07_DEV=1`                                    |
 
 The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `V07_SPEECH_MODEL` and `V07_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches the existing locations `~/Library/Application Support/V07/Models/ggml-parakeet-tdt-0.6b-v3-f16.bin` and `~/.v07/models/Qwen3-4B-Instruct-2507-MLX-4bit`.
 
@@ -145,20 +145,24 @@ docker run --rm --name v07-server \
 
 For a GPU server, use `v07-server:cuda` and add `--gpus all`. The example exposes only host loopback; use the remote-access setup above for clients on other machines. The container runs as UID 10001, which must be able to read model/token files and write `/data`. The named volume preserves history across container replacement.
 
-## Verify
+## Development and verification
+
+From the repository root:
 
 ```sh
 bun install --frozen-lockfile
-bun run fmt
-bun run fmt:check
-bun run check
-bun run test
-bun run generate:api --check
-swift test
-./scripts/smoke-test.sh
-V07_TEXT_MODEL=/absolute/path/to/qwen ./scripts/test-corrections.sh
+bun run dev
 ```
 
-API generation/Swift checks need Swift 6.2+. Linux-only development can check TypeScript bindings with `bun run generate:api --check --typescript-only`. The reference Swift server/domain remain as a parity oracle; packaged server builds use TypeScript. See the [contract guide](api/README.md) for generated bindings and the [implementation plan](../docs/typescript-server-plan.md) for the migration.
+The source server hot reloads, listens on `0.0.0.0:8392`, and keeps data and its automatically created private token under `.local/dev-server`. On Siva, open [server health](http://siva.otter-hawksbill.ts.net:8392/v1/health). Build helpers once with `./scripts/build-server.sh` and set `V07_SPEECH_MODEL` and `V07_TEXT_MODEL` to enable dictation. Missing assets leave the server running with `ready: false`; HTTP reachability does not establish working inference. CLI arguments and the environment variables above override development defaults, except that inherited `V07_SERVER_DATA_DIR` is ignored. Use `--data-dir` to explicitly select another development archive.
 
-The HTTP smoke test needs an idle Dev server with proofreading enabled. It uses public sample audio, checks progress/artifacts, temporarily changes and restores retention settings, and removes its test generations. The helper test accepts the MLX directory on Mac or GGUF file on Linux and uses synthetic text. Neither opens a microphone. These checks do not establish live cursor-insertion behavior or GPU performance on a different machine.
+```sh
+bun run fmt
+bun run fmt:check
+bun run lint
+bun run check
+```
+
+`check` runs strict TypeScript checking and verifies generated TypeScript bindings against OpenAPI. `lint` runs type-aware correctness rules with zero warnings, including promise handling and a ban on explicit `any`. `fmt` and `fmt:check` cover first-party TypeScript, JSON, YAML, and Markdown while excluding vendor/build/data directories. On macOS with Swift 6.2+, also run `bun run generate:api --check` and `swift build --force-resolved-versions` when changing Swift or the API.
+
+Automated tests and test harnesses are not allowed. Use the native **V07 Dev** app through computer use to verify changed behavior, including real dictation, progress, preferences, history, and delivery. The API rejects browser-origin requests and has no web UI. Follow [the development guide](../docs/development.md); report missing model/device access as unverified behavior.
