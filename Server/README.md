@@ -19,7 +19,7 @@ V07_MODEL_DIR="$PWD/.local/models" ./scripts/download-model.sh
 
 This installs and verifies `ggml-parakeet-tdt-0.6b-v3-f16.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh` and `Sources/V07Core/SpeechModel.swift`. The server build separately downloads the pinned Silero VAD model. This branch requires Parakeet weights; existing Whisper weights cannot be reused.
 
-Parakeet automatically recognizes 25 European languages. The language preference guides proofreading and does not force recognition. The helper exposes no detected language ID. Recognition vocabulary hints are unsupported (zero budget); dictionary replacements and Qwen hints still apply. Older language preferences remain readable, but unsupported languages must be changed before dictating.
+Parakeet automatically recognizes 25 European languages. The language preference guides proofreading and does not force recognition. The helper exposes no detected language ID. Recognition vocabulary hints are unsupported (zero budget); dictionary replacements and Qwen hints still apply. Older language preferences remain accepted for proofreading and never block automatic recognition; they do not expand Parakeet’s supported speech languages.
 
 ### Qwen on macOS
 

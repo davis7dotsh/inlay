@@ -206,9 +206,9 @@ def main():
                     assert hints["tokenCount"] == hints["tokenBudget"] == 0, hints
                 legacy = engine.transcribe(pcm, "legacy-prompt", prompt="auth, Café")
                 assert legacy["includedTerms"] == [] and legacy["omittedTerms"] == ["auth, Café"], legacy
-                assert engine.transcribe(pcm, "unsupported-language", language="ja")["type"] == "error"
                 for language in ("auto", "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el",
-                                 "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk"):
+                                 "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
+                                 "ja", "zh", "ko", "hi", "ar"):
                     result = engine.transcribe(pcm, "supported-language", language=language)
                     assert result["type"] == "result" and result["language"] == "auto", result
                 print("Passed: unsupported vocabulary is reported honestly; supported languages accepted", flush=True)
@@ -230,11 +230,11 @@ def main():
                 for scale in (1, 0.04):
                     path = temporary / f"speech-{scale}.wav"
                     float_audio(path, [sample * scale for sample in samples])
-                    result = engine.transcribe(path, path.name, language="en")
+                    result = engine.transcribe(path, path.name, language="ja" if scale == 1 else "en")
                     assert result["type"] == "result" and result["text"].strip(), result
                     if args.audio.name == "jfk.wav":
                         assert "country" in result["text"].lower(), result
-                print("Passed: float32 speech and very quiet speech (-28 dB)", flush=True)
+                print("Passed: float32 speech with a legacy language preference and very quiet speech (-28 dB)", flush=True)
 
                 if args.audio.name == "jfk.wav":
                     # Longer recordings must retain every passage, even when hints

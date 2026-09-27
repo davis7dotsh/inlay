@@ -181,7 +181,7 @@ struct ServerPreferencesPage: View {
                 Section {
                     Picker("Proofreading language", selection: $draft.language) {
                         if !languages.contains(where: { $0.1 == draft.language }) {
-                            Text("\(draft.language) (unsupported by Parakeet)").tag(draft.language)
+                            Text("\(draft.language) (proofreading only)").tag(draft.language)
                         }
                         ForEach(languages, id: \.1) { name, code in Text(name).tag(code) }
                     }

@@ -208,10 +208,12 @@ std::variant<std::vector<std::string>, std::string> vocabularyTerms(const json &
     return terms;
 }
 
-bool supportedLanguage(const std::string &language) {
+bool validLanguagePreference(const std::string &language) {
     static const std::unordered_set<std::string> languages = {
         "auto", "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu",
-        "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk"
+        "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
+        // Legacy preferences guide proofreading, never Parakeet recognition.
+        "ja", "zh", "ko", "hi", "ar"
     };
     return languages.count(language) > 0;
 }
@@ -228,8 +230,8 @@ void transcribe(parakeet_context *context, whisper_vad_context *vad, int threads
         return;
     }
     const auto language = request.contains("language") ? stringField(request, "language") : std::optional<std::string>("en");
-    if (!language || !supportedLanguage(*language)) {
-        emitError("Parakeet does not support the requested language. Choose a supported European language or automatic detection.", *id);
+    if (!language || !validLanguagePreference(*language)) {
+        emitError("The language preference is invalid.", *id);
         return;
     }
     const auto vocabulary = vocabularyTerms(request);
