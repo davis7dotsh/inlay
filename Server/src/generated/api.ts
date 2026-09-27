@@ -330,21 +330,7 @@ export interface components {
         | "pl"
         | "ru"
         | "uk"
-        | "sv"
-        | "bg"
-        | "hr"
-        | "cs"
-        | "da"
-        | "et"
-        | "fi"
-        | "el"
-        | "hu"
-        | "lv"
-        | "lt"
-        | "mt"
-        | "ro"
-        | "sk"
-        | "sl";
+        | "sv";
       /** @description Missing values use the built-in cleanup prompt; maximum UTF-8 size is 4096 bytes. */
       proofreadingPrompt?: string;
       /** @description Maximum UTF-8 size is 16384 bytes. */

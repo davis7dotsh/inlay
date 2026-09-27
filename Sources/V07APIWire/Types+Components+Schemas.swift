@@ -267,20 +267,6 @@ extension Components {
                 case ru = "ru"
                 case uk = "uk"
                 case sv = "sv"
-                case bg = "bg"
-                case hr = "hr"
-                case cs = "cs"
-                case da = "da"
-                case et = "et"
-                case fi = "fi"
-                case el = "el"
-                case hu = "hu"
-                case lv = "lv"
-                case lt = "lt"
-                case mt = "mt"
-                case ro = "ro"
-                case sk = "sk"
-                case sl = "sl"
             }
             /// Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
             ///

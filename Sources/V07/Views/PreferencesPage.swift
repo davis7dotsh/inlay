@@ -131,14 +131,12 @@ struct ServerPreferencesPage: View {
         return dirty && base.revision != latest.revision
     }
     private var available: Bool { controller.sharedPreferences != nil && controller.serverHealth != nil }
+    // Keep API v1 wire values readable by older clients. Other Parakeet
+    // languages use automatic proofreading without adding closed-enum cases.
     private let languages = [
-        ("English", "en"), ("Automatic", "auto"), ("Bulgarian", "bg"), ("Croatian", "hr"),
-        ("Czech", "cs"), ("Danish", "da"), ("Dutch", "nl"), ("Estonian", "et"),
-        ("Finnish", "fi"), ("French", "fr"), ("German", "de"), ("Greek", "el"),
-        ("Hungarian", "hu"), ("Italian", "it"), ("Latvian", "lv"), ("Lithuanian", "lt"),
-        ("Maltese", "mt"), ("Polish", "pl"), ("Portuguese", "pt"), ("Romanian", "ro"),
-        ("Russian", "ru"), ("Slovak", "sk"), ("Slovenian", "sl"), ("Spanish", "es"),
-        ("Swedish", "sv"), ("Ukrainian", "uk")
+        ("English", "en"), ("Automatic", "auto"), ("Spanish", "es"), ("French", "fr"),
+        ("German", "de"), ("Italian", "it"), ("Portuguese", "pt"), ("Dutch", "nl"),
+        ("Polish", "pl"), ("Russian", "ru"), ("Ukrainian", "uk"), ("Swedish", "sv")
     ]
 
     var body: some View {
@@ -185,7 +183,7 @@ struct ServerPreferencesPage: View {
                         }
                         ForEach(languages, id: \.1) { name, code in Text(name).tag(code) }
                     }
-                    Text("Parakeet recognizes 25 European languages automatically.")
+                    Text("Parakeet recognizes 25 European languages automatically. Use Automatic for other proofreading languages.")
                         .font(.caption).foregroundStyle(V07Palette.muted)
                     Toggle("Proofread with Qwen", isOn: $draft.textCorrectionEnabled)
                     VStack(alignment: .leading, spacing: 8) {
