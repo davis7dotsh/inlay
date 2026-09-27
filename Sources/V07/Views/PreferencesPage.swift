@@ -136,7 +136,10 @@ struct ServerPreferencesPage: View {
     private let languages = [
         ("English", "en"), ("Automatic", "auto"), ("Spanish", "es"), ("French", "fr"),
         ("German", "de"), ("Italian", "it"), ("Portuguese", "pt"), ("Dutch", "nl"),
-        ("Polish", "pl"), ("Russian", "ru"), ("Ukrainian", "uk"), ("Swedish", "sv")
+        ("Polish", "pl"), ("Russian", "ru"), ("Ukrainian", "uk"), ("Swedish", "sv"),
+        ("Japanese (proofreading only)", "ja"), ("Chinese (proofreading only)", "zh"),
+        ("Korean (proofreading only)", "ko"), ("Hindi (proofreading only)", "hi"),
+        ("Arabic (proofreading only)", "ar")
     ]
 
     var body: some View {
@@ -178,9 +181,6 @@ struct ServerPreferencesPage: View {
                 }
                 Section {
                     Picker("Proofreading language", selection: $draft.language) {
-                        if !languages.contains(where: { $0.1 == draft.language }) {
-                            Text("\(draft.language) (proofreading only)").tag(draft.language)
-                        }
                         ForEach(languages, id: \.1) { name, code in Text(name).tag(code) }
                     }
                     Text("Parakeet recognizes 25 European languages automatically. Use Automatic for other proofreading languages.")
