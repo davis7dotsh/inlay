@@ -1,6 +1,6 @@
 # Dictionary and cleanup
 
-The server processes each complete take in this order: Whisper → mechanical cleanup → dictionary → list formatting → optional Qwen → dictionary → rewrite validation → composition. The Mac receives a finished result for insertion. Models and installation are covered in the [server guide](../Server/README.md#models).
+The server processes each complete take in this order: Parakeet → mechanical cleanup → dictionary → list formatting → optional Qwen → dictionary → rewrite validation → composition. The Mac receives a finished result for insertion. Models and installation are covered in the [server guide](../Server/README.md#models).
 
 ## Dictionary and vocabulary
 
@@ -8,8 +8,8 @@ Edit **Server preferences**, then **Save shared preferences**. All dictionary li
 
 - Preferred spellings normalize case. Explicit aliases replace whole words or phrases, such as `mini max → MiniMax`. Longer matches win, and replacements do not cascade.
 - Use narrow aliases like `off middleware → auth middleware`; a broad `off → auth` also changes legitimate “turn off.”
-- Star priority terms to suggest them first. Whisper fits whole terms into its token budget; history shows included and omitted hints. Qwen has a separate bounded hint budget. Dictionary replacements still apply to terms omitted from model hints.
-- **Recognition vocabulary** adds speech hints. Hints improve the odds of recognizing unusual names; they cannot reliably distinguish every homophone.
+- Star priority terms to suggest them to Qwen first. Parakeet does not support recognition vocabulary prompts; history reports those terms as unused with a zero token budget. Dictionary replacements and Qwen’s bounded hint budget still apply.
+- Saved recognition vocabulary remains in existing settings for compatibility, but Parakeet does not consume it. Use dictionary rules for deterministic replacements and dictionary names for Qwen cleanup.
 - The initial Personal list contains MiniMax and Codex. You can delete them or save an empty dictionary. There is no automatic learning from edits or history.
 
 ## Cleanup instructions
@@ -29,7 +29,7 @@ The prompt guides Qwen; it cannot bypass the validation rules below.
 
 Rejected, unavailable, or failed proofreading keeps the already-cleaned, dictionary-corrected, list-formatted source. History records raw text, the proposed/accepted cleanup, its outcome/reason, verified corrections, and model details. See [storage](architecture.md#storage).
 
-The checks do not prove identical meaning. Whisper can omit words; Qwen can mishandle homophones or instructions. The proofreader receives the current dictated chunk, language, preferred terms, and cleanup prompt—not surrounding documents, clipboard contents, or screenshots.
+The checks do not prove identical meaning. Parakeet can omit words; Qwen can mishandle homophones or instructions. The proofreader receives the current dictated chunk, language, preferred terms, and cleanup prompt—not surrounding documents, clipboard contents, or screenshots.
 
 ## Limits and testing
 
@@ -39,6 +39,6 @@ Run `swift test` for dictionary/validation tests and `scripts/test-corrections.s
 
 ## Open question: omitted negations
 
-Audio rechecking is deferred. A text-only cleanup model cannot recover a negation that Whisper never transcribed, and repeating the same decode is not independent verification.
+Audio rechecking is deferred. A text-only cleanup model cannot recover a negation that Parakeet never transcribed, and repeating the same decode is not independent verification.
 
 Before adding a verification mode, benchmark human-recorded positive/negative pairs and difficult short answers. Compare baseline recognition with alternate settings and audio crops; measure omissions, invented negations, answer recall, and p50/p95 latency. Ship a mode only if the measured benefit justifies the added delay and false corrections. No current setting guarantees every omitted word is caught.

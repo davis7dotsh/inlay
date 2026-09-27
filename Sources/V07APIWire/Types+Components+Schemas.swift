@@ -246,6 +246,8 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/ServerPreferences`.
         public struct ServerPreferences: Codable, Hashable, Sendable {
+            /// Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
+            ///
             /// - Remark: Generated from `#/components/schemas/ServerPreferences/language`.
             @frozen public enum LanguagePayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case en = "en"
@@ -265,7 +267,23 @@ extension Components {
                 case ru = "ru"
                 case uk = "uk"
                 case sv = "sv"
+                case bg = "bg"
+                case hr = "hr"
+                case cs = "cs"
+                case da = "da"
+                case et = "et"
+                case fi = "fi"
+                case el = "el"
+                case hu = "hu"
+                case lv = "lv"
+                case lt = "lt"
+                case mt = "mt"
+                case ro = "ro"
+                case sk = "sk"
+                case sl = "sl"
             }
+            /// Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
+            ///
             /// - Remark: Generated from `#/components/schemas/ServerPreferences/language`.
             public var language: Components.Schemas.ServerPreferences.LanguagePayload
             /// Missing values use the built-in cleanup prompt; maximum UTF-8 size is 4096 bytes.
@@ -285,7 +303,7 @@ extension Components {
             /// Creates a new `ServerPreferences`.
             ///
             /// - Parameters:
-            ///   - language:
+            ///   - language: Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
             ///   - proofreadingPrompt: Missing values use the built-in cleanup prompt; maximum UTF-8 size is 4096 bytes.
             ///   - vocabulary: Maximum UTF-8 size is 16384 bytes.
             ///   - dictionary:

@@ -67,13 +67,14 @@ for await (const chunk of process.stdin) {
       text: mode === "invalid-result" ? "\0bad" : "Hello world.",
       duration: 2,
       elapsed: 0.1,
-      language: "en",
+      language: mode === "parakeet" ? "auto" : "en",
       ...(request.type === "transcribe"
         ? {
-            includedTerms: mode === "invalid-hints" ? ["invented"] : terms,
-            omittedTerms: [],
-            tokenCount: 1,
-            tokenBudget: 223,
+            includedTerms:
+              mode === "invalid-hints" ? ["invented"] : mode === "parakeet" ? [] : terms,
+            omittedTerms: mode === "parakeet" ? terms : [],
+            tokenCount: mode === "parakeet" || mode === "invalid-zero-budget" ? 0 : 1,
+            tokenBudget: mode === "parakeet" || mode === "invalid-zero-budget" ? 0 : 223,
           }
         : {}),
     };

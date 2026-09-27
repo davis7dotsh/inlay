@@ -88,6 +88,20 @@ describe("native inference subprocess protocol", () => {
     });
   });
 
+  test("Parakeet reports automatic language and no recognition vocabulary support", async () => {
+    const { inference, model } = await fixture("parakeet");
+    for (const terms of [[], ["Codex", "Café"]]) {
+      const speech = await inference.transcribe(model, "en", terms);
+      expect(speech.language).toBe("auto");
+      expect(speech.hints).toEqual({
+        includedTerms: [],
+        omittedTerms: terms,
+        tokenCount: 0,
+        tokenBudget: 0,
+      });
+    }
+  });
+
   test("requests may span stdout reads and diagnostics are drained", async () => {
     for (const mode of ["split-json", "stderr"]) {
       const { inference, model } = await fixture(mode);
@@ -115,7 +129,7 @@ describe("native inference subprocess protocol", () => {
   });
 
   test("malformed vocabulary diagnostics and result content invalidate the helper", async () => {
-    for (const mode of ["invalid-hints", "invalid-result"]) {
+    for (const mode of ["invalid-hints", "invalid-result", "invalid-zero-budget"]) {
       const { inference, model } = await fixture(mode);
       await expect(inference.transcribe(model, "en", ["auth"])).rejects.toMatchObject({
         code: "invalidResponse",

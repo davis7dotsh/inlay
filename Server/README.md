@@ -4,20 +4,22 @@ The server is an independent TypeScript/Fastify HTTP process that owns models, s
 
 | Server | Speech | Proofreading |
 | --- | --- | --- |
-| Apple Silicon macOS | Whisper large-v3-turbo / whisper.cpp / Metal | Qwen3-4B-Instruct-2507 / Swift MLX / 4-bit |
-| Linux x86_64 or ARM64 | Whisper large-v3-turbo / whisper.cpp / CPU or CUDA | Qwen3-4B-Instruct-2507 / llama.cpp / Q4_K_M |
+| Apple Silicon macOS | Parakeet TDT 0.6B v3 / whisper.cpp / Metal | Qwen3-4B-Instruct-2507 / Swift MLX / 4-bit |
+| Linux x86_64 or ARM64 | Parakeet TDT 0.6B v3 / whisper.cpp / CPU or CUDA | Qwen3-4B-Instruct-2507 / llama.cpp / Q4_K_M |
 
 ## Models
 
 Run these commands from the repository root. Weights use about 4 GB of disk; runtime memory also includes model state and inference buffers. The server verifies pinned files before loading and keeps models warm. It does not download large weights automatically.
 
-### Whisper, on either platform
+### Parakeet, on either platform
 
 ```sh
 V07_MODEL_DIR="$PWD/.local/models" ./scripts/download-model.sh
 ```
 
-This installs and verifies `ggml-large-v3-turbo.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh` and `Sources/V07Core/SpeechModel.swift`. The server build separately downloads the pinned Silero VAD model.
+This installs and verifies `ggml-parakeet-tdt-0.6b-v3-f16.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh` and `Sources/V07Core/SpeechModel.swift`. The server build separately downloads the pinned Silero VAD model. This branch requires Parakeet weights; existing Whisper weights cannot be reused.
+
+Parakeet automatically recognizes 25 European languages. The language preference guides proofreading and does not force recognition. The helper exposes no detected language ID. Recognition vocabulary hints are unsupported (zero budget); dictionary replacements and Qwen hints still apply. Older language preferences remain readable, but unsupported languages must be changed before dictating.
 
 ### Qwen on macOS
 
@@ -86,7 +88,7 @@ From the repository root, with the models installed above:
   --host 127.0.0.1 --port 8391 \
   --data-dir "$PWD/.local/server" \
   --speech-helper "$PWD/build/server/helpers/v07-engine" \
-  --speech-model "$PWD/.local/models/ggml-large-v3-turbo.bin" \
+  --speech-model "$PWD/.local/models/ggml-parakeet-tdt-0.6b-v3-f16.bin" \
   --vad-model "$PWD/build/server/resources/silero-vad.bin" \
   --proof-helper "$PWD/build/server/helpers/v07-text-engine" \
   --proof-model "$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
@@ -107,7 +109,7 @@ For server-only development alongside an installed V07 instance, use `--port 839
 | `--proof-helper`, `--proof-model` | `V07_TEXT_ENGINE_PATH`, `V07_TEXT_MODEL` |
 | `--dev` | `V07_DEV=1` |
 
-The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `V07_SPEECH_MODEL` and `V07_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches the existing locations `~/Library/Application Support/V07/Models/ggml-large-v3-turbo.bin` and `~/.v07/models/Qwen3-4B-Instruct-2507-MLX-4bit`.
+The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `V07_SPEECH_MODEL` and `V07_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches the existing locations `~/Library/Application Support/V07/Models/ggml-parakeet-tdt-0.6b-v3-f16.bin` and `~/.v07/models/Qwen3-4B-Instruct-2507-MLX-4bit`.
 
 ## Remote access
 
@@ -130,7 +132,7 @@ docker build -f Server/Dockerfile --target cuda -t v07-server:cuda .
 
 `CUDA_ARCHITECTURES`, `CUDA_IMAGE`, `BUN_IMAGE`, `UBUNTU_IMAGE`, and `BUILD_JOBS` are build arguments. Choose CUDA architectures/toolkit/driver versions for your GPU. GPU containers require NVIDIA Container Toolkit and `--gpus all`; Linux containers on a Mac do not have Metal access.
 
-Mount a directory containing the Whisper `.bin` and Qwen `.gguf` files, plus a token file:
+Mount a directory containing the Parakeet `.bin` and Qwen `.gguf` files, plus a token file:
 
 ```sh
 docker run --rm --name v07-server \

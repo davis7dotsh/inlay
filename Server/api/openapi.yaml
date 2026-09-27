@@ -622,6 +622,7 @@ components:
       additionalProperties: false
       properties:
         language:
+          description: "Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history."
           type: "string"
           enum:
             - "en"
@@ -641,6 +642,20 @@ components:
             - "ru"
             - "uk"
             - "sv"
+            - "bg"
+            - "hr"
+            - "cs"
+            - "da"
+            - "et"
+            - "fi"
+            - "el"
+            - "hu"
+            - "lv"
+            - "lt"
+            - "mt"
+            - "ro"
+            - "sk"
+            - "sl"
         proofreadingPrompt:
           type: "string"
           minLength: 1

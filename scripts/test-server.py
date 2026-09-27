@@ -2,7 +2,7 @@
 """Exercise a running Dev server with the public JFK fixture; never open a mic.
 
 Creates two test generations, toggles/restores original retention, checks real
-Whisper/Qwen execution and durable artifacts. Requires an idle Dev server.
+Parakeet/Qwen execution and durable artifacts. Requires an idle Dev server.
 """
 import argparse
 import array
@@ -111,7 +111,11 @@ def main():
             assert result["status"] == "completed", result.get("error")
             assert states[-1] == "completed", states
             assert "country" in result["rawText"].lower(), result["rawText"]
-            assert result["speech"]["modelSHA256"] == "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69"
+            assert result["speech"]["modelSHA256"] == "833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f"
+            assert result["speech"]["modelID"] == "parakeet-tdt-0.6b-v3"
+            assert result["recognitionHints"]["tokenBudget"] == 0
+            assert result["recognitionHints"]["includedTerms"] == []
+            assert result.get("detectedLanguage") is None
             assert result["textProcessing"]["status"] in ("applied", "unchanged", "rejected"), result["textProcessing"]
             assert result["device"] == device
             assert bool(result.get("originalAudio")) == keep_original

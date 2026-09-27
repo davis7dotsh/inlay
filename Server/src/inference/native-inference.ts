@@ -123,7 +123,8 @@ function vocabularyDiagnostics(
     tokenCount !== undefined &&
     tokenBudget !== undefined &&
     tokenCount >= 0 &&
-    tokenBudget > 0 &&
+    tokenBudget >= 0 &&
+    (tokenBudget > 0 || included.length === 0) &&
     tokenCount <= tokenBudget &&
     included.length + omitted.length === terms.length
   ) {
@@ -140,7 +141,7 @@ function vocabularyDiagnostics(
       return { includedTerms: included, omittedTerms: omitted, tokenCount, tokenBudget };
     }
   }
-  throw new InferenceError("invalidResponse", "Whisper returned invalid vocabulary diagnostics.");
+  throw new InferenceError("invalidResponse", "Parakeet returned invalid vocabulary diagnostics.");
 }
 
 /** The helper executables own inference; the server owns paths, deadlines and pins. */
@@ -170,7 +171,7 @@ export class NativeInference implements InferenceBackend {
       !fixturePins && process.platform === "darwin" ? macProofManifestSHA256 : undefined;
     const config = this.configuration;
     this.speech = new HelperProcess({
-      name: "Whisper",
+      name: "Parakeet",
       executable: config.speechHelper,
       arguments: [
         "--model",
@@ -273,10 +274,10 @@ export class NativeInference implements InferenceBackend {
       ) ||
       vocabularyTerms.reduce((total, term) => total + bytes(term), 0) > 384 * 1024
     ) {
-      throw new InferenceError("invalidRequest", "Audio, language, or Whisper prompt is invalid.");
+      throw new InferenceError("invalidRequest", "Audio, language, or Parakeet prompt is invalid.");
     }
     if (new Set(vocabularyTerms).size !== vocabularyTerms.length)
-      throw new InferenceError("invalidRequest", "Whisper vocabulary terms must be unique.");
+      throw new InferenceError("invalidRequest", "Parakeet vocabulary terms must be unique.");
     const digest = await this.verifier.verify(
       this.configuration.speechModel,
       this.speechPin,
@@ -313,7 +314,7 @@ export class NativeInference implements InferenceBackend {
       bytes(response.language) > 32
     ) {
       this.speech.shutdown();
-      throw new InferenceError("invalidResponse", "Whisper returned an invalid transcript.");
+      throw new InferenceError("invalidResponse", "Parakeet returned an invalid transcript.");
     }
     let hints: ModelHintUsage | undefined;
     try {

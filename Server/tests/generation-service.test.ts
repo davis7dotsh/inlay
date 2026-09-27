@@ -10,6 +10,8 @@ class FakeInference implements InferenceBackend {
   failProof = false;
   blocked = false;
   text = "Hello Codex.";
+  language = "en";
+  proofreadingLanguage: string | undefined;
   readiness() {
     return Promise.resolve({
       available: true,
@@ -37,13 +39,14 @@ class FakeInference implements InferenceBackend {
     progress?.(0.5);
     return {
       text: this.text,
-      language: "en",
+      language: this.language,
       processingSeconds: 0.1,
       audioSeconds: 0.25,
       engineVersion: "fixture",
     };
   }
-  correct(text: string) {
+  correct(text: string, _terms?: string[], language?: string) {
+    this.proofreadingLanguage = language;
     return this.failProof
       ? Promise.reject(new Error("Proof unavailable."))
       : Promise.resolve({ text, processingSeconds: 0.01 });
@@ -91,6 +94,21 @@ async function upload(service: GenerationService) {
   await service.appendAudio(record.id, "inference", 0, format, pcm());
   return record;
 }
+
+test("Parakeet uses the proofreading preference without inventing detected-language metadata", async () => {
+  const { service, inference } = await setup();
+  inference.language = "auto";
+  const preferences = await service.getPreferences();
+  preferences.preferences.language = "es";
+  await service.updatePreferences(preferences);
+  const record = await upload(service);
+  await service.finish(record.id, { inferenceFrames: 4000 });
+  const result = await completed(service, record.id);
+  expect(result.status).toBe("completed");
+  expect(result.detectedLanguage).toBeUndefined();
+  expect(result.speech?.modelID).toBe("parakeet-tdt-0.6b-v3");
+  expect(inference.proofreadingLanguage).toBe("es");
+});
 
 test("repeated requests return the same frozen generation while new recordings are accepted", async () => {
   const { service } = await setup(),

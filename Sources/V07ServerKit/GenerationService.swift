@@ -170,7 +170,7 @@ public actor GenerationService {
                     (warming ? "Loading server models…" : "Server models are unavailable."))))
         if !state.speechLoaded, !warming, activeID == nil { beginWarmup() }
         return ServerHealth(isDev: configuration.development, ready: ready,
-            speech: ModelRuntimeInfo(modelID: "whisper-large-v3-turbo", backend: Self.speechBackend, ready: state.speechLoaded),
+            speech: ModelRuntimeInfo(modelID: "parakeet-tdt-0.6b-v3", backend: Self.speechBackend, ready: state.speechLoaded),
             proofreading: ModelRuntimeInfo(modelID: "Qwen3-4B-Instruct-2507", backend: Self.proofBackend,
                                            ready: state.proofLoaded, message: preferences.preferences.textCorrectionEnabled ?
                                                (state.proofLoaded ? nil : "Unavailable; deterministic text is preserved.") : "Disabled"),
@@ -738,9 +738,9 @@ public actor GenerationService {
             try Task.checkCancellation()
             guard try get(id).status == .transcribing else { return }
             record.rawText = speech.text
-            record.detectedLanguage = speech.language
+            record.detectedLanguage = speech.language == "auto" ? nil : speech.language
             record.recognitionHints = speech.hints
-            record.speech = ModelProvenance(modelID: "whisper-large-v3-turbo", modelSHA256: speech.modelSHA256, backend: Self.speechBackend,
+            record.speech = ModelProvenance(modelID: "parakeet-tdt-0.6b-v3", modelSHA256: speech.modelSHA256, backend: Self.speechBackend,
                                            engineVersion: speech.engineVersion, processingSeconds: speech.processingSeconds)
             let cleaned = TranscriptCleaner.clean(speech.text)
             let transcript = settings.dictionary.apply(to: cleaned, maximumOutputUTF8Bytes: Self.maximumDictionaryOutputBytes)
@@ -748,7 +748,7 @@ public actor GenerationService {
             record.formattingRejectionReason = structured.formattingRejectionReason
             record.consumedListControls = structured.consumedControls
             if settings.textCorrectionEnabled, !structured.text.isEmpty { record.status = .proofreading; record.progress = nil; try save(record) }
-            let processing = try await proofread(structured.text, settings: settings, dictionaryChanged: cleaned != transcript, language: speech.language)
+            let processing = try await proofread(structured.text, settings: settings, dictionaryChanged: cleaned != transcript, language: speech.language == "auto" ? settings.language : speech.language)
             try Task.checkCancellation()
             guard !(try get(id)).status.isTerminal else { return }
             record.textProcessing = processing
@@ -1188,9 +1188,9 @@ public actor GenerationService {
     }
     private static var speechBackend: String {
         #if os(macOS)
-        return "whisper.cpp/Metal"
+        return "parakeet.cpp/Metal"
         #else
-        return "whisper.cpp"
+        return "parakeet.cpp"
         #endif
     }
     private static var proofBackend: String {

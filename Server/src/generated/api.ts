@@ -309,7 +309,10 @@ export interface components {
       name: string;
     };
     ServerPreferences: {
-      /** @enum {string} */
+      /**
+       * @description Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
+       * @enum {string}
+       */
       language:
         | "en"
         | "auto"
@@ -327,7 +330,21 @@ export interface components {
         | "pl"
         | "ru"
         | "uk"
-        | "sv";
+        | "sv"
+        | "bg"
+        | "hr"
+        | "cs"
+        | "da"
+        | "et"
+        | "fi"
+        | "el"
+        | "hu"
+        | "lv"
+        | "lt"
+        | "mt"
+        | "ro"
+        | "sk"
+        | "sl";
       /** @description Missing values use the built-in cleanup prompt; maximum UTF-8 size is 4096 bytes. */
       proofreadingPrompt?: string;
       /** @description Maximum UTF-8 size is 16384 bytes. */

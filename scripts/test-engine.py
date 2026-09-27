@@ -129,10 +129,10 @@ sys.stdin.read()
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--engine", type=Path, default=ROOT / ".build/native/Engine/v07-engine")
+    parser.add_argument("--engine", type=Path, default=ROOT / ".build/server-native/Engine/v07-engine")
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--vad-model", type=Path, default=DEFAULT_VAD)
-    parser.add_argument("--audio", type=Path, default=ROOT / "vendor/whisper.cpp/bindings/go/samples/jfk.wav")
+    parser.add_argument("--audio", type=Path, default=ROOT / "vendor/whisper.cpp/samples/jfk.wav")
     args = parser.parse_args()
 
     missing = subprocess.run(
@@ -196,36 +196,22 @@ def main():
                     assert engine.transcribe(pcm, f"invalid-terms-{index}", vocabularyTerms=terms)["type"] == "error"
                 print("Passed: duration, sample-rate, path, language, and prompt validation", flush=True)
 
-                # The caller supplies priority order. All diagnostics contain whole
-                # terms; a large tail cannot evict the preferred words at the front.
-                terms = ["auth", "Café", "auth middleware"] + [f"preferred vocabulary term {index}" for index in range(500)]
-                hints = engine.transcribe(pcm, "vocabulary-budget", vocabularyTerms=terms)
-                assert hints["type"] == "result", hints
-                included, omitted = hints["includedTerms"], hints["omittedTerms"]
-                assert included[:3] == terms[:3] and omitted, hints
-                assert included == [term for term in terms if term in included], hints
-                assert omitted == [term for term in terms if term in omitted], hints
-                assert set(included).isdisjoint(omitted) and set(included + omitted) == set(terms), hints
-                assert 0 < hints["tokenCount"] <= hints["tokenBudget"], hints
-                replay = engine.transcribe(pcm, "vocabulary-replay", vocabularyTerms=included)
-                assert replay["includedTerms"] == included and replay["omittedTerms"] == [], replay
-                assert replay["tokenCount"] == hints["tokenCount"], (hints, replay)
-
-                oversized = "long vocabulary phrase " * 500
-                skipped = engine.transcribe(pcm, "vocabulary-whole-term", vocabularyTerms=[oversized.rstrip(), "auth"])
-                assert skipped["includedTerms"] == ["auth"] and skipped["omittedTerms"] == [oversized.rstrip()], skipped
-                unicode_terms = ["auth", "Café"] + [f"工程語彙{index}" + "界" * 100 for index in range(500)]
-                assert len(json.dumps(unicode_terms)) > 65536
-                unicode_result = engine.transcribe(pcm, "vocabulary-unicode", vocabularyTerms=unicode_terms)
-                assert unicode_result["type"] == "result", unicode_result
-                assert unicode_result["includedTerms"][:2] == ["auth", "Café"], unicode_result
-                assert set(unicode_result["includedTerms"] + unicode_result["omittedTerms"]) == set(unicode_terms), unicode_result
+                # Parakeet cannot consume vocabulary prompts. Preserve every
+                # omitted term and report zero capacity, including legacy callers.
+                terms = ["auth", "Café"] + [f"preferred term {i}" for i in range(500)]
+                for supplied in ([], terms, ["long vocabulary phrase " * 500 + "end", "auth"]):
+                    hints = engine.transcribe(pcm, "vocabulary", vocabularyTerms=supplied)
+                    assert hints["type"] == "result", hints
+                    assert hints["includedTerms"] == [] and hints["omittedTerms"] == supplied, hints
+                    assert hints["tokenCount"] == hints["tokenBudget"] == 0, hints
                 legacy = engine.transcribe(pcm, "legacy-prompt", prompt="auth, Café")
-                assert legacy["includedTerms"] == ["auth, Café"] and legacy["omittedTerms"] == [], legacy
-                empty_hints = engine.transcribe(pcm, "empty-vocabulary", vocabularyTerms=[])
-                assert empty_hints["includedTerms"] == [] and empty_hints["omittedTerms"] == [], empty_hints
-                assert empty_hints["tokenCount"] == 0, empty_hints
-                print(f"Passed: ordered complete vocabulary terms fit the actual {hints['tokenBudget']}-token carried prompt budget", flush=True)
+                assert legacy["includedTerms"] == [] and legacy["omittedTerms"] == ["auth, Café"], legacy
+                assert engine.transcribe(pcm, "unsupported-language", language="ja")["type"] == "error"
+                for language in ("auto", "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el",
+                                 "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk"):
+                    result = engine.transcribe(pcm, "supported-language", language=language)
+                    assert result["type"] == "result" and result["language"] == "auto", result
+                print("Passed: unsupported vocabulary is reported honestly; supported languages accepted", flush=True)
 
                 started = time.monotonic()
                 result = engine.transcribe(args.audio, "speech", language="en", vocabularyTerms=["country"])
@@ -235,7 +221,7 @@ def main():
                     normalized = re.sub(r"[^a-z ]", "", result["text"].lower())
                     assert "ask not what your country can do for you" in normalized, result
                     assert "ask what you can do for your country" in normalized, result
-                assert result["language"] == "en", result
+                assert result["language"] == "auto", result
                 print(f"Passed: real speech transcription ({time.monotonic() - started:.2f}s)", flush=True)
 
                 with wave.open(str(args.audio), "rb") as source:
@@ -251,8 +237,8 @@ def main():
                 print("Passed: float32 speech and very quiet speech (-28 dB)", flush=True)
 
                 if args.audio.name == "jfk.wav":
-                    # Cross Whisper's 30-second window with vocabulary hints.
-                    # Timestamp-free decoding dropped part of the third repeat.
+                    # Longer recordings must retain every passage, even when hints
+                    # are supplied (and correctly reported as unused).
                     repeated = temporary / "repeated-speech.wav"
                     float_audio(repeated, (samples + [0.0] * 16000) * 3)
                     result = engine.transcribe(repeated, "repeated-speech", language="en",
@@ -273,7 +259,6 @@ def main():
                 diagnostics.seek(0)
                 log = diagnostics.read().lower()
                 assert "ask not what your country" not in log, "Transcript leaked into stderr"
-                assert "initial prompt is too long" not in log, "Whisper silently truncated vocabulary"
                 print("Passed: request isolation, transcript-free diagnostics, clean shutdown", flush=True)
             finally:
                 engine.stop()

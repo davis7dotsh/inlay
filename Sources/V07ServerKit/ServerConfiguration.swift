@@ -72,7 +72,7 @@ public struct ServerConfiguration: Sendable {
     v07-server --data-dir PATH --speech-helper PATH --speech-model PATH --vad-model PATH \
       --proof-helper PATH --proof-model PATH [--host 127.0.0.1] [--port 8391] [--token-file PATH] [--dev]
 
-    macOS uses Whisper/Metal and Qwen/MLX. Linux uses Whisper/CUDA and Qwen/llama.cpp.
+    macOS uses Parakeet/Metal and Qwen/MLX. Linux uses Parakeet/CUDA and Qwen/llama.cpp.
     Models must already exist. The server never downloads or imports personal data automatically.
     Use persistent storage for --data-dir. Remote bindings require --token-file.
     """

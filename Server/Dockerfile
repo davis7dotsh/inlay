@@ -46,7 +46,7 @@ ENV V07_SERVER_HOST=0.0.0.0 V07_SERVER_PORT=8391 V07_SERVER_DATA_DIR=/data
 ENV V07_ENGINE_PATH=/opt/v07/helpers/v07-engine
 ENV V07_TEXT_ENGINE_PATH=/opt/v07/helpers/v07-text-engine
 ENV V07_VAD_PATH=/opt/v07/resources/silero-vad.bin
-ENV V07_SPEECH_MODEL=/models/ggml-large-v3-turbo.bin
+ENV V07_SPEECH_MODEL=/models/ggml-parakeet-tdt-0.6b-v3-f16.bin
 ENV V07_TEXT_MODEL=/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 ENV V07_SERVER_TOKEN_FILE=/run/secrets/v07-token
 USER v07

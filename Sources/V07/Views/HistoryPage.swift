@@ -302,10 +302,10 @@ struct HistoryPage: View {
     }
 
     private func hintDetails(_ title: String, hints: ModelHintUsage) -> some View {
-        DisclosureGroup("\(title): \(hints.omittedTerms.count) terms did not fit") {
+        DisclosureGroup(hints.tokenBudget == 0 ? "\(title): unavailable with Parakeet" : "\(title): \(hints.omittedTerms.count) terms did not fit") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Used: \(hints.includedTerms.isEmpty ? "None" : hints.includedTerms.joined(separator: ", "))")
-                Text("Did not fit: \(hints.omittedTerms.joined(separator: ", "))")
+                Text("Unused: \(hints.omittedTerms.joined(separator: ", "))")
             }
             .font(.caption)
             .foregroundStyle(V07Palette.muted)

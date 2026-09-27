@@ -39,6 +39,25 @@ final class NativeInferenceTests: XCTestCase {
         await inference.shutdown()
     }
 
+    func testParakeetReportsUnsupportedVocabularyWithoutInventingLanguage() async throws {
+        let fixture = try Fixture(body: """
+        printf '{"type":"ready"}\\n'
+        while IFS= read -r line; do
+            id=$(printf '%s' "$line" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
+            printf '{"type":"result","id":"%s","text":"Hello.","duration":2,"elapsed":0.1,"language":"auto","includedTerms":[],"omittedTerms":["auth"],"tokenCount":0,"tokenBudget":0}\\n' "$id"
+        done
+        """)
+        defer { fixture.remove() }
+        let inference = NativeInference(configuration: fixture.configuration())
+        let speech = try await inference.transcribe(fixture.model, language: "en", vocabularyTerms: ["auth"])
+        XCTAssertEqual(speech.language, "auto")
+        XCTAssertEqual(speech.hints?.includedTerms, [])
+        XCTAssertEqual(speech.hints?.omittedTerms, ["auth"])
+        XCTAssertEqual(speech.hints?.tokenCount, 0)
+        XCTAssertEqual(speech.hints?.tokenBudget, 0)
+        await inference.shutdown()
+    }
+
     func testInvalidVocabularyIsRejectedBeforeCallingTheHelper() async throws {
         let fixture = try Fixture(body: "exit 1")
         defer { fixture.remove() }

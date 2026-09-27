@@ -364,7 +364,7 @@ export class GenerationService {
         isDev: this.configuration.development,
         ready,
         speech: {
-          modelID: "whisper-large-v3-turbo",
+          modelID: "parakeet-tdt-0.6b-v3",
           backend: this.speechBackend,
           ready: state.speechLoaded,
         },
@@ -1055,10 +1055,10 @@ export class GenerationService {
       );
       signal.throwIfAborted();
       record.rawText = speech.text;
-      record.detectedLanguage = speech.language;
+      record.detectedLanguage = speech.language === "auto" ? undefined : speech.language;
       record.recognitionHints = speech.hints;
       record.speech = {
-        modelID: "whisper-large-v3-turbo",
+        modelID: "parakeet-tdt-0.6b-v3",
         modelSHA256: speech.modelSHA256,
         backend: this.speechBackend,
         engineVersion: speech.engineVersion,
@@ -1084,7 +1084,7 @@ export class GenerationService {
         structured.text,
         settings,
         cleaned !== transcript,
-        speech.language,
+        speech.language === "auto" ? settings.language : speech.language,
         signal,
       );
       signal.throwIfAborted();
@@ -1269,7 +1269,7 @@ export class GenerationService {
     return this.speechLoadFailed && !state.speechLoaded;
   }
   private get speechBackend() {
-    return process.platform === "darwin" ? "whisper.cpp/Metal" : "whisper.cpp";
+    return process.platform === "darwin" ? "parakeet.cpp/Metal" : "parakeet.cpp";
   }
   private get proofBackend() {
     return process.platform === "darwin" ? "MLX" : "llama.cpp";

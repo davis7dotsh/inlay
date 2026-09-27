@@ -15,10 +15,10 @@ git clone --recurse-submodules https://github.com/davis7dotsh/v07.git
 cd v07
 ```
 
-[Download the pinned Whisper and Qwen models](Server/README.md#models) into `.local/models`, then build and start:
+[Download the pinned Parakeet and Qwen models](Server/README.md#models) into `.local/models`, then build and start:
 
 ```sh
-export V07_SPEECH_MODEL="$PWD/.local/models/ggml-large-v3-turbo.bin"
+export V07_SPEECH_MODEL="$PWD/.local/models/ggml-parakeet-tdt-0.6b-v3-f16.bin"
 export V07_TEXT_MODEL="$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
 ./scripts/run-dev.sh
 ```
@@ -68,6 +68,6 @@ All connected Macs share history, tagged by device. Both original and inference 
 - [Architecture, configuration, and storage](docs/architecture.md)
 - [Dictionary and cleanup instructions](docs/text-correction.md)
 - [HTTP API](docs/client-server-contract.md)
-- [Whisper helper](Engine/README.md) and [Qwen helpers](TextEngine/README.md)
+- [Parakeet helper](Engine/README.md) and [Qwen helpers](TextEngine/README.md)
 
 [MIT](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)
