@@ -796,6 +796,14 @@ final class V07Controller: ObservableObject {
         }
     }
 
+    /// Drops the undo window when its take ends without reaching the gate.
+    private func clearUndo(for take: PendingDictation?) {
+        guard undoTake != nil, take == nil || undoTake === take else { return }
+        undoTask?.cancel(); undoTask = nil
+        undoTake = nil
+        undoDeadline = nil
+    }
+
     private func closeUndoWindow() {
         undoTask?.cancel(); undoTask = nil
         let take = undoTake
@@ -1066,6 +1074,7 @@ final class V07Controller: ObservableObject {
             var capturedAudio: CapturedAudio?
             defer {
                 capturedAudio?.cleanup()
+                clearUndo(for: pending)
                 pendingDictations.removeAll { $0 === pending }
                 if pendingDictations.isEmpty {
                     deliveryTail = nil
@@ -1115,6 +1124,8 @@ final class V07Controller: ObservableObject {
                     // Cancelled and not undone: the transcript stays in history only.
                     try? await connection.delivery(id, receipt: DeliveryReceipt(status: "cancelled",
                         message: "Cancelled before pasting. Kept in history."))
+                    // Report after earlier deliveries so their results cannot replace this one.
+                    await precedingDelivery?.value
                     try Task.checkCancellation()
                     if sessionID == current {
                         lastDeliveryStatus = .kept
@@ -1270,6 +1281,7 @@ final class V07Controller: ObservableObject {
     }
 
     private func stopPendingDictations() {
+        clearUndo(for: nil)
         for pending in pendingDictations {
             pending.cancel()
             if !pending.sealed { Task { try? await pending.client.cancel(pending.id) } }

@@ -731,8 +731,22 @@ export class GenerationService {
           state.available ? "Speech model failed to load." : state.message,
         );
       }
+      // Keep the saved audio and metadata, but drop the previous run's output.
+      for (const key of [
+        "error",
+        "detectedLanguage",
+        "recognitionHints",
+        "speech",
+        "formattingRejectionReason",
+        "consumedListControls",
+        "textProcessing",
+        "proofreadingHints",
+        "proofreading",
+        "continuation",
+      ] as const)
+        delete record[key];
+      record.rawText = record.finalText = record.insertionText = record.previewText = "";
       record.status = "queued";
-      delete record.error;
       record.progress = 0;
       record.updatedAt = now();
       await this.save(record);
@@ -1168,14 +1182,12 @@ export class GenerationService {
     } catch (error) {
       await this.mutate(async () => {
         const record = this.records.get(id);
-        if (!record || terminal(record)) return;
+        // Aborts come from cancelRecord, which already saved the cancellation.
+        // A retry may have queued the record again since, so leave it alone.
+        if (!record || terminal(record) || signal.aborted) return;
         const failed = copy(record);
-        failed.status = signal.aborted ? "cancelled" : "failed";
-        failed.error = signal.aborted
-          ? "Recording cancelled."
-          : error instanceof Error
-            ? error.message
-            : "Processing failed.";
+        failed.status = "failed";
+        failed.error = error instanceof Error ? error.message : "Processing failed.";
         failed.updatedAt = now();
         delete failed.progress;
         await this.save(failed).catch(() => this.publish(failed));
