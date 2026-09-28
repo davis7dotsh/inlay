@@ -177,6 +177,7 @@ final class V07Controller: ObservableObject {
     @Published private var pendingDictations: [PendingDictation] = []
     private var undoTake: PendingDictation?
     private var undoTask: Task<Void, Never>?
+    private var undoOpenedAt: TimeInterval = 0
     private var uploadTask: Task<FinishGenerationRequest, Error>?
     private var uploadPipe: AudioChunkPipe?
     private var refreshTask: Task<Void, Never>?
@@ -739,7 +740,12 @@ final class V07Controller: ObservableObject {
     /// paste it after all. A second cancel closes that window early.
     func cancelDictation() {
         guard isBusy else { return }
-        if isUndoPending { closeUndoWindow(); return }
+        if isUndoPending {
+            // One Escape can reach both the key listener and a focused view;
+            // only a later, separate cancel closes the window it just opened.
+            if ProcessInfo.processInfo.systemUptime - undoOpenedAt > 0.3 { closeUndoWindow() }
+            return
+        }
         if activity == .recording, ProcessInfo.processInfo.systemUptime - recordingStart >= Self.minimumTake {
             finishDictation(cancelled: true)
             return
@@ -787,6 +793,7 @@ final class V07Controller: ObservableObject {
         hudTask?.cancel()
         undoTask?.cancel()
         undoTake = take
+        undoOpenedAt = ProcessInfo.processInfo.systemUptime
         undoDeadline = Date().addingTimeInterval(Self.undoWindow)
         statusMessage = "Cancelled. Saving to history."
         onHUDVisibility?(true)
@@ -1120,12 +1127,16 @@ final class V07Controller: ObservableObject {
                 guard result.status == .completed else {
                     throw ServerClientError.rejected(422, result.error ?? "The server could not process this recording.")
                 }
+                // Processing and uploads overlap. Clipboard/paste transactions
+                // remain ordered and each keeps its original destination.
+                await precedingDelivery?.value
+                await waitForCaptureRelease()
+                try Task.checkCancellation()
+                // Decide only now, so a take still queued behind another can be cancelled with Undo.
                 guard await pending.gate.consume() else {
                     // Cancelled and not undone: the transcript stays in history only.
                     try? await connection.delivery(id, receipt: DeliveryReceipt(status: "cancelled",
                         message: "Cancelled before pasting. Kept in history."))
-                    // Report after earlier deliveries so their results cannot replace this one.
-                    await precedingDelivery?.value
                     try Task.checkCancellation()
                     if sessionID == current {
                         lastDeliveryStatus = .kept
@@ -1136,11 +1147,6 @@ final class V07Controller: ObservableObject {
                     refreshServer()
                     return
                 }
-                try Task.checkCancellation()
-                // Processing and uploads overlap. Clipboard/paste transactions
-                // remain ordered and each keeps its original destination.
-                await precedingDelivery?.value
-                await waitForCaptureRelease()
                 try Task.checkCancellation()
                 let deliveryDestination = rebasedDestination(resolved)
                 let receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,

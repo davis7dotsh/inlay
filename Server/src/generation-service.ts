@@ -49,6 +49,7 @@ import { evaluateCorrectionInWorker } from "./domain/correction-runtime.ts";
 import { maxInputCharacters, modelHints, processingRecord } from "./domain/correction.ts";
 
 const MAX_METADATA_BYTES = 1_048_576;
+const CONTINUATION_INPUT = "continuation-input.json";
 const MAX_PREFERENCES_BYTES = 262_144;
 const MAX_CHUNK_BYTES = 1_048_576;
 const terminal = (record: GenerationRecord) =>
@@ -699,6 +700,12 @@ export class GenerationService {
         throw new ServiceError(500, "audio_storage_failed", record.error);
       }
       this.uploads.delete(id);
+      // Private to the server: lets a retry format lists exactly as this run did.
+      if (previous)
+        await atomicPrivateWrite(
+          join(this.directory(id), CONTINUATION_INPUT),
+          JSON.stringify(previous),
+        ).catch(() => {});
       this.enqueueProcessing(id, previous);
       return copy(record);
     });
@@ -750,9 +757,20 @@ export class GenerationService {
       record.progress = 0;
       record.updatedAt = now();
       await this.save(record);
-      this.enqueueProcessing(record.id, undefined);
+      this.enqueueProcessing(record.id, await this.savedContinuation(record.id));
       return copy(record);
     });
+  }
+  private async savedContinuation(id: string): Promise<DictationContinuation | undefined> {
+    try {
+      const data = await readRegularFile(
+        join(this.directory(id), CONTINUATION_INPUT),
+        MAX_METADATA_BYTES,
+      );
+      return JSON.parse(data.toString("utf8")) as DictationContinuation;
+    } catch {
+      return undefined;
+    }
   }
   get(id: string) {
     return this.mutate(() => this.getInternal(id));
