@@ -789,6 +789,11 @@ final class V07Controller: ObservableObject {
         take.gate.decide(true)
     }
 
+    /// Close the undo window now, keeping the cancelled take in history only.
+    func keepCancelledTake() {
+        closeUndoWindow()
+    }
+
     private func openUndoWindow(for take: PendingDictation) {
         hudTask?.cancel()
         undoTask?.cancel()
@@ -1130,7 +1135,6 @@ final class V07Controller: ObservableObject {
                 // Processing and uploads overlap. Clipboard/paste transactions
                 // remain ordered and each keeps its original destination.
                 await precedingDelivery?.value
-                await waitForCaptureRelease()
                 try Task.checkCancellation()
                 // Decide only now, so a take still queued behind another can be cancelled with Undo.
                 guard await pending.gate.consume() else {
@@ -1147,6 +1151,7 @@ final class V07Controller: ObservableObject {
                     refreshServer()
                     return
                 }
+                await waitForCaptureRelease()
                 try Task.checkCancellation()
                 let deliveryDestination = rebasedDestination(resolved)
                 let receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,

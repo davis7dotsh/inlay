@@ -210,7 +210,7 @@ struct DictationHUD: View {
             .accessibilityLabel("Undo cancel")
             .accessibilityHint("Paste this dictation. Otherwise it is only saved to history.")
             .accessibilityIdentifier("hud.undo")
-            Button { controller.cancelDictation() } label: {
+            Button { controller.keepCancelledTake() } label: {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
                     .frame(width: 22, height: 28)
                     .contentShape(Rectangle())
