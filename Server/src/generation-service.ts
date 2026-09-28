@@ -703,6 +703,43 @@ export class GenerationService {
       return copy(record);
     });
   }
+  /** Sealed audio outlives a failed or cancelled run, so the same recording
+   * can be transcribed again without the client re-uploading anything. */
+  async retry(id: string) {
+    const state = await this.inference.readiness(false);
+    return this.mutate(async () => {
+      if (this.stopping)
+        throw new ServiceError(503, "server_stopping", "The server is shutting down.");
+      const record = this.getInternal(id);
+      if (record.importedSource || !record.inferenceAudio)
+        throw new ServiceError(
+          409,
+          "not_retryable",
+          "This recording has no saved audio to transcribe again.",
+        );
+      if (record.status !== "failed" && record.status !== "cancelled")
+        throw new ServiceError(
+          409,
+          "not_retryable",
+          "Only failed or cancelled recordings can be transcribed again.",
+        );
+      if (!state.available || this.speechUnloadable(state)) {
+        this.beginWarmup();
+        throw new ServiceError(
+          503,
+          "server_unavailable",
+          state.available ? "Speech model failed to load." : state.message,
+        );
+      }
+      record.status = "queued";
+      delete record.error;
+      record.progress = 0;
+      record.updatedAt = now();
+      await this.save(record);
+      this.enqueueProcessing(record.id, undefined);
+      return copy(record);
+    });
+  }
   get(id: string) {
     return this.mutate(() => this.getInternal(id));
   }
@@ -1023,7 +1060,9 @@ export class GenerationService {
       })
       .catch(() => {})
       .finally(() => {
-        this.processingControllers.delete(id);
+        // A retry can queue the same recording again before this run unwinds.
+        if (this.processingControllers.get(id) === controller)
+          this.processingControllers.delete(id);
         this.beginWarmup();
       });
   }
@@ -1043,15 +1082,22 @@ export class GenerationService {
       });
       if (!record) return;
       const settings = record.settings.preferences;
-      const speech = await this.inference.transcribe(
-        join(this.directory(id), "inference.wav"),
-        settings.language,
-        recognitionVocabularyTerms(settings.dictionary, settings.vocabulary),
-        (value) => {
-          void this.mutate(() => this.progress(id, value));
-        },
-        signal,
-      );
+      const transcribe = () =>
+        this.inference.transcribe(
+          join(this.directory(id), "inference.wav"),
+          settings.language,
+          recognitionVocabularyTerms(settings.dictionary, settings.vocabulary),
+          (value) => {
+            void this.mutate(() => this.progress(id, value));
+          },
+          signal,
+        );
+      // The sealed audio is still on disk, so a transient engine failure gets
+      // one more attempt before the recording is reported as failed.
+      const speech = await transcribe().catch((error: unknown) => {
+        if (signal.aborted) throw error;
+        return transcribe();
+      });
       signal.throwIfAborted();
       record.rawText = speech.text;
       record.detectedLanguage = speech.language;
