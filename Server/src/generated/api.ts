@@ -647,7 +647,7 @@ export interface operations {
       query?: {
         limit?: number;
         before?: string;
-        source?: "v07" | "wispr-flow";
+        source?: "inlay" | "wispr-flow";
       };
       header?: never;
       path?: never;

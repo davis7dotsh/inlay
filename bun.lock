@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "v07",
+      "name": "inlay",
       "devDependencies": {
         "oxlint": "1.85.0",
         "oxlint-tsgolint": "7.0.2003",
@@ -11,7 +11,7 @@
       },
     },
     "Server": {
-      "name": "@v07/server",
+      "name": "@inlay/server",
       "dependencies": {
         "ajv": "8.20.0",
         "ajv-formats": "3.0.1",
@@ -104,7 +104,7 @@
 
     "@types/node": ["@types/node@22.20.3", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-DZmzkmwHzXrLPAXPyKNDzlIwMMUZCVacoD25ywdy5YTKGbOx/2ld+Q38Im2zJ0vBuZP5Prd3VZutKZyXwkOS8A=="],
 
-    "@v07/server": ["@v07/server@workspace:Server"],
+    "@inlay/server": ["@inlay/server@workspace:Server"],
 
     "abstract-logging": ["abstract-logging@2.0.1", "", {}, "sha512-2BjRTZxTPvheOvGbBslFSYOUkr+SjPtOnrLP33f+VIWLzezQpZcqVg7ja3L4dBXmzzgwT+a029jRx5PCi3JuiA=="],
 

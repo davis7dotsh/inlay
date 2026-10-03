@@ -1,6 +1,6 @@
 # Whisper helper
 
-`v07-engine` is the server's persistent whisper.cpp process. It reads audio files supplied by the server; it never opens a microphone or network connection. Builds use Metal on macOS and CPU or CUDA on Linux. See [server setup](../Server/README.md) for packaging and models.
+`inlay-engine` is the server's persistent whisper.cpp process. It reads audio files supplied by the server; it never opens a microphone or network connection. Builds use Metal on macOS and CPU or CUDA on Linux. See [server setup](../Server/README.md) for packaging and models.
 
 ## Protocol
 
@@ -12,7 +12,7 @@ After loading Whisper and Silero VAD, the helper emits a `ready` JSON object wit
   "id": "request-1",
   "path": "/absolute/path/to/recording.wav",
   "language": "en",
-  "vocabularyTerms": ["V07", "SwiftUI", "Metal"]
+  "vocabularyTerms": ["Inlay", "SwiftUI", "Metal"]
 }
 ```
 
@@ -33,4 +33,4 @@ The server keeps the model warm. Terminating the helper cancels active work. `{"
 
 ## Verify
 
-Build with `./scripts/build-server.sh`, then use **V07 Dev** to record speech and inspect progress, transcripts, and vocabulary hints in history. Verify cancellation and subsequent recordings interactively when changing helper lifecycle behavior. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.
+Build with `./scripts/build-server.sh`, then use **Inlay Dev** to record speech and inspect progress, transcripts, and vocabulary hints in history. Verify cancellation and subsequent recordings interactively when changing helper lifecycle behavior. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.

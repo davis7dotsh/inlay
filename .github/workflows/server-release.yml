@@ -41,19 +41,19 @@ jobs:
       - run: bun run fmt:check
       - name: Build complete platform package
         env:
-          V07_NATIVE: "OFF"
-          V07_CUDA: "OFF"
-          V07_BUILD_JOBS: "4"
+          INLAY_NATIVE: "OFF"
+          INLAY_CUDA: "OFF"
+          INLAY_BUILD_JOBS: "4"
         run: ./scripts/build-server.sh
       - name: Package and checksum
         run: |
           cd build
-          tar -czf v07-server-${{ matrix.platform }}.tar.gz server
-          shasum -a 256 v07-server-${{ matrix.platform }}.tar.gz > v07-server-${{ matrix.platform }}.tar.gz.sha256
+          tar -czf inlay-server-${{ matrix.platform }}.tar.gz server
+          shasum -a 256 inlay-server-${{ matrix.platform }}.tar.gz > inlay-server-${{ matrix.platform }}.tar.gz.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: v07-server-${{ matrix.platform }}
+          name: inlay-server-${{ matrix.platform }}
           path: |
-            build/v07-server-${{ matrix.platform }}.tar.gz
-            build/v07-server-${{ matrix.platform }}.tar.gz.sha256
+            build/inlay-server-${{ matrix.platform }}.tar.gz
+            build/inlay-server-${{ matrix.platform }}.tar.gz.sha256
           if-no-files-found: error

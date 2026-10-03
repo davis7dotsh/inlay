@@ -2,30 +2,30 @@
 import PackageDescription
 
 var products: [Product] = [
-    .library(name: "V07API", targets: ["V07API"]),
-    .executable(name: "v07-server", targets: ["V07Server"]),
+    .library(name: "InlayAPI", targets: ["InlayAPI"]),
+    .executable(name: "inlay-server", targets: ["InlayServer"]),
 ]
 var targets: [Target] = [
-    .target(name: "V07Domain"),
-    .target(name: "V07APIWire", dependencies: [.product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"), .product(name: "HTTPTypes", package: "swift-http-types")]),
-    .target(name: "V07API", dependencies: ["V07Domain", "V07APIWire"]),
-    .target(name: "V07ServerKit", dependencies: ["V07API", "V07Domain", .product(name: "Hummingbird", package: "hummingbird"), .product(name: "Crypto", package: "swift-crypto")]),
-    .executableTarget(name: "V07Server", dependencies: ["V07ServerKit"]),
+    .target(name: "InlayDomain"),
+    .target(name: "InlayAPIWire", dependencies: [.product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"), .product(name: "HTTPTypes", package: "swift-http-types")]),
+    .target(name: "InlayAPI", dependencies: ["InlayDomain", "InlayAPIWire"]),
+    .target(name: "InlayServerKit", dependencies: ["InlayAPI", "InlayDomain", .product(name: "Hummingbird", package: "hummingbird"), .product(name: "Crypto", package: "swift-crypto")]),
+    .executableTarget(name: "InlayServer", dependencies: ["InlayServerKit"]),
 ]
 
 #if os(macOS)
 products += [
-    .executable(name: "V07", targets: ["V07"]),
-    .library(name: "V07Core", targets: ["V07Core"]),
+    .executable(name: "Inlay", targets: ["Inlay"]),
+    .library(name: "InlayCore", targets: ["InlayCore"]),
 ]
 targets += [
-    .target(name: "V07Core", dependencies: ["V07Domain"]),
-    .executableTarget(name: "V07", dependencies: ["V07Core", "V07API"]),
+    .target(name: "InlayCore", dependencies: ["InlayDomain"]),
+    .executableTarget(name: "Inlay", dependencies: ["InlayCore", "InlayAPI"]),
 ]
 #endif
 
 let package = Package(
-    name: "V07",
+    name: "Inlay",
     platforms: [.macOS(.v14)],
     products: products,
     dependencies: [

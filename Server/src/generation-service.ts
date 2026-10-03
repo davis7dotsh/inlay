@@ -22,6 +22,7 @@ import type {
   WisprFlowKnownIDsRequest,
 } from "./api.ts";
 import type { components } from "./generated/api.ts";
+import { API_VERSION } from "./api.ts";
 import { decodePersonalDictionary } from "./domain/dictionary.ts";
 import { validateBody } from "./validation.ts";
 import type { InferenceBackend } from "./inference/native-inference.ts";
@@ -360,7 +361,7 @@ export class GenerationService {
                 : "Server models are unavailable.";
       if (!state.speechLoaded) this.beginWarmup();
       return {
-        apiVersion: 1,
+        apiVersion: API_VERSION,
         serverVersion: "0.1.0",
         isDev: this.configuration.development,
         ready,
@@ -783,8 +784,8 @@ export class GenerationService {
           "invalid_limit",
           "History page size must be between 1 and 100.",
         );
-      if (source !== undefined && source !== "wispr-flow" && source !== "v07")
-        throw new ServiceError(400, "invalid_source", "Choose Wispr Flow or V07 history.");
+      if (source !== undefined && source !== "wispr-flow" && source !== "inlay")
+        throw new ServiceError(400, "invalid_source", "Choose Wispr Flow or Inlay history.");
       const sorted = [...this.records.values()]
         .filter((record) =>
           !source || source === "wispr-flow"
