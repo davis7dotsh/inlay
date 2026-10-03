@@ -105,14 +105,16 @@ public enum ScreenContext {
     /// dotted name counts as a domain unless it ends in a source-file extension, so
     /// identifiers such as whisper.cpp, README.md, or Stripe.Event survive.
     private static func isWebAddress(_ chunk: Substring) -> Bool {
-        let parts = chunk.trimmingCharacters(in: .punctuationCharacters.union(.symbols))
-            .split(maxSplits: 1, whereSeparator: { ":?#".contains($0) })
+        let trimmed = chunk.trimmingCharacters(in: .punctuationCharacters.union(.symbols))
+        let parts = trimmed.split(maxSplits: 1, whereSeparator: { ":?#".contains($0) })
         let host = parts.first.map(String.init) ?? "", lower = host.lowercased()
         if lower.hasPrefix("www.") || lower.contains(".xn--") { return true }
         guard let match = host.wholeMatch(of: domainPattern) else { return false }
-        // An explicit port, query, or fragment makes any dotted host an address.
-        if parts.count > 1 { return true }
         let suffix = String(match.output.1).lowercased()
+        // A query or fragment makes any dotted host an address; so does a port unless
+        // the host is a source file, as in compiler locations like main.swift:12:5.
+        if parts.count > 1, let separator = trimmed.dropFirst(host.count).first,
+           separator != ":" || !fileExtensions.contains(suffix) { return true }
         if commonTopLevelDomains.contains(suffix) && !fileExtensions.contains(suffix) { return true }
         return host == lower && !fileExtensions.contains(suffix)
     }
