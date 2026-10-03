@@ -26,7 +26,7 @@ final class ScreenContextCapture {
         if let terms { return terms }
         Task {
             try? await Task.sleep(for: timeout)
-            resolve([])
+            cancel()
         }
         return await withCheckedContinuation { waiters.append($0) }
     }
@@ -58,9 +58,10 @@ final class ScreenContextCapture {
               let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
               let image = await windowImage(of: app.processIdentifier), !Task.isCancelled else { return [] }
-        let lines = await Task.detached(priority: .userInitiated) {
-            (try? ScreenContext.recognizeLines(in: image)) ?? []
-        }.value
+        let recognition = Task.detached(priority: .userInitiated) {
+            Task.isCancelled ? [] : (try? ScreenContext.recognizeLines(in: image)) ?? []
+        }
+        let lines = await withTaskCancellationHandler { await recognition.value } onCancel: { recognition.cancel() }
         guard !Task.isCancelled else { return [] }
         let checker = NSSpellChecker.shared
         return ScreenContext.terms(fromLines: lines) { word in

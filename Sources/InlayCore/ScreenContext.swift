@@ -8,6 +8,8 @@ import Vision
 public enum ScreenContext {
     public static let maximumTerms = 40
     public static let maximumTermBytes = 64
+    /// Bounds ranking work for dense windows; text beyond this is ignored.
+    public static let maximumTokens = 3_000
 
     /// On-device text recognition. Language correction is off so unusual names keep
     /// their on-screen spelling instead of being "fixed" into dictionary words.
@@ -25,8 +27,8 @@ public enum ScreenContext {
     /// Rank words that a speech model is unlikely to spell correctly on its own.
     /// `isKnownWord` reports dictionary words. Proper names are recognized when only
     /// their capitalized form is known; other known words are kept only when
-    /// capitalized mid-sentence and repeated. Emails, paths, URLs, and long numbers
-    /// are never returned.
+    /// capitalized mid-sentence and repeated. Emails, paths, web addresses, and long
+    /// numbers are never returned.
     public static func terms(fromLines lines: [String], isKnownWord: (String) -> Bool,
                              limit: Int = maximumTerms) -> [String] {
         struct Candidate {
@@ -51,13 +53,17 @@ public enum ScreenContext {
             known[word] = result
             return result
         }
-        for line in lines {
+        var remaining = maximumTokens
+        lines: for line in lines {
             var sentenceStart = true
             for chunk in line.split(whereSeparator: \.isWhitespace) {
                 defer { sentenceStart = chunk.last.map { ".!?:".contains($0) } ?? false }
-                // Skip emails, URLs, and paths whole rather than leaking their parts.
-                guard !chunk.contains(where: { "@/\\".contains($0) }) else { continue }
+                // Skip emails, URLs, domains, and paths whole rather than leaking their parts.
+                guard !chunk.contains(where: { "@/\\".contains($0) }),
+                      chunk.lowercased().firstMatch(of: webAddressPattern) == nil else { continue }
                 for (index, match) in chunk.matches(of: tokenPattern).enumerated() {
+                    remaining -= 1
+                    if remaining < 0 { break lines }
                     guard let token = normalized(String(match.output)),
                           let score = score(token, sentenceStart: sentenceStart && index == 0, isKnownWord: knownWord)
                     else { continue }
@@ -80,6 +86,9 @@ public enum ScreenContext {
 
     /// Identifier-like runs: letters and digits joined by dots, underscores, hyphens, or apostrophes.
     private static let tokenPattern = #/[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}_+#]|[.\-'’](?=[\p{L}\p{N}]))*/#
+
+    private static let webAddressPattern =
+        #/^\W*(?:www\.|(?:[a-z0-9-]+\.)+(?:com|org|net|io|ai|dev|app|co|me|so|sh|gg|ly|tv|xyz|info|biz|gov|edu|us|uk|ca|au|nz|de|fr|nl|eu|in)\W*$)/#
 
     private static func normalized(_ token: String) -> String? {
         var token = token

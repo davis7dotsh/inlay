@@ -179,6 +179,10 @@ export function dictionaryVocabularyTerms(dictionary: PersonalDictionary) {
 
 export const vocabularyTerms = dictionaryVocabularyTerms;
 
+/** Lone surrogates (\p{Cs}) would break helper and client JSON decoding. */
+export const validScreenContextTerm = (term: string) =>
+  term === term.trim() && !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(term);
+
 /** Shared vocabulary leads; screen terms only fill Whisper's remaining hint budget. */
 export function recognitionVocabularyTerms(
   dictionary: PersonalDictionary,
@@ -194,10 +198,24 @@ export function recognitionVocabularyTerms(
         .join(" "),
     )
     .filter(Boolean);
-  const screen = screenContextTerms.filter(
-    (term) => term.length > 0 && term === term.trim() && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(term),
-  );
-  return uniqueTerms([...dictionaryVocabularyTerms(dictionary), ...extras, ...screen]);
+  const shared = uniqueTerms([...dictionaryVocabularyTerms(dictionary), ...extras]);
+  // Screen terms are optional: drop any that would push the helper request past its limits.
+  let count = shared.length,
+    bytes = shared.reduce((total, term) => total + Buffer.byteLength(term), 0);
+  const screen = uniqueTerms([...shared, ...screenContextTerms])
+    .slice(shared.length)
+    .filter((term) => {
+      if (
+        !validScreenContextTerm(term) ||
+        count + 1 > 8192 ||
+        bytes + Buffer.byteLength(term) > 384 * 1024
+      )
+        return false;
+      count += 1;
+      bytes += Buffer.byteLength(term);
+      return true;
+    });
+  return [...shared, ...screen];
 }
 
 const escapePattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

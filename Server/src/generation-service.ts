@@ -42,6 +42,7 @@ import {
   dictionaryValidationError,
   dictionaryVocabularyTerms,
   recognitionVocabularyTerms,
+  validScreenContextTerm,
 } from "./domain/dictionary.ts";
 import { cleanTranscript } from "./domain/cleaner.ts";
 import { composeDictation } from "./domain/composition.ts";
@@ -684,8 +685,8 @@ export class GenerationService {
         );
       const previous = this.continuation(request.continuationID, record);
       try {
-        if (request.screenContextTerms?.length)
-          record.screenContextTerms = request.screenContextTerms;
+        const screenTerms = request.screenContextTerms?.filter(validScreenContextTerm);
+        if (screenTerms?.length) record.screenContextTerms = screenTerms;
         record.inferenceAudio = await this.seal(id, "inference", speech);
         if (original) record.originalAudio = await this.seal(id, "original", original);
         record.status = "queued";
