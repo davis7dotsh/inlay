@@ -35,7 +35,7 @@ The checks do not prove identical meaning. Parakeet can omit words; Qwen can mis
 
 The prompt limit is 4,096 UTF-8 bytes. Qwen input is capped at 6,000 characters; its context is 8,192 tokens with 2,048 reserved for output. Oversized text, vocabulary, or validation work skips/rejects cleanup instead of accepting truncated output. The [helper protocol](../TextEngine/README.md) lists lower-level bounds.
 
-Use **V07 Dev** through computer use to dictate names, numbers, negations, lists, and spoken corrections. Inspect the raw text, proposed cleanup, accepted result, and rejection reasons in history. Edit and save cleanup instructions to exercise custom prompts. Run `bun run check`, `bun run lint`, and `bun run fmt:check` for static validation; automated tests and helper harnesses are not allowed. See [the development guide](development.md).
+Use **Inlay Dev** through computer use to dictate names, numbers, negations, lists, and spoken corrections. Inspect the raw text, proposed cleanup, accepted result, and rejection reasons in history. Edit and save cleanup instructions to exercise custom prompts. Run `bun run check`, `bun run lint`, and `bun run fmt:check` for static validation; automated tests and helper harnesses are not allowed. See [the development guide](development.md).
 
 ## Open question: omitted negations
 

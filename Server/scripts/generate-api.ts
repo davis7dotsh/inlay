@@ -10,7 +10,7 @@ const repositoryDirectory = resolve(serverDirectory, "..");
 const schemaPath = join(serverDirectory, "api/openapi.yaml");
 const swiftConfig = join(serverDirectory, "api/swift-openapi-generator-config.yaml");
 const tsOutput = join(serverDirectory, "src/generated/api.ts");
-const swiftOutput = join(repositoryDirectory, "Sources/V07APIWire");
+const swiftOutput = join(repositoryDirectory, "Sources/InlayAPIWire");
 const generatorVersion = "1.13.1";
 const generatorRevision = "39d49cf22abab58a07f02bb76808b5d2839b294a";
 const options = new Set(process.argv.slice(2));
@@ -22,7 +22,7 @@ if (options.has("--typescript-only") && options.has("--swift-only")) {
   throw new Error("Select either --typescript-only or --swift-only.");
 }
 const check = options.has("--check");
-const staging = check ? await mkdtemp(join(tmpdir(), "v07-api-generation-")) : undefined;
+const staging = check ? await mkdtemp(join(tmpdir(), "inlay-api-generation-")) : undefined;
 
 async function command(arguments_: string[]) {
   const child = Bun.spawn(arguments_, {

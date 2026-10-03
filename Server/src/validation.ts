@@ -17,11 +17,11 @@ if (
 }
 const ajv = new Ajv2020({ strict: false, allErrors: true, validateFormats: true });
 addFormats(ajv);
-ajv.addSchema({ $id: "v07-api", components: { schemas: document.components.schemas } });
+ajv.addSchema({ $id: "inlay-api", components: { schemas: document.components.schemas } });
 
 export function validateBody<Name extends keyof components["schemas"]>(name: Name, body: unknown) {
   const validator = ajv.getSchema<components["schemas"][Name]>(
-    `v07-api#/components/schemas/${name}`,
+    `inlay-api#/components/schemas/${name}`,
   );
   if (!validator) throw new Error(`The API contract has no schema named ${name}.`);
   if (!validator(body))

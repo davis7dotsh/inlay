@@ -1,15 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(V07Engine LANGUAGES C CXX)
+    project(InlayEngine LANGUAGES C CXX)
 endif()
 
 if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(FATAL_ERROR "V07's server supports macOS and Linux.")
+    message(FATAL_ERROR "Inlay's server supports macOS and Linux.")
 endif()
 
 # Keep the speech runtime's ggml independent from the text helper's version.
-option(V07_CUDA "Use CUDA for Linux inference" OFF)
+option(INLAY_CUDA "Use CUDA for Linux inference" OFF)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -28,7 +28,7 @@ else()
     set(GGML_METAL OFF CACHE BOOL "" FORCE)
     set(GGML_ACCELERATE OFF CACHE BOOL "" FORCE)
     set(GGML_BLAS OFF CACHE BOOL "" FORCE)
-    set(GGML_CUDA ${V07_CUDA} CACHE BOOL "" FORCE)
+    set(GGML_CUDA ${INLAY_CUDA} CACHE BOOL "" FORCE)
 endif()
 find_package(Threads REQUIRED)
 
@@ -38,10 +38,10 @@ if(NOT EXISTS "${WHISPER_SOURCE}/include/whisper.h")
 endif()
 add_subdirectory("${WHISPER_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/whisper")
 
-add_executable(v07-engine worker.cpp)
-target_compile_features(v07-engine PRIVATE cxx_std_17)
-target_compile_options(v07-engine PRIVATE -Wall -Wextra -Wpedantic)
-target_include_directories(v07-engine SYSTEM PRIVATE "${WHISPER_SOURCE}/examples")
-target_link_libraries(v07-engine PRIVATE parakeet whisper Threads::Threads)
-set_target_properties(v07-engine PROPERTIES
+add_executable(inlay-engine worker.cpp)
+target_compile_features(inlay-engine PRIVATE cxx_std_17)
+target_compile_options(inlay-engine PRIVATE -Wall -Wextra -Wpedantic)
+target_include_directories(inlay-engine SYSTEM PRIVATE "${WHISPER_SOURCE}/examples")
+target_link_libraries(inlay-engine PRIVATE parakeet whisper Threads::Threads)
+set_target_properties(inlay-engine PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Engine")

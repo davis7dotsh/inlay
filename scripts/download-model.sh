@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-model_dir="${V07_MODEL_DIR:-$HOME/Library/Application Support/V07/Models}"
+model_dir="${INLAY_MODEL_DIR:-$HOME/Library/Application Support/Inlay/Models}"
 model_name="ggml-parakeet-tdt-0.6b-v3-f16.bin"
 model_sha="833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f"
 model_url="https://huggingface.co/ggml-org/parakeet-GGUF/resolve/35156454d1a39de06863303dd209fd2bed6ee079/$model_name"

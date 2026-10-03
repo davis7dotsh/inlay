@@ -43,8 +43,8 @@ const selectedTargets = configuration.all ? targets : [configuration.target ?? c
 for (const target of selectedTargets) {
   const compileTarget = target === "bun-linux-x64" ? "bun-linux-x64-baseline" : target;
   const outfile = configuration.all
-    ? resolve(projectDirectory, "build/server-coordinators", target.slice(4), "v07-server")
-    : resolve(configuration.outfile ?? resolve(projectDirectory, "build/server/v07-server"));
+    ? resolve(projectDirectory, "build/server-coordinators", target.slice(4), "inlay-server")
+    : resolve(configuration.outfile ?? resolve(projectDirectory, "build/server/inlay-server"));
   await mkdir(dirname(outfile), { recursive: true });
   const result = await Bun.build({
     ...standaloneBuildSettings(),
