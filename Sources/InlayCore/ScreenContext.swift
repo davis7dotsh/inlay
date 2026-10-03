@@ -102,8 +102,8 @@ public enum ScreenContext {
     ]
 
     /// A chunk with query or assignment syntax is dropped whole, and so is one holding
-    /// any domain: a dotted name ending in a common top-level domain, a lowercase dotted
-    /// name, or one followed by a port. Source-file names such as whisper.cpp,
+    /// any domain: a dotted name ending in a common top-level domain or a lowercase
+    /// final label, or one followed by a port. Source-file names such as whisper.cpp,
     /// README.md, or main.swift:12:5 and identifiers such as Stripe.Event survive.
     private static func isWebAddress(_ chunk: Substring) -> Bool {
         let text = String(chunk), lower = text.lowercased()
@@ -112,9 +112,11 @@ public enum ScreenContext {
             return true
         }
         for match in text.matches(of: domainPattern) {
-            let host = String(match.output.0), suffix = String(match.output.1).lowercased()
+            let label = String(match.output.1), suffix = label.lowercased()
             if fileExtensions.contains(suffix) { continue }
-            if commonTopLevelDomains.contains(suffix) || host == host.lowercased()
+            // Lowercase final labels cover every unlisted top-level domain (Acme.email);
+            // capitalized ones are member names such as Stripe.Event.
+            if commonTopLevelDomains.contains(suffix) || label == suffix
                 || text[match.range.upperBound...].first == ":" { return true }
         }
         return false
