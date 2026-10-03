@@ -7,7 +7,7 @@ Keep the native Swift client and replace the packaged HTTP coordinator with Type
 - Add a root Bun workspace/package and pinned lockfile. All JavaScript dependency installation, scripts, static checks, and executable compilation use Bun.
 - Define every implemented route and nested wire model in `Server/api/openapi.yaml` (OpenAPI 3.1), including Wispr Flow imports, binary float32 uploads, and full-record NDJSON events.
 - Generate TypeScript types with `openapi-typescript`. Validate JSON at runtime using schemas from the same contract; semantic validation stays in the services.
-- Generate public Swift transport types with Apple Swift OpenAPI Generator in a new `V07APIWire` target. Preserve existing client-facing DTO conveniences through typed bridges rather than changing SwiftUI callers.
+- Generate public Swift transport types with Apple Swift OpenAPI Generator in a new `InlayAPIWire` target. Preserve existing client-facing DTO conveniences through typed bridges rather than changing SwiftUI callers.
 
 ```yaml
 generate: [types]

@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>V07</string>
+	<string>Inlay</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.davis.v07.dev</string>
+	<string>dev.davis.inlay.dev</string>
 	<key>CFBundleName</key>
-	<string>V07 Dev</string>
+	<string>Inlay Dev</string>
 	<key>CFBundleDisplayName</key>
-	<string>V07 Dev</string>
+	<string>Inlay Dev</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -17,7 +17,7 @@
 	<key>CFBundleVersion</key>
 	<string>28</string>
 	<key>CFBundleIconFile</key>
-	<string>V07</string>
+	<string>Inlay</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
@@ -25,9 +25,9 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>V07 Dev records your microphone only while you dictate and sends audio to your configured V07 server for transcription and shared history.</string>
+	<string>Inlay Dev records your microphone only while you dictate and sends audio to your configured Inlay server for transcription and shared history.</string>
 	<key>NSInputMonitoringUsageDescription</key>
-	<string>V07 Dev listens for your chosen hold-to-dictate key. It does not store your keystrokes.</string>
+	<string>Inlay Dev listens for your chosen hold-to-dictate key. It does not store your keystrokes.</string>
 	<!-- HTTP is validated in ServerEndpoint and limited to loopback/Tailscale IPs. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
@@ -35,8 +35,8 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>V07 Dev connects to your V07 server to process dictation and display shared history.</string>
-	<key>V07DevelopmentBuild</key>
+	<string>Inlay Dev connects to your Inlay server to process dictation and display shared history.</string>
+	<key>InlayDevelopmentBuild</key>
 	<true/>
 </dict>
 </plist>

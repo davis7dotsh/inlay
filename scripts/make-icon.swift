@@ -4,17 +4,17 @@ import Foundation
 let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
 
-// Seven signal strokes form a V, matching Resources/V07.svg.
-// Keep this geometry in sync with V07Brand.logoPath(in:).
+// Three fitted strokes form an inset I, matching Resources/Inlay.svg.
+// Keep this geometry in sync with InlayBrand.logoPath(in:).
 func logoPath() -> CGPath {
     let path = CGMutablePath()
-    let strokes: [(CGFloat, CGFloat, CGFloat)] = [
-        (16, 27, 27), (32, 39, 28), (48, 51, 30), (64, 64, 36),
-        (80, 51, 30), (96, 39, 28), (112, 27, 27),
+    let strokes = [
+        CGRect(x: 20, y: 20, width: 88, height: 16),
+        CGRect(x: 56, y: 44, width: 16, height: 40),
+        CGRect(x: 20, y: 92, width: 88, height: 16),
     ]
-    for (x, y, length) in strokes {
-        path.addRoundedRect(in: CGRect(x: x - 5, y: y - 5, width: 10, height: length + 10),
-                            cornerWidth: 5, cornerHeight: 5)
+    for stroke in strokes {
+        path.addRoundedRect(in: stroke, cornerWidth: 8, cornerHeight: 8)
     }
     return path
 }

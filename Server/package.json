@@ -1,5 +1,5 @@
 {
-  "name": "@v07/server",
+  "name": "@inlay/server",
   "private": true,
   "type": "module",
   "scripts": {
