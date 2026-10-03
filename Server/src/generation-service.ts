@@ -441,7 +441,12 @@ export class GenerationService {
           state.available ? "Speech model failed to load." : state.message,
         );
       }
-      if (!state.speechLoaded) this.beginWarmup();
+      // Starting a take loads any cold model now, not when the recording is sealed.
+      if (
+        !state.speechLoaded ||
+        (this.preferences.preferences.textCorrectionEnabled && !state.proofLoaded)
+      )
+        this.beginWarmup();
       await requireDiskSpace(this.configuration.dataDirectory);
       const record = this.newRecord(
         uuid(),
