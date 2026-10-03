@@ -35,7 +35,7 @@ Connect a DJI Mic Mini, Mini 2, or Mini 2S receiver over USB-C. The **This Mac â
 
 The button uses the receiver's USB consumer-control interface (`2CA3:4011`), as documented by [dji-mic-wispr-flow](https://github.com/caezium/dji-mic-wispr-flow). Bluetooth-only connections do not send these events. Inlay handles the receiver directly without Karabiner; disable other DJI button mappings first. While enabled, Inlay captures the receiver's consumer controls so its button does not change system volume. Keyboard volume keys remain available. Disabling the feature or quitting releases the receiver.
 
-Repeated button events are ignored. Presses during transcription, keyboard dictation, or a microphone test do not start another take. Unplugging the receiver cancels its active recording; sleep and locking the Mac interrupt recording too. **Check receiver** retries capture after changing permissions or disabling another mapping tool.
+Repeated button events are ignored. A press while earlier takes are transcribing starts a new take; presses during keyboard dictation or a microphone test are ignored. Unplugging the receiver cancels its active recording; sleep and locking the Mac interrupt recording too. **Check receiver** retries capture after changing permissions or disabling another mapping tool.
 
 ## Use a server on another machine
 
