@@ -13,6 +13,9 @@ struct DevicePreferencesPage: View {
 private struct DevicePreferencesForm: View {
     @ObservedObject var controller: InlayController
     @ObservedObject var preferences: ClientPreferencesStore
+    @StateObject private var keyRecorder = HoldKeyRecorder()
+    @State private var keyRecorderMessage: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var endpoint = ""
     @State private var token = ""
     @State private var deviceName = ""
@@ -41,24 +44,55 @@ private struct DevicePreferencesForm: View {
             } header: { Text("Connection").textCase(nil) }
 
             Section {
-                Picker("Dictation key", selection: $controller.shortcut) {
-                    ForEach(HoldKey.allCases) { key in Text(key.title).tag(key) }
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        if keyRecorder.isRecording {
+                            Button("Cancel", action: stopKeyRecording)
+                                .buttonStyle(.borderless)
+                                .accessibilityIdentifier("preferences.shortcut-cancel")
+                        }
+                        Button(action: keyRecorder.isRecording ? stopKeyRecording : startKeyRecording) {
+                            HStack(spacing: 6) {
+                                if keyRecorder.isRecording {
+                                    Image(systemName: "record.circle.fill")
+                                        .symbolEffect(.pulse, isActive: !reduceMotion)
+                                    Text("Press a key…")
+                                } else {
+                                    Text(controller.shortcut.symbol)
+                                    Text(controller.shortcut.title)
+                                }
+                            }
+                            .frame(minWidth: 109)
+                        }
+                        .accessibilityIdentifier("preferences.shortcut")
+                        .accessibilityLabel(keyRecorder.isRecording
+                            ? "Waiting for a key press"
+                            : "Dictation key, \(controller.shortcut.title)")
+                        .accessibilityHint(keyRecorder.isRecording ? "Cancels key recording" : "Records a new dictation key")
+                    }
+                } label: {
+                    Text("Dictation key")
+                    Text(keyRecorderCaption)
+                        .foregroundStyle(keyRecorderMessage == nil ? InlayPalette.muted : InlayPalette.warning)
                 }
-                .accessibilityIdentifier("preferences.shortcut")
                 Picker("Trigger", selection: $controller.activationMode) {
                     ForEach(HotkeyActivationMode.allCases) { mode in Text(mode.title).tag(mode) }
                 }
                 .accessibilityIdentifier("preferences.activation")
                 LabeledContent {
-                    Button(controller.isCheckingShortcut ? "Stop checking" : "Check shortcut") {
+                    Button {
                         if controller.isCheckingShortcut { controller.stopShortcutCheck() }
                         else { controller.startShortcutCheck(); showingDiagnostics = true }
+                    } label: {
+                        Text(controller.isCheckingShortcut ? "Stop checking" : "Check shortcut")
+                            .frame(minWidth: 109)
                     }
-                    .frame(width: 125)
+                    // The hold monitor is suspended during key recording; a
+                    // shortcut check against it would only produce silence.
+                    .disabled(keyRecorder.isRecording)
                 } label: {
                     Text(controller.isCheckingShortcut ? "Hold the key for a second" : "Shortcut check")
                 }
-                if let note = controller.shortcut.note { Text(note).font(.caption).foregroundStyle(InlayPalette.muted) }
                 DisclosureGroup("Shortcut diagnostics", isExpanded: $showingDiagnostics) {
                     ScrollView {
                         Text(controller.shortcutCheckText.isEmpty ? "Run a shortcut check to see events." : controller.shortcutCheckText)
@@ -115,7 +149,42 @@ private struct DevicePreferencesForm: View {
             token = preferences.token
             deviceName = preferences.deviceName
             controller.refreshPermissions()
+            keyRecorder.onCapture = {
+                controller.setKeyRecording(false)
+                controller.shortcut = $0
+            }
+            // The recorder consumes Escape itself while it is listening.
+            keyRecorder.onCancel = { controller.setKeyRecording(false) }
+            keyRecorder.onTimeout = {
+                controller.setKeyRecording(false)
+                // macOS can swallow Globe presses before the app sees them, and
+                // the Fn note only shows once Fn is chosen, so repeat it here.
+                keyRecorderMessage = "No key pressed. Click to try again. If Fn / Globe does nothing, set ‘Press Globe key to’ to ‘Do Nothing’ in Keyboard settings."
+            }
         }
+        .onDisappear {
+            if keyRecorder.isRecording { stopKeyRecording() }
+        }
+    }
+
+    private var keyRecorderCaption: String {
+        let keys = HoldKey.allCases.map(\.title)
+        let choices = keys.dropLast().joined(separator: ", ") + ", or " + (keys.last ?? "")
+        if keyRecorder.isRecording { return "Press \(choices). Esc cancels." }
+        if let keyRecorderMessage { return keyRecorderMessage }
+        let hint = "Click to change. Use \(choices)."
+        return controller.shortcut.note.map { "\(hint)\n\($0)" } ?? hint
+    }
+
+    private func startKeyRecording() {
+        keyRecorderMessage = nil
+        controller.setKeyRecording(true)
+        keyRecorder.start()
+    }
+
+    private func stopKeyRecording() {
+        keyRecorder.stop()
+        controller.setKeyRecording(false)
     }
 }
 

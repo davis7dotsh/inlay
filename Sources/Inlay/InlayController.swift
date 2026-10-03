@@ -149,7 +149,7 @@ final class InlayController: ObservableObject {
     var isBusy: Bool { activity.isBusy || !pendingDictations.isEmpty }
     var canCancelWithEscape: Bool { !hotkey.isHoldingFn }
     var isServerReady: Bool { serverHealth?.ready == true && serverHealth?.apiVersion == InlayAPI.version }
-    var canTest: Bool { isServerReady && permissions.microphone && microphones.resolution.device != nil && !isCapturing }
+    var canTest: Bool { isServerReady && permissions.microphone && microphones.resolution.device != nil && !isCapturing && !isRecordingKey }
     var selectedInputName: String { microphones.resolution.device?.name ?? "No microphone available" }
     var allPermissionsGranted: Bool { permissions.microphone && permissions.accessibility }
     var onHUDVisibility: ((Bool) -> Void)?
@@ -695,7 +695,7 @@ final class InlayController: ObservableObject {
     }
 
     func toggleTestRecording() {
-        guard !hotkey.isHoldingFn else { return }
+        guard !hotkey.isHoldingFn, !isRecordingKey else { return }
         if isCapturing { finishDictation() }
         else { beginDictation(isTest: true) }
     }
@@ -847,7 +847,7 @@ final class InlayController: ObservableObject {
     /// only on true, so a rejected start cannot leave a phantom recording.
     @discardableResult
     private func beginDictation(isTest: Bool) -> Bool {
-        guard !isCapturing, !isShuttingDown else { return false }
+        guard !isCapturing, !isShuttingDown, !isRecordingKey else { return false }
         stopShortcutCheck()
         guard isServerReady else { showError(serverStatusMessage); refreshServer(); onShowWindow?(); return false }
         guard permissions.microphone else { showError("Allow microphone access, then try again."); onShowWindow?(); return false }
@@ -1242,11 +1242,32 @@ final class InlayController: ObservableObject {
         let current = PermissionSnapshot.capture()
         if current != permissions { permissions = current }
         audioDevices.refresh()
-        if permissions.canListenForHotkey {
+        if permissions.canListenForHotkey, !hotkeySuspendedForKeyRecording {
             isHotkeyActive = hotkey.start()
         } else {
             hotkey.stop()
             isHotkeyActive = false
+        }
+    }
+
+    /// While the user records a new hold key, the live monitor must not turn
+    /// that same press into dictation. Suspended until recording stops.
+    ///
+    /// Published so other capture entry points (the microphone test button,
+    /// the hold monitor itself) stay disabled while capture is active.
+    @Published private(set) var isRecordingKey = false
+    private var hotkeySuspendedForKeyRecording = false
+
+    func setKeyRecording(_ recording: Bool) {
+        guard hotkeySuspendedForKeyRecording != recording else { return }
+        hotkeySuspendedForKeyRecording = recording
+        isRecordingKey = recording
+        if recording {
+            stopShortcutCheck()
+            hotkey.stop()
+            isHotkeyActive = false
+        } else {
+            refreshPermissions()
         }
     }
 
@@ -1274,7 +1295,8 @@ final class InlayController: ObservableObject {
     }
 
     func startShortcutCheck() {
-        guard !isBusy, !isCheckingShortcut else { return }
+        // The hold monitor is suspended while a key is being recorded.
+        guard !isBusy, !isCheckingShortcut, !isRecordingKey else { return }
         refreshPermissions()
         shortcutCheckStarted = ProcessInfo.processInfo.systemUptime
         shortcutCheckEntries = []
