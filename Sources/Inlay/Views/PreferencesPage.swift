@@ -144,7 +144,7 @@ private struct DJIMicButtonPreferences: View {
                     .font(.caption)
                     .foregroundStyle(InlayPalette.muted)
             }
-        } header: { Text("DJI mic button") }
+        } header: { Text("DJI mic button").textCase(nil) }
         .disabled(controller.isBusy)
     }
 }
