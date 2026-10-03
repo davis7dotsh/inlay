@@ -9,11 +9,9 @@ The dev runner builds **Inlay Dev**, with separate settings and visible Dev labe
 You need Apple Silicon, macOS 14+, full Xcode 26+ with the Metal compiler, Bun 1.4.2, CMake, and Git. Xcode provides Swift; the client/MLX build requires Swift 6.2+. Bun manages JavaScript dependencies and builds standalone server executables.
 
 ```sh
-git clone --recurse-submodules https://github.com/davis7dotsh/v07.git inlay
+git clone --recurse-submodules https://github.com/davis7dotsh/inlay.git
 cd inlay
 ```
-
-The GitHub repository still uses its original URL; `inlay` is the local checkout name.
 
 [Download the pinned Whisper and Qwen models](Server/README.md#models) into `.local/models`, then build and start:
 
