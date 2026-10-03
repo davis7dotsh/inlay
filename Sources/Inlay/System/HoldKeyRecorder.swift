@@ -13,45 +13,9 @@ final class HoldKeyRecorder: ObservableObject {
     /// Recording stops itself after this long without a usable press.
     static let timeoutNanoseconds: UInt64 = 5_000_000_000
 
-    enum Input: Equatable {
+    private enum Input {
         case key(HoldKey, down: Bool)
         case escape
-    }
-
-    struct Environment {
-        var listen: (@escaping (Input) -> Void) -> HotkeyCancellation
-        var delay: (@escaping @MainActor () -> Void) -> HotkeyCancellation
-
-        static var live: Self {
-            Self(
-                listen: { handler in
-                    let monitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { event in
-                        // Consume Escape here so cancelling never depends on
-                        // which view in the window handles the exit command.
-                        if event.type == .keyDown, event.keyCode == escapeKeyCode {
-                            handler(.escape)
-                            return nil
-                        }
-                        guard let cgEvent = event.cgEvent, let key = HoldKey(keyCode: event.keyCode) else { return event }
-                        // Some keyboards report Fn/Globe as keyDown instead of
-                        // flagsChanged; a keyDown for a modifier is always a press.
-                        let isDown = event.type == .keyDown || key.isDown(in: cgEvent.flags)
-                        handler(.key(key, down: isDown))
-                        return event
-                    }
-                    return HotkeyCancellation { if let monitor { NSEvent.removeMonitor(monitor) } }
-                },
-                delay: { action in
-                    let task = Task { @MainActor in
-                        do { try await Task.sleep(nanoseconds: HoldKeyRecorder.timeoutNanoseconds) }
-                        catch { return }
-                        guard !Task.isCancelled else { return }
-                        action()
-                    }
-                    return HotkeyCancellation { task.cancel() }
-                }
-            )
-        }
     }
 
     @Published private(set) var isRecording = false
@@ -60,31 +24,44 @@ final class HoldKeyRecorder: ObservableObject {
     var onTimeout: (() -> Void)?
     var onCancel: (() -> Void)?
 
-    private let environment: Environment
-    private var listener: HotkeyCancellation?
-    private var timeout: HotkeyCancellation?
-
-    init(environment: Environment = .live) {
-        self.environment = environment
-    }
+    private var monitor: Any?
+    private var timeout: Task<Void, Never>?
 
     func start() {
         guard !isRecording else { return }
         isRecording = true
-        listener = environment.listen { [weak self] in self?.receive($0) }
-        timeout = environment.delay { [weak self] in self?.timeOut() }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+            // Consume Escape here so cancelling never depends on which view in
+            // the window handles the exit command.
+            if event.type == .keyDown, event.keyCode == escapeKeyCode {
+                self?.receive(.escape)
+                return nil
+            }
+            guard let cgEvent = event.cgEvent, let key = HoldKey(keyCode: event.keyCode) else { return event }
+            // Some keyboards report Fn/Globe as keyDown instead of
+            // flagsChanged; a keyDown for a modifier is always a press.
+            let isDown = event.type == .keyDown || key.isDown(in: cgEvent.flags)
+            self?.receive(.key(key, down: isDown))
+            return event
+        }
+        timeout = Task { @MainActor [weak self] in
+            do { try await Task.sleep(nanoseconds: Self.timeoutNanoseconds) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            self?.timeOut()
+        }
     }
 
     func stop() {
         guard isRecording else { return }
         isRecording = false
-        listener?.cancel()
-        listener = nil
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
         timeout?.cancel()
         timeout = nil
     }
 
-    func receive(_ input: Input) {
+    private func receive(_ input: Input) {
         guard isRecording else { return }
         switch input {
         case let .key(key, down):
