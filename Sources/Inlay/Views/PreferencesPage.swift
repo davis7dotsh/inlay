@@ -75,7 +75,7 @@ private struct DevicePreferencesForm: View {
                         .accessibilityIdentifier("preferences.screen-context")
                     Text(controller.useScreenContext && !controller.permissions.screenRecording
                          ? "Allow Screen Recording below, then reopen \(InlayBuild.current.displayName)."
-                         : "Reads the front window on this Mac when a take starts. Only unusual names and terms are sent to the server; screenshots and screen text are not.")
+                         : "Reads the focused window on this Mac when a take starts. Only unusual names and terms are sent to the server; screenshots and screen text are not.")
                         .font(.caption)
                         .foregroundStyle(controller.useScreenContext && !controller.permissions.screenRecording
                                          ? InlayPalette.warning : InlayPalette.muted)

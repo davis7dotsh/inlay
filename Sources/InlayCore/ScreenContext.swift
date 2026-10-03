@@ -95,6 +95,7 @@ public enum ScreenContext {
         "com", "org", "net", "io", "ai", "dev", "app", "co", "me", "so", "sh", "gg", "ly", "tv", "xyz", "info", "biz",
         "gov", "edu", "us", "uk", "ca", "au", "nz", "de", "fr", "nl", "eu", "in", "design", "site", "tech", "cloud",
     ]
+    private static let countryDomainExtensions: Set<String> = ["cc", "md", "py", "rs"]
     private static let fileExtensions: Set<String> = [
         "c", "cc", "cpp", "cs", "css", "csv", "go", "h", "hpp", "html", "java", "js", "json", "jsx", "kt", "lock", "log",
         "m", "md", "mjs", "pdf", "plist", "png", "py", "rb", "rs", "sql", "swift", "toml", "ts", "tsx", "txt",
@@ -112,8 +113,13 @@ public enum ScreenContext {
             return true
         }
         for match in text.matches(of: domainPattern) {
-            let label = String(match.output.1), suffix = label.lowercased()
-            if fileExtensions.contains(suffix) { continue }
+            let host = String(match.output.0), label = String(match.output.1), suffix = label.lowercased()
+            // Some extensions are also country domains (team.md, shop.rs); only names that
+            // look like files, such as README.md or setup_tools.py, keep the exception.
+            if fileExtensions.contains(suffix),
+               !countryDomainExtensions.contains(suffix) || host.contains(where: { $0.isUppercase || $0 == "_" }) {
+                continue
+            }
             // Lowercase final labels cover every unlisted top-level domain (Acme.email);
             // capitalized ones are member names such as Stripe.Event.
             if commonTopLevelDomains.contains(suffix) || label == suffix

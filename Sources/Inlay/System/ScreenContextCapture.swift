@@ -71,13 +71,43 @@ final class ScreenContextCapture {
         }
     }
 
-    private static func windowImage(of processID: pid_t) async -> CGImage? {
-        // The window list is ordered front to back, so the first normal window is the one in use.
+    /// The window with keyboard focus, matched by frame; panels and floating editors
+    /// can sit above other layers. Otherwise the frontmost normal window of the app.
+    private static func focusedWindowID(of processID: pid_t) -> CGWindowID? {
         guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-                as? [[String: Any]],
-              let windowID = windows.first(where: {
-                  ($0[kCGWindowOwnerPID as String] as? pid_t) == processID && ($0[kCGWindowLayer as String] as? Int) == 0
-              })?[kCGWindowNumber as String] as? CGWindowID,
+                as? [[String: Any]] else { return nil }
+        let owned = windows.filter { ($0[kCGWindowOwnerPID as String] as? pid_t) == processID }
+        if let frame = focusedWindowFrame(of: processID),
+           let match = owned.first(where: { info in
+               (info[kCGWindowBounds as String] as? NSDictionary)
+                   .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
+                   .map { abs($0.minX - frame.minX) < 2 && abs($0.minY - frame.minY) < 2
+                       && abs($0.width - frame.width) < 2 && abs($0.height - frame.height) < 2 } ?? false
+           }) {
+            return match[kCGWindowNumber as String] as? CGWindowID
+        }
+        // The window list is ordered front to back.
+        return owned.first { ($0[kCGWindowLayer as String] as? Int) == 0 }?[kCGWindowNumber as String] as? CGWindowID
+    }
+
+    /// Accessibility and window-list frames share top-left global coordinates.
+    private static func focusedWindowFrame(of processID: pid_t) -> CGRect? {
+        let app = AXUIElementCreateApplication(processID)
+        var window: CFTypeRef?, position: CFTypeRef?, size: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success,
+              let window, CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
+        let element = window as! AXUIElement
+        var origin = CGPoint.zero, extent = CGSize.zero
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+              let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID(),
+              AXValueGetValue(position as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(size as! AXValue, .cgSize, &extent) else { return nil }
+        return CGRect(origin: origin, size: extent)
+    }
+
+    private static func windowImage(of processID: pid_t) async -> CGImage? {
+        guard let windowID = focusedWindowID(of: processID),
               let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true),
               let window = content.windows.first(where: { $0.windowID == windowID }) else { return nil }
         let filter = SCContentFilter(desktopIndependentWindow: window)
