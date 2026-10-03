@@ -131,8 +131,8 @@ struct ServerPreferencesPage: View {
         return dirty && base.revision != latest.revision
     }
     private var available: Bool { controller.sharedPreferences != nil && controller.serverHealth != nil }
-    // Keep API v1 wire values readable by older clients. Other Parakeet
-    // languages use automatic proofreading without adding closed-enum cases.
+    // The wire values form a closed enum; keep them stable. Other Parakeet
+    // languages use automatic proofreading without adding enum cases.
     private let languages = [
         ("English", "en"), ("Automatic", "auto"), ("Spanish", "es"), ("French", "fr"),
         ("German", "de"), ("Italian", "it"), ("Portuguese", "pt"), ("Dutch", "nl"),
