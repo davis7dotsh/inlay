@@ -22,6 +22,7 @@ import type {
   WisprFlowKnownIDsRequest,
 } from "./api.ts";
 import type { components } from "./generated/api.ts";
+import { API_VERSION } from "./api.ts";
 import { decodePersonalDictionary } from "./domain/dictionary.ts";
 import { validateBody } from "./validation.ts";
 import type { InferenceBackend } from "./inference/native-inference.ts";
@@ -359,7 +360,7 @@ export class GenerationService {
                 : "Server models are unavailable.";
       if (!state.speechLoaded) this.beginWarmup();
       return {
-        apiVersion: 1,
+        apiVersion: API_VERSION,
         serverVersion: "0.1.0",
         isDev: this.configuration.development,
         ready,

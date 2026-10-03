@@ -68,7 +68,7 @@ export type WisprFlowImportResult = Omit<Schemas["WisprFlowImportResult"], "reco
 };
 export type APIErrorResponse = Schemas["APIErrorResponse"];
 
-export const API_VERSION = 1;
+export const API_VERSION = 2;
 export const DEFAULT_PORT = 8391;
 export const MAXIMUM_RECORDING_SECONDS = 180;
 export const MAXIMUM_CHUNK_BYTES = 1_048_576;
