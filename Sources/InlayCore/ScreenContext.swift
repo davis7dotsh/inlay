@@ -113,8 +113,10 @@ public enum ScreenContext {
         let suffix = String(match.output.1).lowercased()
         // A query or fragment makes any dotted host an address; so does a port unless
         // the host is a source file, as in compiler locations like main.swift:12:5.
-        if parts.count > 1, let separator = trimmed.dropFirst(host.count).first,
-           separator != ":" || !fileExtensions.contains(suffix) { return true }
+        if parts.count > 1 {
+            let rest = trimmed.dropFirst(host.count)
+            if rest.contains(where: { "?#=".contains($0) }) || !fileExtensions.contains(suffix) { return true }
+        }
         if commonTopLevelDomains.contains(suffix) && !fileExtensions.contains(suffix) { return true }
         return host == lower && !fileExtensions.contains(suffix)
     }
