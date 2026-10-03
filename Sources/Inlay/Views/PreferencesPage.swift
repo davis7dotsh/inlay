@@ -70,6 +70,16 @@ private struct DevicePreferencesForm: View {
                 }
                 Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
                     .accessibilityIdentifier("preferences.mute-output")
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Use on-screen words as vocabulary hints", isOn: $controller.useScreenContext)
+                        .accessibilityIdentifier("preferences.screen-context")
+                    Text(controller.useScreenContext && !controller.permissions.screenRecording
+                         ? "Allow Screen Recording below, then reopen \(InlayBuild.current.displayName)."
+                         : "Reads the front window on this Mac when a take starts. Only unusual names and terms are sent to the server; screenshots and screen text are not.")
+                        .font(.caption)
+                        .foregroundStyle(controller.useScreenContext && !controller.permissions.screenRecording
+                                         ? InlayPalette.warning : InlayPalette.muted)
+                }
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
                     Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
@@ -82,6 +92,11 @@ private struct DevicePreferencesForm: View {
                               reviewGranted: true, action: controller.requestMicrophone)
                 PermissionRow(title: "Accessibility", detail: "Recognize your dictation key and insert text.", granted: controller.permissions.accessibility,
                               reviewGranted: true, action: controller.requestAccessibility)
+                if controller.useScreenContext {
+                    PermissionRow(title: "Screen Recording", detail: "Read on-screen words for vocabulary hints.",
+                                  granted: controller.permissions.screenRecording, reviewGranted: true,
+                                  action: controller.requestScreenRecording)
+                }
                 HStack {
                     PermissionHelpButton()
                     Spacer()

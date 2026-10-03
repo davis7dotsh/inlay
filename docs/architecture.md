@@ -38,17 +38,19 @@ Only the new `insertionText` can be inserted; `previewText` may include earlier 
 
 The Mac rechecks destination, selection, protected fields, modifiers, and clipboard state before delivery. Unsafe destinations use clipboard or preview fallback. Only confirmed insertion advances cursor-based continuation. Editor text and Accessibility handles stay on the Mac.
 
+With **Use on-screen words as vocabulary hints** enabled and Screen Recording granted, the Mac captures the front window when a dictation starts and recognizes its text with Vision. It ranks unusual words, such as names, identifiers, and words the spell checker does not know, and sends up to 40 with the finish request. The screenshot and recognized text are discarded on the Mac. Emails, URLs, paths, and long numbers are never sent. Inlay's own window, password fields with secure input, and **Test microphone** are not read. A capture that takes longer than half a second after upload adds no hints.
+
 Microphone capture uses input-only Core Audio without changing system routing or playback volume. Route changes apply to the next take. Release, cancellation, sleep/lock, or device loss ends capture.
 
 With **Mute system audio while recording** enabled under **This Mac**, the default output device is muted when a take starts and restored when capture ends. Only mute controls Inlay changed are restored, so output that was already muted stays muted. A client crash during a take can leave output muted.
 
 ## Settings
 
-| Scope          | Where to edit                    | What it owns                                                                                                          |
-| -------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, microphone priority/selection. |
-| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                      |
-| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).          |
+| Scope          | Where to edit                    | What it owns                                                                                                                                |
+| -------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, screen-context hints, microphone priority/selection. |
+| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                            |
+| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                |
 
 Shared saves use revisions to reject stale concurrent edits. Settings are snapshotted when the server accepts a take; changes affect future recordings. Update shared settings through the UI/API rather than editing files while the server runs.
 

@@ -179,7 +179,12 @@ export function dictionaryVocabularyTerms(dictionary: PersonalDictionary) {
 
 export const vocabularyTerms = dictionaryVocabularyTerms;
 
-export function recognitionVocabularyTerms(dictionary: PersonalDictionary, freeform: string) {
+/** Shared vocabulary leads; screen terms only fill Whisper's remaining hint budget. */
+export function recognitionVocabularyTerms(
+  dictionary: PersonalDictionary,
+  freeform: string,
+  screenContextTerms: readonly string[] = [],
+) {
   const extras = freeform
     .split(/[,\n\r\u0085\u2028\u2029]/u)
     .map((part) =>
@@ -189,7 +194,10 @@ export function recognitionVocabularyTerms(dictionary: PersonalDictionary, freef
         .join(" "),
     )
     .filter(Boolean);
-  return uniqueTerms([...dictionaryVocabularyTerms(dictionary), ...extras]);
+  const screen = screenContextTerms.filter(
+    (term) => term.length > 0 && term === term.trim() && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(term),
+  );
+  return uniqueTerms([...dictionaryVocabularyTerms(dictionary), ...extras, ...screen]);
 }
 
 const escapePattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

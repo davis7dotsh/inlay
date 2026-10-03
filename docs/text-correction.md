@@ -9,6 +9,7 @@ Edit **Server preferences**, then **Save shared preferences**. All dictionary li
 - Preferred spellings normalize case. Explicit aliases replace whole words or phrases, such as `mini max → MiniMax`. Longer matches win, and replacements do not cascade.
 - Use narrow aliases like `off middleware → auth middleware`; a broad `off → auth` also changes legitimate “turn off.”
 - Star priority terms to suggest them first. Whisper fits whole terms into its token budget; history shows included and omitted hints. Qwen has a separate bounded hint budget. Dictionary replacements still apply to terms omitted from model hints.
+- **Screen hints** from the Mac's front window follow the dictionary and vocabulary in Whisper's prompt, so they fill only the remaining token budget. They are not dictionary entries: they do not replace text, license Qwen name changes, or carry over to other takes. History lists each take's screen terms. See [text delivery](architecture.md#text-delivery).
 - **Recognition vocabulary** adds speech hints. Hints improve the odds of recognizing unusual names; they cannot reliably distinguish every homophone.
 - The initial Personal list contains MiniMax and Codex. You can delete them or save an empty dictionary. There is no automatic learning from edits or history.
 
@@ -29,7 +30,7 @@ The prompt guides Qwen; it cannot bypass the validation rules below.
 
 Rejected, unavailable, or failed proofreading keeps the already-cleaned, dictionary-corrected, list-formatted source. History records raw text, the proposed/accepted cleanup, its outcome/reason, verified corrections, and model details. See [storage](architecture.md#storage).
 
-The checks do not prove identical meaning. Whisper can omit words; Qwen can mishandle homophones or instructions. The proofreader receives the current dictated chunk, language, preferred terms, and cleanup prompt—not surrounding documents, clipboard contents, or screenshots.
+The checks do not prove identical meaning. Whisper can omit words; Qwen can mishandle homophones or instructions. The proofreader receives the current dictated chunk, language, preferred terms, and cleanup prompt—not surrounding documents, clipboard contents, screenshots, or screen hints.
 
 ## Limits and verification
 

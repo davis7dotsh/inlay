@@ -684,6 +684,8 @@ export class GenerationService {
         );
       const previous = this.continuation(request.continuationID, record);
       try {
+        if (request.screenContextTerms?.length)
+          record.screenContextTerms = request.screenContextTerms;
         record.inferenceAudio = await this.seal(id, "inference", speech);
         if (original) record.originalAudio = await this.seal(id, "original", original);
         record.status = "queued";
@@ -1047,7 +1049,11 @@ export class GenerationService {
       const speech = await this.inference.transcribe(
         join(this.directory(id), "inference.wav"),
         settings.language,
-        recognitionVocabularyTerms(settings.dictionary, settings.vocabulary),
+        recognitionVocabularyTerms(
+          settings.dictionary,
+          settings.vocabulary,
+          record.screenContextTerms,
+        ),
         (value) => {
           void this.mutate(() => this.progress(id, value));
         },

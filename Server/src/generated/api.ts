@@ -375,7 +375,10 @@ export interface components {
       /** Format: int64 */
       originalFrames?: number;
       continuationID?: components["schemas"]["UUID"];
+      screenContextTerms?: components["schemas"]["ScreenContextTerms"];
     };
+    /** @description Unusual words the client read from the window being dictated into. They follow shared vocabulary as Whisper hints; recognized screen text itself stays on the client. */
+    ScreenContextTerms: string[];
     AudioArtifact: {
       filename: string;
       sampleRate: number;
@@ -517,6 +520,7 @@ export interface components {
       speech?: components["schemas"]["ModelProvenance"];
       proofreading?: components["schemas"]["ModelProvenance"];
       textProcessing?: components["schemas"]["TextProcessingRecord"];
+      screenContextTerms?: components["schemas"]["ScreenContextTerms"];
       recognitionHints?: components["schemas"]["ModelHintUsage"];
       proofreadingHints?: components["schemas"]["ModelHintUsage"];
       formattingRejectionReason?: string;
