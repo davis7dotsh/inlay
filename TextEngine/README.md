@@ -1,6 +1,6 @@
 # Qwen helpers
 
-The server packages `v07-text-engine` using native Swift MLX on macOS and llama.cpp on Linux. Both run Qwen3-4B-Instruct-2507, serve the same JSON-lines protocol, and remain loaded between requests. They read local model files and never open a microphone, network connection, or chat session.
+The server packages `inlay-text-engine` using native Swift MLX on macOS and llama.cpp on Linux. Both run Qwen3-4B-Instruct-2507, serve the same JSON-lines protocol, and remain loaded between requests. They read local model files and never open a microphone, network connection, or chat session.
 
 Build with `scripts/build-server.sh`; see [model setup](../Server/README.md#models). The Mac helper requires its adjacent `mlx.metallib` and resource bundles. `scripts/build-text-engine.sh` builds that package through Xcode; plain `swift build` does not package its shaders. Linux builds the separate CMake project because its ggml version differs from Whisper's.
 
@@ -27,4 +27,4 @@ Diagnostics use stderr and omit transcripts. The server drains them without stor
 
 ## Verify
 
-Build with `./scripts/build-server.sh`, set `V07_TEXT_MODEL` to its model directory/file, and use **V07 Dev** to dictate with proofreading enabled. Inspect raw and cleaned transcripts, cleanup outcomes, dictionary names, numbers, and negations in history. Edit **Cleanup instructions**, save shared preferences, and record another take to exercise custom prompts. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.
+Build with `./scripts/build-server.sh`, set `INLAY_TEXT_MODEL` to its model directory/file, and use **Inlay Dev** to dictate with proofreading enabled. Inspect raw and cleaned transcripts, cleanup outcomes, dictionary names, numbers, and negations in history. Edit **Cleanup instructions**, save shared preferences, and record another take to exercise custom prompts. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.

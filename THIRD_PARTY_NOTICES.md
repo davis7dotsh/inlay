@@ -32,7 +32,7 @@ Direct versions are exact pins in `TextEngine/Package.swift`; the complete resol
 | Swift ASN.1 | 1.7.2 | Apache-2.0 | [swift-asn1](https://github.com/apple/swift-asn1/tree/1.7.2) |
 | Swift Syntax | 603.0.2 | Apache-2.0 with Runtime Library Exception | [swift-syntax](https://github.com/swiftlang/swift-syntax/tree/603.0.2) |
 
-The table is the **resolved package graph**, not a claim that every target is linked: Swift Syntax belongs to unused upstream macro products, and Swift ASN.1 belongs to CryptoExtras rather than the selected macOS Crypto product. Swift Crypto's selected macOS path uses CryptoKit; its conditional non-Apple BoringSSL targets are not selected. Upstream Crypto/ASN.1 NOTICE texts accompany their license copies. Hub/EventSource dependencies do not authorize network use: V07's helper loads tokenizers and models from the local verified directory and starts no server.
+The table is the **resolved package graph**, not a claim that every target is linked: Swift Syntax belongs to unused upstream macro products, and Swift ASN.1 belongs to CryptoExtras rather than the selected macOS Crypto product. Swift Crypto's selected macOS path uses CryptoKit; its conditional non-Apple BoringSSL targets are not selected. Upstream Crypto/ASN.1 NOTICE texts accompany their license copies. Hub/EventSource dependencies do not authorize network use: Inlay's helper loads tokenizers and models from the local verified directory and starts no server.
 
 MLX Swift also vendors **MLX and MLX C** (MIT), **metal-cpp** (Apache-2.0), **{fmt} 12.1.0** (MIT with its upstream optional exception), **nlohmann/json 3.11.3** (MIT), and **PocketFFT** (BSD-3-Clause). Their exact license texts and MLX acknowledgments are preserved in `Resources/mlx-vendored-LICENSE.txt`.
 
@@ -41,4 +41,4 @@ MLX Swift also vendors **MLX and MLX C** (MIT), **metal-cpp** (Apache-2.0), **{f
 - **llama.cpp / ggml**, MIT, pinned to b10516 (`b95502ba9aa0eb73a2f4fc8878d7fbe6a847a0b9`). [Source and license](https://github.com/ggml-org/llama.cpp/tree/b95502ba9aa0eb73a2f4fc8878d7fbe6a847a0b9). Linked into the Linux Qwen helper. Its source retains its bundled dependency notices, including nlohmann/json v3.12.0.
 - **Qwen3-4B-Instruct-2507 Q4_K_M**, Apache-2.0. The Linux server uses the pinned [Unsloth GGUF conversion](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/tree/a06e946bb6b655725eafa393f4a9745d460374c9). It is downloaded separately and verified by the server; see [model setup](Server/README.md#models).
 
-V07 is an independent exploratory project. It is not affiliated with Wispr, OpenAI, or the upstream projects.
+Inlay is an independent exploratory project. It is not affiliated with Wispr, OpenAI, or the upstream projects.

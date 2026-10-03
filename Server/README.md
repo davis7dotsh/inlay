@@ -1,4 +1,4 @@
-# V07 server
+# Inlay server
 
 The server is an independent TypeScript/Fastify HTTP process that owns models, shared preferences, recordings, and history. Bun manages its dependencies and compiles standalone executables with the runtime included. Native inference helpers run separately. This guide covers model installation and running the server separately.
 
@@ -14,10 +14,10 @@ Run these commands from the repository root. Weights use about 4 GB of disk; run
 ### Whisper, on either platform
 
 ```sh
-V07_MODEL_DIR="$PWD/.local/models" ./scripts/download-model.sh
+INLAY_MODEL_DIR="$PWD/.local/models" ./scripts/download-model.sh
 ```
 
-This installs and verifies `ggml-large-v3-turbo.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh` and `Sources/V07Core/SpeechModel.swift`. The server build separately downloads the pinned Silero VAD model.
+This installs and verifies `ggml-large-v3-turbo.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh` and `Sources/InlayCore/SpeechModel.swift`. The server build separately downloads the pinned Silero VAD model.
 
 ### Qwen on macOS
 
@@ -26,16 +26,16 @@ The MLX directory must contain exactly the six files listed below. Download the 
 ```sh
 (
   set -e
-  v07_qwen_dir="$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
-  v07_qwen_url="https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b"
-  mkdir -p "$v07_qwen_dir"
+  inlay_qwen_dir="$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
+  inlay_qwen_url="https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b"
+  mkdir -p "$inlay_qwen_dir"
   for file in model.safetensors config.json tokenizer.json tokenizer_config.json generation_config.json chat_template.jinja; do
-    curl --fail --location --retry 3 --output "$v07_qwen_dir/$file" "$v07_qwen_url/$file"
+    curl --fail --location --retry 3 --output "$inlay_qwen_dir/$file" "$inlay_qwen_url/$file"
   done
 )
 ```
 
-`Sources/V07Core/TextModel.swift` defines the six-file size/hash manifest; the MLX helper verifies it before becoming ready. Use regular files, with no extra files or symlinks in the model directory.
+`Sources/InlayCore/TextModel.swift` defines the six-file size/hash manifest; the MLX helper verifies it before becoming ready. Use regular files, with no extra files or symlinks in the model directory.
 
 ### Qwen on Linux
 
@@ -56,7 +56,7 @@ Linux requires Bun, a C/C++ toolchain, CMake, Git, curl, pkg-config, and libcurl
 
 ```sh
 ./scripts/build-server.sh                  # macOS Metal/MLX; Linux CPU
-V07_CUDA=ON ./scripts/build-server.sh     # Linux with CUDA
+INLAY_CUDA=ON ./scripts/build-server.sh     # Linux with CUDA
 ```
 
 Output is `build/server`: executable, native helpers, VAD, notices, and resources. Keep the package together; the Mac proofreader requires the adjacent Metal library and bundles. Large model weights and user data live outside it.
@@ -75,20 +75,20 @@ The release workflow produces complete platform tarballs and SHA-256 checksums. 
 
 The archive lock uses Bun FFI to call libc `flock`, matching the reference Swift server. The lock is held for the server process lifetime. A running Swift server and Bun server must never share a data directory.
 
-`V07_BUILD_JOBS` controls build concurrency. For another CPU/GPU host, use `V07_NATIVE=OFF` and set `V07_CUDA_ARCHITECTURES` for the destination GPU. CPU support is useful for portable builds; validate CUDA support, memory, and dictation latency on the selected host.
+`INLAY_BUILD_JOBS` controls build concurrency. For another CPU/GPU host, use `INLAY_NATIVE=OFF` and set `INLAY_CUDA_ARCHITECTURES` for the destination GPU. CPU support is useful for portable builds; validate CUDA support, memory, and dictation latency on the selected host.
 
 ## Run
 
 From the repository root, with the models installed above:
 
 ```sh
-./build/server/v07-server \
+./build/server/inlay-server \
   --host 127.0.0.1 --port 8391 \
   --data-dir "$PWD/.local/server" \
-  --speech-helper "$PWD/build/server/helpers/v07-engine" \
+  --speech-helper "$PWD/build/server/helpers/inlay-engine" \
   --speech-model "$PWD/.local/models/ggml-large-v3-turbo.bin" \
   --vad-model "$PWD/build/server/resources/silero-vad.bin" \
-  --proof-helper "$PWD/build/server/helpers/v07-text-engine" \
+  --proof-helper "$PWD/build/server/helpers/inlay-text-engine" \
   --proof-model "$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
 ```
 
@@ -96,25 +96,25 @@ On Linux, replace the last path with the GGUF file. Add `--dev` for a developmen
 
 Check `curl http://localhost:8391/v1/health`; HTTP reachability alone does not mean inference is available. The `ready` field means the server can accept a recording, including while other recordings are uploading or processing. Finished uploads queue for serial inference; model runtime fields separately report whether helpers are loaded. Quitting a client does not stop this process. Use launchd, systemd, or container supervision for boot/restart behavior; the scripts do not install a service.
 
-For server-only development alongside an installed V07 instance, use `--port 8392 --data-dir "$PWD/.local/typescript-server" --dev` with your helper/model arguments. Start the executable directly or use `bun run dev:server` with those arguments. The client dev runner starts the app and defaults to port 8391; avoid it when preserving a running installation.
+For server-only development alongside an installed Inlay instance, use `--port 8392 --data-dir "$PWD/.local/typescript-server" --dev` with your helper/model arguments. Start the executable directly or use `bun run dev:server` with those arguments. The client dev runner starts the app and defaults to port 8391; avoid it when preserving a running installation.
 
-| Argument                            | Environment variable                           |
-| ----------------------------------- | ---------------------------------------------- |
-| `--host`, `--port`                  | `V07_SERVER_HOST`, `V07_SERVER_PORT`           |
-| `--data-dir`, `--token-file`        | `V07_SERVER_DATA_DIR`, `V07_SERVER_TOKEN_FILE` |
-| `--speech-helper`, `--speech-model` | `V07_ENGINE_PATH`, `V07_SPEECH_MODEL`          |
-| `--vad-model`                       | `V07_VAD_PATH`                                 |
-| `--proof-helper`, `--proof-model`   | `V07_TEXT_ENGINE_PATH`, `V07_TEXT_MODEL`       |
-| `--dev`                             | `V07_DEV=1`                                    |
+| Argument                            | Environment variable                               |
+| ----------------------------------- | -------------------------------------------------- |
+| `--host`, `--port`                  | `INLAY_SERVER_HOST`, `INLAY_SERVER_PORT`           |
+| `--data-dir`, `--token-file`        | `INLAY_SERVER_DATA_DIR`, `INLAY_SERVER_TOKEN_FILE` |
+| `--speech-helper`, `--speech-model` | `INLAY_ENGINE_PATH`, `INLAY_SPEECH_MODEL`          |
+| `--vad-model`                       | `INLAY_VAD_PATH`                                   |
+| `--proof-helper`, `--proof-model`   | `INLAY_TEXT_ENGINE_PATH`, `INLAY_TEXT_MODEL`       |
+| `--dev`                             | `INLAY_DEV=1`                                      |
 
-The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `V07_SPEECH_MODEL` and `V07_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches the existing locations `~/Library/Application Support/V07/Models/ggml-large-v3-turbo.bin` and `~/.v07/models/Qwen3-4B-Instruct-2507-MLX-4bit`.
+The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches `~/Library/Application Support/Inlay/Models/ggml-large-v3-turbo.bin` and `~/.inlay/models/Qwen3-4B-Instruct-2507-MLX-4bit`. Existing installations can retain their archive, token file, and model locations with the arguments or overrides above; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
 
 ## Remote access
 
 Bind to a reachable address and pass `--token-file /absolute/path/to/token`. Nonloopback listeners require a token of at least 32 characters with no internal whitespace. In the Mac app, enter the endpoint and token under **This Mac**; tokens are stored in Keychain.
 
 - Use an HTTPS reverse proxy for hosted servers and hostnames, including Tailscale MagicDNS names. The runner itself serves HTTP.
-- HTTP is accepted for localhost and literal Tailscale IPs in `100.64.0.0/10` or `fd7a:115c:a1e0::/48` on your connected tailnet. V07 checks the address range, not routing; use HTTPS if that private route cannot be assured.
+- HTTP is accepted for localhost and literal Tailscale IPs in `100.64.0.0/10` or `fd7a:115c:a1e0::/48` on your connected tailnet. Inlay checks the address range, not routing; use HTTPS if that private route cannot be assured.
 - Ordinary LAN IPs require HTTPS. Endpoints cannot contain credentials, queries, or fragments. Credential-bearing redirects are not followed.
 
 Keep the data directory on persistent storage and back it up. Only one runner can own it. See [storage](../docs/architecture.md#storage) and the [HTTP API](../docs/client-server-contract.md).
@@ -124,8 +124,8 @@ Keep the data directory on persistent storage and back it up. Only one runner ca
 Build from the repository root with initialized submodules:
 
 ```sh
-docker build -f Server/Dockerfile --target cpu -t v07-server:cpu .
-docker build -f Server/Dockerfile --target cuda -t v07-server:cuda .
+docker build -f Server/Dockerfile --target cpu -t inlay-server:cpu .
+docker build -f Server/Dockerfile --target cuda -t inlay-server:cuda .
 ```
 
 `CUDA_ARCHITECTURES`, `CUDA_IMAGE`, `BUN_IMAGE`, `UBUNTU_IMAGE`, and `BUILD_JOBS` are build arguments. Choose CUDA architectures/toolkit/driver versions for your GPU. GPU containers require NVIDIA Container Toolkit and `--gpus all`; Linux containers on a Mac do not have Metal access.
@@ -133,15 +133,15 @@ docker build -f Server/Dockerfile --target cuda -t v07-server:cuda .
 Mount a directory containing the Whisper `.bin` and Qwen `.gguf` files, plus a token file:
 
 ```sh
-docker run --rm --name v07-server \
+docker run --rm --name inlay-server \
   -p 127.0.0.1:8391:8391 \
-  --mount type=volume,source=v07-data,target=/data \
+  --mount type=volume,source=inlay-data,target=/data \
   --mount type=bind,source=/absolute/path/to/models,target=/models,readonly \
-  --mount type=bind,source=/absolute/path/to/token,target=/run/secrets/v07-token,readonly \
-  v07-server:cpu
+  --mount type=bind,source=/absolute/path/to/token,target=/run/secrets/inlay-token,readonly \
+  inlay-server:cpu
 ```
 
-For a GPU server, use `v07-server:cuda` and add `--gpus all`. The example exposes only host loopback; use the remote-access setup above for clients on other machines. The container runs as UID 10001, which must be able to read model/token files and write `/data`. The named volume preserves history across container replacement.
+For a GPU server, use `inlay-server:cuda` and add `--gpus all`. The example exposes only host loopback; use the remote-access setup above for clients on other machines. The container runs as UID 10001, which must be able to read model/token files and write `/data`. The named volume preserves history across container replacement.
 
 ## Development and verification
 
@@ -152,7 +152,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-The source server hot reloads, listens on `0.0.0.0:8392`, and keeps data and its automatically created private token under `.local/dev-server`. On Siva, open [server health](http://siva.otter-hawksbill.ts.net:8392/v1/health). Build helpers once with `./scripts/build-server.sh` and set `V07_SPEECH_MODEL` and `V07_TEXT_MODEL` to enable dictation. Missing assets leave the server running with `ready: false`; HTTP reachability does not establish working inference. CLI arguments and the environment variables above override development defaults, except that inherited `V07_SERVER_DATA_DIR` is ignored. Use `--data-dir` to explicitly select another development archive.
+The source server hot reloads, listens on `0.0.0.0:8392`, and keeps data and its automatically created private token under `.local/dev-server`. On the same Mac, open [server health](http://localhost:8392/v1/health). Build helpers once with `./scripts/build-server.sh` and set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` to enable dictation. Missing assets leave the server running with `ready: false`; HTTP reachability does not establish working inference. CLI arguments and the environment variables above override development defaults, except that inherited `INLAY_SERVER_DATA_DIR` is ignored. Use `--data-dir` to explicitly select another development archive.
 
 ```sh
 bun run fmt
@@ -163,4 +163,4 @@ bun run check
 
 `check` runs strict TypeScript checking and verifies generated TypeScript bindings against OpenAPI. `lint` runs type-aware correctness rules with zero warnings, including promise handling and a ban on explicit `any`. `fmt` and `fmt:check` cover first-party TypeScript, JSON, YAML, and Markdown while excluding vendor/build/data directories. On macOS with Swift 6.2+, also run `bun run generate:api --check` and `swift build --force-resolved-versions` when changing Swift or the API.
 
-Automated tests and test harnesses are not allowed. Use the native **V07 Dev** app through computer use to verify changed behavior, including real dictation, progress, preferences, history, and delivery. The API rejects browser-origin requests and has no web UI. Follow [the development guide](../docs/development.md); report missing model/device access as unverified behavior.
+Automated tests and test harnesses are not allowed. Use the native **Inlay Dev** app through computer use to verify changed behavior, including real dictation, progress, preferences, history, and delivery. The API rejects browser-origin requests and has no web UI. Follow [the development guide](../docs/development.md); report missing model/device access as unverified behavior.

@@ -8,7 +8,7 @@ export function acquireDataDirectoryLock(directory: string) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const libraryPath = process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6";
   if (process.platform !== "darwin" && process.platform !== "linux") {
-    throw new Error("The V07 server supports macOS and Linux.");
+    throw new Error("The Inlay server supports macOS and Linux.");
   }
   const library = dlopen(libraryPath, {
     flock: { args: ["i32", "i32"], returns: "i32" },
@@ -25,7 +25,7 @@ export function acquireDataDirectoryLock(directory: string) {
     }
     if (library.symbols.flock(descriptor, 2 | 4) !== 0) {
       throw new Error(
-        "Another V07 server is already using this data directory, or its lock could not be acquired. Stop that runner or choose a different --data-dir.",
+        "Another Inlay server is already using this data directory, or its lock could not be acquired. Stop that runner or choose a different --data-dir.",
       );
     }
   } catch (error) {

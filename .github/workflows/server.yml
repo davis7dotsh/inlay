@@ -70,8 +70,8 @@ jobs:
       - run: bun run --cwd Server build --target=${{ matrix.target }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: v07-server-coordinator-${{ matrix.target }}
-          path: build/server/v07-server
+          name: inlay-server-coordinator-${{ matrix.target }}
+          path: build/server/inlay-server
           if-no-files-found: error
 
   native:
@@ -96,14 +96,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libcurl4-openssl-dev
       - name: Build portable CPU package
         env:
-          V07_NATIVE: "OFF"
-          V07_CUDA: "OFF"
-          V07_BUILD_JOBS: "4"
+          INLAY_NATIVE: "OFF"
+          INLAY_CUDA: "OFF"
+          INLAY_BUILD_JOBS: "4"
         run: ./scripts/build-server.sh
       - name: Archive complete platform package
-        run: tar -czf build/v07-server-${{ matrix.platform }}-cpu.tar.gz -C build server
+        run: tar -czf build/inlay-server-${{ matrix.platform }}-cpu.tar.gz -C build server
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: v07-server-${{ matrix.platform }}-cpu
-          path: build/v07-server-${{ matrix.platform }}-cpu.tar.gz
+          name: inlay-server-${{ matrix.platform }}-cpu
+          path: build/inlay-server-${{ matrix.platform }}-cpu.tar.gz
           if-no-files-found: error

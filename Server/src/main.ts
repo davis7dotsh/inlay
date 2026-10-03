@@ -46,7 +46,7 @@ if (import.meta.main) {
       console.log(defaultProofreadingPrompt);
     else {
       const server = await startServer(await parseConfiguration());
-      console.log(`V07 server listening at ${server.address}`);
+      console.log(`Inlay server listening at ${server.address}`);
       const stop = () => {
         void server.close().then(
           () => process.exit(0),

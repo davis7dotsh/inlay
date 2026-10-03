@@ -1,20 +1,20 @@
 # Architecture
 
-V07's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use the same OpenAPI v1 contract whether they run on one machine or across the network.
+Inlay's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use the same OpenAPI v1 contract whether they run on one machine or across the network.
 
 ## Code map
 
 | Component                 | Responsibility                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------- |
-| `Sources/V07`             | SwiftUI/AppKit app, device settings, HTTP client, capture, and guarded delivery.            |
-| `Sources/V07Core`         | Mac configuration, audio metering, microphone selection, and model manifests.               |
-| `Sources/V07API`          | Shared wire types and limits.                                                               |
-| `Sources/V07APIWire`      | Generated Swift transport types used through the API facade.                                |
+| `Sources/Inlay`           | SwiftUI/AppKit app, device settings, HTTP client, capture, and guarded delivery.            |
+| `Sources/InlayCore`       | Mac configuration, audio metering, microphone selection, and model manifests.               |
+| `Sources/InlayAPI`        | Shared wire types and limits.                                                               |
+| `Sources/InlayAPIWire`    | Generated Swift transport types used through the API facade.                                |
 | `Server/api/openapi.yaml` | Language-neutral HTTP and wire-model contract.                                              |
 | `Server/src`              | Packaged TypeScript HTTP server, durable coordinator, text pipeline, and helper management. |
-| `Sources/V07Domain`       | Dictionary, list formatting, rewrite validation, and composition.                           |
-| `Sources/V07ServerKit`    | Reference Swift server retained for source comparison.                                      |
-| `Sources/V07Server`       | Reference Swift server command-line entry point.                                            |
+| `Sources/InlayDomain`     | Dictionary, list formatting, rewrite validation, and composition.                           |
+| `Sources/InlayServerKit`  | Reference Swift server retained for source comparison.                                      |
+| `Sources/InlayServer`     | Reference Swift server command-line entry point.                                            |
 | `Engine`                  | Persistent whisper.cpp speech helper; Metal on Mac, CPU/CUDA on Linux.                      |
 | `TextEngine`              | Persistent Qwen helper; Swift MLX on Mac, llama.cpp on Linux.                               |
 
@@ -40,7 +40,7 @@ The Mac rechecks destination, selection, protected fields, modifiers, and clipbo
 
 Microphone capture uses input-only Core Audio without changing system routing or playback volume. Route changes apply to the next take. Release, cancellation, sleep/lock, or device loss ends capture.
 
-With **Mute system audio while recording** enabled under **This Mac**, the default output device is muted when a take starts and restored when capture ends. Only mute controls V07 changed are restored, so output that was already muted stays muted. A client crash during a take can leave output muted.
+With **Mute system audio while recording** enabled under **This Mac**, the default output device is muted when a take starts and restored when capture ends. Only mute controls Inlay changed are restored, so output that was already muted stays muted. A client crash during a take can leave output muted.
 
 ## Settings
 
@@ -52,7 +52,7 @@ With **Mute system audio while recording** enabled under **This Mac**, the defau
 
 Shared saves use revisions to reject stale concurrent edits. Settings are snapshotted when the server accepts a take; changes affect future recordings. Update shared settings through the UI/API rather than editing files while the server runs.
 
-The regular app uses `~/Library/Application Support/V07`; Dev uses `~/Library/Application Support/V07 Dev`. `V07_CLIENT_DATA_DIR` overrides either, and the dev runner selects `.local/client`. `config.json` stores shortcut/microphone settings; `client.json` stores endpoint/device identity. Tokens live in separate release/Dev Keychain services, scoped to the endpoint and client directory. `V07_SERVER_URL` overrides the saved endpoint for a run. Valid manual `config.json` edits are reloaded; invalid files leave the last good configuration active.
+The regular app uses `~/Library/Application Support/Inlay`; Dev uses `~/Library/Application Support/Inlay Dev`. `INLAY_CLIENT_DATA_DIR` overrides either, and the dev runner selects `.local/client`. `config.json` stores shortcut/microphone settings; `client.json` stores endpoint/device identity. Tokens live in separate release/Dev Keychain services, `dev.davis.inlay.server` and `dev.davis.inlay.dev.server`, scoped to the endpoint and client directory. `INLAY_SERVER_URL` overrides the saved endpoint for a run. Valid manual `config.json` edits are reloaded; invalid files leave the last good configuration active. See [upgrade guidance](../README.md#upgrade-an-existing-installation) when moving from an earlier app identity.
 
 ## Storage
 
@@ -71,6 +71,6 @@ Metadata includes device identity, settings snapshot, raw/final text, insertion/
 
 All clients read shared, paginated history. Deleting an inactive generation deletes its server artifacts. Failed takes can retain metadata and sealed audio; partial upload files are internal and cannot be downloaded. Client audio copies are temporary.
 
-Only one server may own a data directory. Back up preferences and generation directories together. V07 does not add filesystem encryption; protect this directory as you would the recordings it contains. Authentication and remote transport are described in the [server guide](../Server/README.md#remote-access).
+Only one server may own a data directory. Back up preferences and generation directories together. Inlay does not add filesystem encryption; protect this directory as you would the recordings it contains. Authentication and remote transport are described in the [server guide](../Server/README.md#remote-access).
 
 See the [HTTP contract](client-server-contract.md) for request details and [text correction](text-correction.md) for behavior and limitations.

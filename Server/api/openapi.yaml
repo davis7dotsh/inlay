@@ -1,19 +1,19 @@
 # Generated language bindings use this file as their source of truth.
 openapi: "3.1.0"
 info:
-  title: "V07 API"
+  title: "Inlay API"
   version: "1.0.0"
   description: "Shared transport contract for the Swift client and TypeScript server. Optional properties are omitted rather than encoded as null. Dates use whole-second ISO8601 UTC timestamps."
 servers:
   - url: "http://localhost:8391"
 security:
   - bearerAuth: []
-x-v07-apiVersion: 1
-x-v07-defaultPort: 8391
-x-v07-maximumRecordingSeconds: 180
-x-v07-maximumChunkBytes: 1048576
-x-v07-maximumArtifactBytes: 8388608
-x-v07-maximumDictionaryBytes: 8388608
+x-inlay-apiVersion: 1
+x-inlay-defaultPort: 8391
+x-inlay-maximumRecordingSeconds: 180
+x-inlay-maximumChunkBytes: 1048576
+x-inlay-maximumArtifactBytes: 8388608
+x-inlay-maximumDictionaryBytes: 8388608
 paths:
   "/v1/health":
     get:
@@ -90,7 +90,7 @@ paths:
           schema:
             type: "string"
             enum:
-              - "v07"
+              - "inlay"
               - "wispr-flow"
     post:
       operationId: "createGeneration"

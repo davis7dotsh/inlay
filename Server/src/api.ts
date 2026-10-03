@@ -74,7 +74,7 @@ export const MAXIMUM_RECORDING_SECONDS = 180;
 export const MAXIMUM_CHUNK_BYTES = 1_048_576;
 export const MAXIMUM_ARTIFACT_BYTES = 8_388_608;
 export const MAXIMUM_DICTIONARY_BYTES = 8_388_608;
-export const V07API = {
+export const InlayAPI = {
   version: API_VERSION,
   defaultPort: DEFAULT_PORT,
   maximumRecordingSeconds: MAXIMUM_RECORDING_SECONDS,
