@@ -61,6 +61,7 @@ jobs:
   cuda-package:
     name: Package linux-x64-cuda
     runs-on: ubuntu-24.04
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -70,7 +71,7 @@ jobs:
       - name: Package and checksum
         run: |
           cd build
-          tar -czf inlay-server-linux-x64-cuda.tar.gz server
+          tar --owner=0 --group=0 --numeric-owner -czf inlay-server-linux-x64-cuda.tar.gz server
           shasum -a 256 inlay-server-linux-x64-cuda.tar.gz > inlay-server-linux-x64-cuda.tar.gz.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
