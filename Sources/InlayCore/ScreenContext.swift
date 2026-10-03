@@ -113,11 +113,11 @@ public enum ScreenContext {
             return true
         }
         for match in text.matches(of: domainPattern) {
-            let host = String(match.output.0), label = String(match.output.1), suffix = label.lowercased()
+            let label = String(match.output.1), suffix = label.lowercased()
             // Some extensions are also country domains (team.md, shop.rs); only names that
             // look like files, such as README.md or setup_tools.py, keep the exception.
             if fileExtensions.contains(suffix),
-               !countryDomainExtensions.contains(suffix) || host.contains(where: { $0.isUppercase || $0 == "_" }) {
+               !countryDomainExtensions.contains(suffix) || text.contains(where: { $0.isUppercase || $0 == "_" }) {
                 continue
             }
             // Lowercase final labels cover every unlisted top-level domain (Acme.email);

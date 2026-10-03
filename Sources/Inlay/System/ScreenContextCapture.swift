@@ -73,7 +73,7 @@ final class ScreenContextCapture {
 
     /// The window with keyboard focus, matched by frame; panels and floating editors
     /// can sit above other layers. Otherwise the frontmost normal window of the app.
-    private static func focusedWindowID(of processID: pid_t) -> CGWindowID? {
+    private nonisolated static func focusedWindowID(of processID: pid_t) -> CGWindowID? {
         guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]] else { return nil }
         let owned = windows.filter { ($0[kCGWindowOwnerPID as String] as? pid_t) == processID }
@@ -91,12 +91,15 @@ final class ScreenContextCapture {
     }
 
     /// Accessibility and window-list frames share top-left global coordinates.
-    private static func focusedWindowFrame(of processID: pid_t) -> CGRect? {
+    /// Runs off the main actor with short timeouts, so an unresponsive app cannot stall dictation.
+    private nonisolated static func focusedWindowFrame(of processID: pid_t) -> CGRect? {
         let app = AXUIElementCreateApplication(processID)
+        AXUIElementSetMessagingTimeout(app, 0.25)
         var window: CFTypeRef?, position: CFTypeRef?, size: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success,
               let window, CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
         let element = window as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, 0.25)
         var origin = CGPoint.zero, extent = CGSize.zero
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
               AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
@@ -107,7 +110,7 @@ final class ScreenContextCapture {
     }
 
     private static func windowImage(of processID: pid_t) async -> CGImage? {
-        guard let windowID = focusedWindowID(of: processID),
+        guard let windowID = await Task.detached(priority: .userInitiated, operation: { focusedWindowID(of: processID) }).value,
               let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true),
               let window = content.windows.first(where: { $0.windowID == windowID }) else { return nil }
         let filter = SCContentFilter(desktopIndependentWindow: window)
