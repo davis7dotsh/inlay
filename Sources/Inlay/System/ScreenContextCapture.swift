@@ -74,22 +74,18 @@ final class ScreenContextCapture {
     }
 
     /// The window with keyboard focus, matched by frame; panels and floating editors
-    /// can sit above other layers. Otherwise the frontmost normal window of the app.
+    /// can sit above other layers. A take with no matched focus gets no screen hints.
     private nonisolated static func focusedWindowID(of processID: pid_t) -> CGWindowID? {
-        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+        guard let frame = focusedWindowFrame(of: processID),
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]] else { return nil }
-        let owned = windows.filter { ($0[kCGWindowOwnerPID as String] as? pid_t) == processID }
-        if let frame = focusedWindowFrame(of: processID),
-           let match = owned.first(where: { info in
-               (info[kCGWindowBounds as String] as? NSDictionary)
-                   .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
-                   .map { abs($0.minX - frame.minX) < 2 && abs($0.minY - frame.minY) < 2
-                       && abs($0.width - frame.width) < 2 && abs($0.height - frame.height) < 2 } ?? false
-           }) {
-            return match[kCGWindowNumber as String] as? CGWindowID
-        }
-        // The window list is ordered front to back.
-        return owned.first { ($0[kCGWindowLayer as String] as? Int) == 0 }?[kCGWindowNumber as String] as? CGWindowID
+        return windows.first(where: { info in
+            (info[kCGWindowOwnerPID as String] as? pid_t) == processID
+                && ((info[kCGWindowBounds as String] as? NSDictionary)
+                    .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
+                    .map { abs($0.minX - frame.minX) < 2 && abs($0.minY - frame.minY) < 2
+                        && abs($0.width - frame.width) < 2 && abs($0.height - frame.height) < 2 } ?? false)
+        })?[kCGWindowNumber as String] as? CGWindowID
     }
 
     /// Accessibility and window-list frames share top-left global coordinates.
