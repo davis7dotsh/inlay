@@ -97,7 +97,7 @@ public enum ScreenContext {
     ]
     private static let fileExtensions: Set<String> = [
         "c", "cc", "cpp", "cs", "css", "csv", "go", "h", "hpp", "html", "java", "js", "json", "jsx", "kt", "lock", "log",
-        "m", "md", "mjs", "pdf", "plist", "png", "py", "rb", "rs", "sh", "sql", "swift", "toml", "ts", "tsx", "txt",
+        "m", "md", "mjs", "pdf", "plist", "png", "py", "rb", "rs", "sql", "swift", "toml", "ts", "tsx", "txt",
         "xml", "yaml", "yml",
     ]
 
@@ -105,13 +105,16 @@ public enum ScreenContext {
     /// dotted name counts as a domain unless it ends in a source-file extension, so
     /// identifiers such as whisper.cpp, README.md, or Stripe.Event survive.
     private static func isWebAddress(_ chunk: Substring) -> Bool {
-        let host = chunk.trimmingCharacters(in: .punctuationCharacters.union(.symbols))
-            .split(whereSeparator: { ":?#".contains($0) }).first.map(String.init) ?? ""
-        if host.lowercased().hasPrefix("www.") { return true }
+        let parts = chunk.trimmingCharacters(in: .punctuationCharacters.union(.symbols))
+            .split(maxSplits: 1, whereSeparator: { ":?#".contains($0) })
+        let host = parts.first.map(String.init) ?? "", lower = host.lowercased()
+        if lower.hasPrefix("www.") || lower.contains(".xn--") { return true }
         guard let match = host.wholeMatch(of: domainPattern) else { return false }
+        // An explicit port, query, or fragment makes any dotted host an address.
+        if parts.count > 1 { return true }
         let suffix = String(match.output.1).lowercased()
         if commonTopLevelDomains.contains(suffix) && !fileExtensions.contains(suffix) { return true }
-        return host == host.lowercased() && !fileExtensions.contains(suffix)
+        return host == lower && !fileExtensions.contains(suffix)
     }
 
     private static func normalized(_ token: String) -> String? {
