@@ -153,21 +153,11 @@ export class NativeInference implements InferenceBackend {
   private readonly proofPin?: ModelPin;
   private readonly proofManifestSHA256?: string;
 
-  constructor(
-    configuration: ConfigurationInput,
-    fixturePins?: { speech?: ModelPin; proof?: ModelPin },
-  ) {
+  constructor(configuration: ConfigurationInput) {
     this.configuration = createInferenceConfiguration(configuration);
-    // Constructor-only fixture injection is never exposed by server configuration
-    // or the CLI. Production always enforces the immutable native-model pins.
-    this.speechPin = fixturePins ? fixturePins.speech : speechModelPin;
-    this.proofPin = fixturePins
-      ? fixturePins.proof
-      : process.platform === "darwin"
-        ? undefined
-        : linuxProofModelPin;
-    this.proofManifestSHA256 =
-      !fixturePins && process.platform === "darwin" ? macProofManifestSHA256 : undefined;
+    this.speechPin = speechModelPin;
+    this.proofPin = process.platform === "darwin" ? undefined : linuxProofModelPin;
+    this.proofManifestSHA256 = process.platform === "darwin" ? macProofManifestSHA256 : undefined;
     const config = this.configuration;
     this.speech = new HelperProcess({
       name: "Whisper",
@@ -312,14 +302,14 @@ export class NativeInference implements InferenceBackend {
       !response.language.length ||
       bytes(response.language) > 32
     ) {
-      this.speech.shutdown();
+      await this.speech.shutdown();
       throw new InferenceError("invalidResponse", "Whisper returned an invalid transcript.");
     }
     let hints: ModelHintUsage | undefined;
     try {
       hints = vocabularyDiagnostics(response, vocabularyTerms);
     } catch (error) {
-      this.speech.shutdown();
+      await this.speech.shutdown();
       throw error;
     }
     const state = this.speech.snapshot();
@@ -379,7 +369,7 @@ export class NativeInference implements InferenceBackend {
       !Number.isFinite(response.elapsed) ||
       response.elapsed < 0
     ) {
-      this.proof.shutdown();
+      await this.proof.shutdown();
       throw new InferenceError("invalidResponse", "Qwen returned an invalid correction.");
     }
     const state = this.proof.snapshot();

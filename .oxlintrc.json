@@ -1,0 +1,35 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error"
+  },
+  "ignorePatterns": ["Server/src/generated/**"],
+  "rules": {
+    "no-debugger": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "bun:test",
+            "message": "Automated tests are not allowed. Verify behavior with computer use."
+          },
+          {
+            "name": "node:test",
+            "message": "Automated tests are not allowed. Verify behavior with computer use."
+          }
+        ]
+      }
+    ],
+    "typescript/no-misused-spread": [
+      "error",
+      {
+        "allow": ["string"]
+      }
+    ]
+  }
+}

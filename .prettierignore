@@ -1,0 +1,14 @@
+vendor/
+node_modules/
+.build/
+build/
+.local/
+bun.lock
+Package.resolved
+**/Package.resolved
+Server/api/swift-generator.Package.resolved
+Sources/
+Resources/
+TextEngine/Sources/
+THIRD_PARTY_NOTICES.md
+LICENSE

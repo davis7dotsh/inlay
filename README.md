@@ -1,39 +1,39 @@
-# Sotto
+# Inlay
 
-Hold a key, speak, and release to insert your dictation. Sotto is a native Swift macOS app backed by a Bun-compiled TypeScript/Fastify model server running on the same Mac, another Mac, or Linux. Audio uploads while you speak; the server returns progress and one finished transcript.
+Hold a key, speak, and release to insert your dictation. Inlay is a native Swift macOS app backed by a Bun-compiled TypeScript/Fastify model server running on the same Mac, another Mac, or Linux. Audio uploads while you speak; the server returns progress and one finished transcript. You can start another take immediately: finished recordings queue on the server, and each result returns to its originating client for delivery.
 
-The dev runner builds **Sotto Dev**, with separate settings and visible Dev labels. For the regular app, run `./scripts/build-app.sh` and install `build/Sotto.app` in Applications. Both connect to an independently running server.
+The dev runner builds **Inlay Dev**, with separate settings and visible Dev labels. For the regular app, run `./scripts/build-app.sh` and install `build/Inlay.app` in Applications. Both connect to an independently running server.
 
 ## Get started on one Mac
 
-You need Apple Silicon, macOS 14+, full Xcode 26+ with the Metal compiler, Bun 1.4.2, CMake, and Git. Xcode provides Swift; the client/MLX build requires Swift 6.2+. Python 3 is only needed for the test scripts. Bun manages JavaScript dependencies and builds standalone server executables.
+You need Apple Silicon, macOS 14+, full Xcode 26+ with the Metal compiler, Bun 1.4.2, CMake, and Git. Xcode provides Swift; the client/MLX build requires Swift 6.2+. Bun manages JavaScript dependencies and builds standalone server executables.
 
 ```sh
-git clone --recurse-submodules https://github.com/davis7dotsh/sotto.git
-cd sotto
+git clone --recurse-submodules https://github.com/davis7dotsh/inlay.git
+cd inlay
 ```
 
 [Download the pinned Whisper and Qwen models](Server/README.md#models) into `.local/models`, then build and start:
 
 ```sh
-export SOTTO_SPEECH_MODEL="$PWD/.local/models/ggml-large-v3-turbo.bin"
-export SOTTO_TEXT_MODEL="$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
+export INLAY_SPEECH_MODEL="$PWD/.local/models/ggml-large-v3-turbo.bin"
+export INLAY_TEXT_MODEL="$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
 ./scripts/run-dev.sh
 ```
 
-Use your own model paths if they are already installed. The script builds the server and client, starts **http://localhost:8391**, and opens `build/Sotto Dev.app`. The first build fetches dependencies and the small Silero speech detector.
+Use your own model paths if they are already installed. The script builds the server and client, starts **http://localhost:8391**, and opens `build/Inlay Dev.app`. The first build fetches dependencies and the small Silero speech detector.
 
-1. Grant **Sotto Dev** Microphone and Accessibility permissions.
+1. Grant **Inlay Dev** Microphone and Accessibility permissions.
 2. Wait for the server to be ready. Focus a text field, hold **Right Option**, speak, and release.
 3. Change the shortcut under **This Mac**, choose inputs under **Microphone**, and edit shared cleanup instructions or dictionary entries under **Server preferences**.
 
-**Test microphone** shows a result in Sotto without inserting it. Fn/Globe is also supported; set macOS **Keyboard → Press Globe key to → Do Nothing** if its system action conflicts.
+**Test microphone** shows a result in Inlay without inserting it. Fn/Globe is also supported; set macOS **Keyboard → Press Globe key to → Do Nothing** if its system action conflicts.
 
 ## DJI mic button
 
-Connect a DJI Mic Mini, Mini 2, or Mini 2S receiver over USB-C. The **This Mac → DJI mic button** settings appear after Sotto first detects a DJI microphone and stay visible afterward, including across app restarts. Enable **Use DJI mic button** and allow Input Monitoring when requested. Press the transmitter's linking button once to start dictation, then again to stop and insert. Escape cancels. Sotto uses the input selected under **Microphone**; choose the DJI receiver there to record from it.
+Connect a DJI Mic Mini, Mini 2, or Mini 2S receiver over USB-C. The **This Mac → DJI mic button** settings appear after Inlay first detects a DJI microphone and stay visible afterward, including across app restarts. Enable **Use DJI mic button** and allow Input Monitoring when requested. Press the transmitter's linking button once to start dictation, then again to stop and insert. Escape cancels. Inlay uses the input selected under **Microphone**; choose the DJI receiver there to record from it.
 
-The button uses the receiver's USB consumer-control interface (`2CA3:4011`), as documented by [dji-mic-wispr-flow](https://github.com/caezium/dji-mic-wispr-flow). Bluetooth-only connections do not send these events. Sotto handles the receiver directly without Karabiner; disable other DJI button mappings first. While enabled, Sotto captures the receiver's consumer controls so its button does not change system volume. Keyboard volume keys remain available. Disabling the feature or quitting releases the receiver.
+The button uses the receiver's USB consumer-control interface (`2CA3:4011`), as documented by [dji-mic-wispr-flow](https://github.com/caezium/dji-mic-wispr-flow). Bluetooth-only connections do not send these events. Inlay handles the receiver directly without Karabiner; disable other DJI button mappings first. While enabled, Inlay captures the receiver's consumer controls so its button does not change system volume. Keyboard volume keys remain available. Disabling the feature or quitting releases the receiver.
 
 Repeated button events are ignored. Presses during transcription, keyboard dictation, or a microphone test do not start another take. Unplugging the receiver cancels its active recording; sleep and locking the Mac interrupt recording too. **Check receiver** retries capture after changing permissions or disabling another mapping tool.
 
@@ -43,28 +43,54 @@ Follow the [server guide](Server/README.md) for macOS, Linux, or containers. On 
 
 ```sh
 ./scripts/build-app.sh
-open "build/Sotto.app"
+open "build/Inlay.app"
 ```
 
 Set its URL and token under **This Mac**. Use HTTPS for remote hosts, or HTTP with the server's literal Tailscale IP on your connected tailnet. The client needs no model weights or GPU for inference.
 
+## Upgrade an existing installation
+
+- Rebuild the client, server, and native helpers. Update service definitions and launch scripts for `Inlay.app`, `inlay-server`, `inlay-engine`, and `inlay-text-engine`; replace the former environment-variable prefix with `INLAY_`.
+- Update the client and server together. Inlay reports API version 2 because the native-history filter is now `source=inlay`; clients reject a server with a different API version.
+- The regular app now uses `~/Library/Application Support/Inlay`; Dev uses `~/Library/Application Support/Inlay Dev`. With both clients quit, copy your existing `config.json` and `client.json` into the corresponding new directory to retain device settings and identity. A custom `INLAY_CLIENT_DATA_DIR` can continue using the existing client directory. The packaged dev runner's `.local/client` directory is unchanged.
+- Re-enter the server token under **This Mac**. Release and Dev credentials use separate Keychain services, `dev.davis.inlay.server` and `dev.davis.inlay.dev.server`, scoped to the client directory and endpoint. Grant **Inlay** or **Inlay Dev** Microphone and Accessibility permissions for the new app identity, and enable launch at login again if desired.
+- Retain the existing server archive with `--data-dir` or `INLAY_SERVER_DATA_DIR`, and keep the same token file. Back up the archive before switching servers and stop the previous server before opening that archive with the new executable. History and shared preferences retain their existing format; the default workspace archives are unchanged. Container upgrades must mount the existing data volume rather than create an empty one under the new example name.
+- Keep installed model files in place and set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` to their existing paths. The Mac runner's default model locations now use the Inlay name; explicit overrides preserve models installed under older directories.
+
 ## Daily development
+
+For server edits on macOS or Linux, install dependencies once and run the source with hot reload:
+
+```sh
+bun install --frozen-lockfile
+bun run dev
+```
+
+This listens on `0.0.0.0:8392`, uses `.local/dev-server/data`, and creates a private token file at `.local/dev-server/token`. Set the model-path exports above and build the native helpers once with `./scripts/build-server.sh` for dictation. Without helpers/models, the server still starts and health reports unavailable inference. On the same Mac, open [server health](http://localhost:8392/v1/health).
+
+```sh
+bun run fmt
+bun run fmt:check
+bun run lint
+bun run check
+```
+
+Automated tests are not allowed. Verify behavior by using **Inlay Dev** through computer use; this is a native Mac app, so the browser health endpoint alone cannot verify dictation or insertion. See [the development guide](docs/development.md) for setup and verification.
+
+For the packaged Mac app and server:
 
 ```sh
 ./scripts/run-dev.sh start --skip-build   # Start existing builds
 ./scripts/run-dev.sh status
 ./scripts/run-dev.sh stop
 ./scripts/run-dev.sh restart             # Rebuild and restart the server
-swift test
-./scripts/smoke-test.sh                  # Real HTTP/audio test; server must be idle
-./scripts/test-corrections.sh            # Real Qwen helper checks
 ```
 
-Keep the model-path exports set when starting the server or running helper checks. After rebuilding an already-open client, quit and reopen it to load the new executable. Signing uses an available Apple Development identity or ad-hoc signing; ad-hoc rebuilds may require granting permissions again.
+Keep the model-path exports set when starting the server. After rebuilding an already-open client, quit and reopen it to load the new executable. Signing uses an available Apple Development identity or ad-hoc signing; ad-hoc rebuilds may require granting permissions again.
 
 The dev runner stores shared history/settings in `.local/server`, device preferences in `.local/client`, and logs in `.local/server.log`. Keep experiment notes and generated artifacts under the ignored `.local/` directory too. Quitting the app leaves the server running. Recordings require an online, available server and have a three-minute limit.
 
-For newly launched Electron apps, Sotto requests accessibility support when a take begins and checks for an editable field for up to three seconds while recording starts independently. The field must become verifiable before you release the key; a short first take or slow renderer can still use the clipboard fallback. Unsupported native apps do not wait for this preparation. Enabling an Electron accessibility tree can increase that app's memory and CPU use for its lifetime; Sotto leaves it enabled so other assistive tools can continue using it. This activation mechanism is specific to Electron; Chrome fields use their existing accessibility support.
+For newly launched Electron apps, Inlay requests accessibility support when a take begins and checks for an editable field for up to three seconds while recording starts independently. The field must become verifiable before you release the key; a short first take or slow renderer can still use the clipboard fallback. Unsupported native apps do not wait for this preparation. Enabling an Electron accessibility tree can increase that app's memory and CPU use for its lifetime; Inlay leaves it enabled so other assistive tools can continue using it. This activation mechanism is specific to Electron; Chrome fields use their existing accessibility support.
 
 All connected Macs share history, tagged by device. Both original and inference audio are kept by default; **Keep original microphone audio** changes original retention for future takes. Back up the server data directory to preserve history.
 
