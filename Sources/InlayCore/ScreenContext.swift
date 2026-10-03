@@ -101,24 +101,23 @@ public enum ScreenContext {
         "xml", "yaml", "yml",
     ]
 
-    /// Domains are dropped whether written with a port, query, or fragment. A lowercase
-    /// dotted name counts as a domain unless it ends in a source-file extension, so
-    /// identifiers such as whisper.cpp, README.md, or Stripe.Event survive.
+    /// A chunk with query or assignment syntax is dropped whole, and so is one holding
+    /// any domain: a dotted name ending in a common top-level domain, a lowercase dotted
+    /// name, or one followed by a port. Source-file names such as whisper.cpp,
+    /// README.md, or main.swift:12:5 and identifiers such as Stripe.Event survive.
     private static func isWebAddress(_ chunk: Substring) -> Bool {
-        let trimmed = chunk.trimmingCharacters(in: .punctuationCharacters.union(.symbols))
-        let parts = trimmed.split(maxSplits: 1, whereSeparator: { ":?#".contains($0) })
-        let host = parts.first.map(String.init) ?? "", lower = host.lowercased()
-        if lower.hasPrefix("www.") || lower.contains(".xn--") { return true }
-        guard let match = host.wholeMatch(of: domainPattern) else { return false }
-        let suffix = String(match.output.1).lowercased()
-        // A query or fragment makes any dotted host an address; so does a port unless
-        // the host is a source file, as in compiler locations like main.swift:12:5.
-        if parts.count > 1 {
-            let rest = trimmed.dropFirst(host.count)
-            if rest.contains(where: { "?#=".contains($0) }) || !fileExtensions.contains(suffix) { return true }
+        let text = String(chunk), lower = text.lowercased()
+        let core = text.trimmingCharacters(in: .punctuationCharacters.union(.symbols))
+        if core.contains(where: { "?#=&".contains($0) }) || lower.contains("www.") || lower.contains("xn--") {
+            return true
         }
-        if commonTopLevelDomains.contains(suffix) && !fileExtensions.contains(suffix) { return true }
-        return host == lower && !fileExtensions.contains(suffix)
+        for match in text.matches(of: domainPattern) {
+            let host = String(match.output.0), suffix = String(match.output.1).lowercased()
+            if fileExtensions.contains(suffix) { continue }
+            if commonTopLevelDomains.contains(suffix) || host == host.lowercased()
+                || text[match.range.upperBound...].first == ":" { return true }
+        }
+        return false
     }
 
     private static func normalized(_ token: String) -> String? {
