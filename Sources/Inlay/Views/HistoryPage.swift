@@ -223,14 +223,6 @@ struct HistoryPage: View {
                 .frame(maxHeight: .infinity)
                 Divider()
                 HStack {
-                    if selected.canTranscribeAgain {
-                        Button("Transcribe again") {
-                            controller.errorMessage = nil
-                            controller.retryGeneration(selected.id)
-                        }
-                        .disabled(controller.serverHealth == nil)
-                        .help("Transcribe the saved audio again. Nothing is pasted.")
-                    }
                     if selected.inferenceAudio != nil {
                         Button("Open audio") {
                             controller.errorMessage = nil
@@ -258,6 +250,15 @@ struct HistoryPage: View {
                                 }
                             }
                         }
+                    }
+                    // Last, so the other buttons stay put when it appears or disappears.
+                    if selected.canTranscribeAgain {
+                        Button("Transcribe again") {
+                            controller.errorMessage = nil
+                            controller.retryGeneration(selected.id)
+                        }
+                        .disabled(controller.retryingGenerationIDs.contains(selected.id))
+                        .help("Transcribe the saved audio again. Nothing is pasted.")
                     }
                     Spacer()
                 }

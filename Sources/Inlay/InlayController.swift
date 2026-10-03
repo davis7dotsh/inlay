@@ -129,6 +129,8 @@ final class InlayController: ObservableObject {
     @Published private(set) var hasMoreHistory = false
     @Published private(set) var historySourceFilter = "all"
     @Published private(set) var wisprFlowImportState: WisprFlowImportState = .idle
+    /// History records whose retry request has not returned yet.
+    @Published private(set) var retryingGenerationIDs: Set<UUID> = []
     /// Set while a cancelled take can still be pasted; the HUD counts down to it.
     @Published private(set) var undoDeadline: Date?
     private var historyCursor: String?
@@ -687,17 +689,23 @@ final class InlayController: ObservableObject {
     /// Re-runs transcription on a failed or cancelled recording's saved audio.
     /// The result lands in history only; nothing is pasted.
     func retryGeneration(_ id: UUID) {
+        guard retryingGenerationIDs.insert(id).inserted else { return }
         Task { [weak self] in
             guard let self else { return }
             do {
                 let connection = try client()
-                replaceGeneration(try await connection.retry(id))
+                let queued = try await connection.retry(id)
+                retryingGenerationIDs.remove(id)
+                replaceGeneration(queued)
                 let final = try await connection.events(id) { [weak self] record in
                     await self?.replaceGeneration(record)
                 }
                 replaceGeneration(final)
                 if final.status != .completed { errorMessage = final.error ?? "Transcription failed again." }
-            } catch { errorMessage = error.localizedDescription }
+            } catch {
+                retryingGenerationIDs.remove(id)
+                errorMessage = error.localizedDescription
+            }
             refreshServer()
         }
     }
