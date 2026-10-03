@@ -45,7 +45,7 @@ ENV INLAY_SERVER_HOST=0.0.0.0 INLAY_SERVER_PORT=8391 INLAY_SERVER_DATA_DIR=/data
 ENV INLAY_ENGINE_PATH=/opt/inlay/helpers/inlay-engine
 ENV INLAY_TEXT_ENGINE_PATH=/opt/inlay/helpers/inlay-text-engine
 ENV INLAY_VAD_PATH=/opt/inlay/resources/silero-vad.bin
-ENV INLAY_SPEECH_MODEL=/models/ggml-large-v3-turbo.bin
+ENV INLAY_SPEECH_MODEL=/models/ggml-parakeet-tdt-0.6b-v3-f16.bin
 ENV INLAY_TEXT_MODEL=/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 ENV INLAY_SERVER_TOKEN_FILE=/run/secrets/inlay-token
 USER inlay

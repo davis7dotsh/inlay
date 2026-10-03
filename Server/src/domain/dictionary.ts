@@ -179,19 +179,6 @@ export function dictionaryVocabularyTerms(dictionary: PersonalDictionary) {
 
 export const vocabularyTerms = dictionaryVocabularyTerms;
 
-export function recognitionVocabularyTerms(dictionary: PersonalDictionary, freeform: string) {
-  const extras = freeform
-    .split(/[,\n\r\u0085\u2028\u2029]/u)
-    .map((part) =>
-      part
-        .split(/[\p{White_Space}]+/u)
-        .filter(Boolean)
-        .join(" "),
-    )
-    .filter(Boolean);
-  return uniqueTerms([...dictionaryVocabularyTerms(dictionary), ...extras]);
-}
-
 const escapePattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Match original graphemes once. Folded text retains an offset map, so canonical

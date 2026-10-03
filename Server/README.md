@@ -2,22 +2,24 @@
 
 The server is an independent TypeScript/Fastify HTTP process that owns models, shared preferences, recordings, and history. Bun manages its dependencies and compiles standalone executables with the runtime included. Native inference helpers run separately. This guide covers model installation and running the server separately.
 
-| Server                | Speech                                             | Proofreading                                |
-| --------------------- | -------------------------------------------------- | ------------------------------------------- |
-| Apple Silicon macOS   | Whisper large-v3-turbo / whisper.cpp / Metal       | Qwen3-4B-Instruct-2507 / Swift MLX / 4-bit  |
-| Linux x86_64 or ARM64 | Whisper large-v3-turbo / whisper.cpp / CPU or CUDA | Qwen3-4B-Instruct-2507 / llama.cpp / Q4_K_M |
+| Server                | Speech                                           | Proofreading                                |
+| --------------------- | ------------------------------------------------ | ------------------------------------------- |
+| Apple Silicon macOS   | Parakeet TDT 0.6B v3 / whisper.cpp / Metal       | Qwen3-4B-Instruct-2507 / Swift MLX / 4-bit  |
+| Linux x86_64 or ARM64 | Parakeet TDT 0.6B v3 / whisper.cpp / CPU or CUDA | Qwen3-4B-Instruct-2507 / llama.cpp / Q4_K_M |
 
 ## Models
 
 Run these commands from the repository root. Weights use about 4 GB of disk; runtime memory also includes model state and inference buffers. The server verifies pinned files before loading and keeps models warm. It does not download large weights automatically.
 
-### Whisper, on either platform
+### Parakeet, on either platform
 
 ```sh
 INLAY_MODEL_DIR="$PWD/.local/models" ./scripts/download-model.sh
 ```
 
-This installs and verifies `ggml-large-v3-turbo.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh` and `Sources/InlayCore/SpeechModel.swift`. The server build separately downloads the pinned Silero VAD model.
+This installs and verifies `ggml-parakeet-tdt-0.6b-v3-f16.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh` and `Sources/InlayCore/SpeechModel.swift`. The server build separately downloads the pinned Silero VAD model. Existing Whisper weights cannot be reused; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
+
+Parakeet automatically recognizes 25 European languages. The language preference guides proofreading and does not force recognition. The preference values are unchanged; choose Automatic for languages without a named proofreading option. The helper exposes no detected language ID. Parakeet takes no recognition vocabulary; dictionary replacements and Qwen hints still apply. Older language preferences remain accepted for proofreading and never block automatic recognition; they do not expand Parakeet’s supported speech languages.
 
 ### Qwen on macOS
 
@@ -86,7 +88,7 @@ From the repository root, with the models installed above:
   --host 127.0.0.1 --port 8391 \
   --data-dir "$PWD/.local/server" \
   --speech-helper "$PWD/build/server/helpers/inlay-engine" \
-  --speech-model "$PWD/.local/models/ggml-large-v3-turbo.bin" \
+  --speech-model "$PWD/.local/models/ggml-parakeet-tdt-0.6b-v3-f16.bin" \
   --vad-model "$PWD/build/server/resources/silero-vad.bin" \
   --proof-helper "$PWD/build/server/helpers/inlay-text-engine" \
   --proof-model "$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
@@ -107,7 +109,7 @@ For server-only development alongside an installed Inlay instance, use `--port 8
 | `--proof-helper`, `--proof-model`   | `INLAY_TEXT_ENGINE_PATH`, `INLAY_TEXT_MODEL`       |
 | `--dev`                             | `INLAY_DEV=1`                                      |
 
-The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches `~/Library/Application Support/Inlay/Models/ggml-large-v3-turbo.bin` and `~/.inlay/models/Qwen3-4B-Instruct-2507-MLX-4bit`. Existing installations can retain their archive, token file, and model locations with the arguments or overrides above; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
+The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches `~/Library/Application Support/Inlay/Models/ggml-parakeet-tdt-0.6b-v3-f16.bin` and `~/.inlay/models/Qwen3-4B-Instruct-2507-MLX-4bit`. Existing installations can retain their archive, token file, and Qwen model location with the arguments or overrides above, but must install the Parakeet weights; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
 
 ## Remote access
 
@@ -130,7 +132,7 @@ docker build -f Server/Dockerfile --target cuda -t inlay-server:cuda .
 
 `CUDA_ARCHITECTURES`, `CUDA_IMAGE`, `BUN_IMAGE`, `UBUNTU_IMAGE`, and `BUILD_JOBS` are build arguments. Choose CUDA architectures/toolkit/driver versions for your GPU. GPU containers require NVIDIA Container Toolkit and `--gpus all`; Linux containers on a Mac do not have Metal access.
 
-Mount a directory containing the Whisper `.bin` and Qwen `.gguf` files, plus a token file:
+Mount a directory containing the Parakeet `.bin` and Qwen `.gguf` files, plus a token file:
 
 ```sh
 docker run --rm --name inlay-server \

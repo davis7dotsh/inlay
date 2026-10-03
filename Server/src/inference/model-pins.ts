@@ -1,7 +1,7 @@
-/** Immutable identities shared with SpeechModel.turbo / TextModel.qwen in Swift. */
+/** Immutable identities shared with SpeechModel.parakeet / TextModel.qwen in Swift. */
 export const speechModelPin = {
-  bytes: 1_624_555_275,
-  sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+  bytes: 1_255_897_319,
+  sha256: "833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f",
 };
 
 export const linuxProofModelPin = {

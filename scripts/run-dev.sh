@@ -133,11 +133,11 @@ proof_model="${INLAY_TEXT_MODEL:-}"
 if [[ "$(uname -s)" == Darwin ]]; then
     # Reuse model weights only. User recordings, preferences, and credentials
     # are never imported from the installed app.
-    speech_model="${speech_model:-$HOME/Library/Application Support/Inlay/Models/ggml-large-v3-turbo.bin}"
+    speech_model="${speech_model:-$HOME/Library/Application Support/Inlay/Models/ggml-parakeet-tdt-0.6b-v3-f16.bin}"
     proof_model="${proof_model:-$HOME/.inlay/models/Qwen3-4B-Instruct-2507-MLX-4bit}"
 fi
 if [[ ! -f "$speech_model" || ! -e "$proof_model" ]]; then
-    printf 'Set INLAY_SPEECH_MODEL and INLAY_TEXT_MODEL to installed Whisper and Qwen weights.\n' >&2
+    printf 'Set INLAY_SPEECH_MODEL and INLAY_TEXT_MODEL to installed Parakeet and Qwen weights.\n' >&2
     exit 1
 fi
 server_args=(--host 127.0.0.1 --port "$server_port" --dev

@@ -211,7 +211,8 @@ struct HistoryPage: View {
                                 }
                             }
                         }
-                        if let hints = selected.recognitionHints, !hints.omittedTerms.isEmpty {
+                        // Parakeet takes no vocabulary prompt; its takes report a zero budget.
+                        if let hints = selected.recognitionHints, hints.tokenBudget != 0, !hints.omittedTerms.isEmpty {
                             hintDetails("Voice vocabulary", hints: hints)
                         }
                         if let hints = selected.proofreadingHints, !hints.omittedTerms.isEmpty {

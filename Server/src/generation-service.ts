@@ -41,7 +41,6 @@ import {
   defaultDictionary,
   dictionaryValidationError,
   dictionaryVocabularyTerms,
-  recognitionVocabularyTerms,
 } from "./domain/dictionary.ts";
 import { cleanTranscript } from "./domain/cleaner.ts";
 import { composeDictation } from "./domain/composition.ts";
@@ -170,7 +169,8 @@ export class GenerationService {
   private warmController?: AbortController;
   private warmTask?: Promise<void>;
   private warming = false;
-  private speechLoadFailed = false;
+  /** Why the last warmup could not load speech; undefined once it loads. */
+  private speechLoadError?: string;
   private stopping = false;
   private timer?: ReturnType<typeof setInterval>;
   private queue: Promise<unknown> = Promise.resolve();
@@ -344,7 +344,8 @@ export class GenerationService {
       writable = false;
     }
     return this.mutate(() => {
-      const ready = state.available && writable && !this.stopping && !this.speechUnloadable(state);
+      const failure = this.speechLoadFailure(state);
+      const ready = state.available && writable && !this.stopping && !failure;
       const message = !writable
         ? "Server storage is unavailable or full."
         : this.stopping
@@ -353,11 +354,8 @@ export class GenerationService {
             ? state.speechLoaded
               ? "Server ready."
               : "Loading server models; recordings will queue."
-            : this.speechUnloadable(state)
-              ? "Speech model failed to load."
-              : this.warming
-                ? "Loading server models…"
-                : "Server models are unavailable.";
+            : (failure ??
+              (this.warming ? "Loading server models…" : "Server models are unavailable."));
       if (!state.speechLoaded) this.beginWarmup();
       return {
         apiVersion: API_VERSION,
@@ -365,7 +363,7 @@ export class GenerationService {
         isDev: this.configuration.development,
         ready,
         speech: {
-          modelID: "whisper-large-v3-turbo",
+          modelID: "parakeet-tdt-0.6b-v3",
           backend: this.speechBackend,
           ready: state.speechLoaded,
         },
@@ -433,13 +431,10 @@ export class GenerationService {
           record.device.id === request.device.id,
       );
       if (existing) return copy(existing);
-      if (!state.available || this.speechUnloadable(state)) {
+      const failure = this.speechLoadFailure(state);
+      if (!state.available || failure) {
         this.beginWarmup();
-        throw new ServiceError(
-          503,
-          "server_unavailable",
-          state.available ? "Speech model failed to load." : state.message,
-        );
+        throw new ServiceError(503, "server_unavailable", failure ?? state.message);
       }
       // Starting a take loads any cold model now, not when the recording is sealed.
       if (
@@ -1052,7 +1047,8 @@ export class GenerationService {
       const speech = await this.inference.transcribe(
         join(this.directory(id), "inference.wav"),
         settings.language,
-        recognitionVocabularyTerms(settings.dictionary, settings.vocabulary),
+        // Parakeet has no vocabulary prompt; dictionary rules apply after recognition.
+        [],
         (value) => {
           void this.mutate(() => this.progress(id, value));
         },
@@ -1060,10 +1056,10 @@ export class GenerationService {
       );
       signal.throwIfAborted();
       record.rawText = speech.text;
-      record.detectedLanguage = speech.language;
+      record.detectedLanguage = speech.language === "auto" ? undefined : speech.language;
       record.recognitionHints = speech.hints;
       record.speech = {
-        modelID: "whisper-large-v3-turbo",
+        modelID: "parakeet-tdt-0.6b-v3",
         modelSHA256: speech.modelSHA256,
         backend: this.speechBackend,
         engineVersion: speech.engineVersion,
@@ -1089,7 +1085,7 @@ export class GenerationService {
         structured.text,
         settings,
         cleaned !== transcript,
-        speech.language,
+        speech.language === "auto" ? settings.language : speech.language,
         signal,
       );
       signal.throwIfAborted();
@@ -1254,12 +1250,16 @@ export class GenerationService {
       .warmUp(this.preferences.preferences.textCorrectionEnabled, controller.signal)
       .then(
         () => {
-          this.speechLoadFailed = false;
+          this.speechLoadError = undefined;
         },
         async (error) => {
           // A cancelled take or shutdown can interrupt loading; that is not a failure.
           if (error instanceof InferenceError && error.code === "cancelled") return;
-          this.speechLoadFailed = !(await this.inference.readiness(false)).speechLoaded;
+          this.speechLoadError = (await this.inference.readiness(false)).speechLoaded
+            ? undefined
+            : error instanceof InferenceError && error.code === "unavailable"
+              ? error.message
+              : "Speech model failed to load.";
         },
       )
       .catch(() => {})
@@ -1270,11 +1270,11 @@ export class GenerationService {
       });
   }
   /** Queue recordings through a reload, but not behind a helper that failed to start. */
-  private speechUnloadable(state: { speechLoaded: boolean }) {
-    return this.speechLoadFailed && !state.speechLoaded;
+  private speechLoadFailure(state: { speechLoaded: boolean }) {
+    return state.speechLoaded ? undefined : this.speechLoadError;
   }
   private get speechBackend() {
-    return process.platform === "darwin" ? "whisper.cpp/Metal" : "whisper.cpp";
+    return process.platform === "darwin" ? "parakeet.cpp/Metal" : "parakeet.cpp";
   }
   private get proofBackend() {
     return process.platform === "darwin" ? "MLX" : "llama.cpp";
