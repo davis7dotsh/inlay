@@ -750,12 +750,8 @@ final class InlayController: ObservableObject {
             finishDictation(cancelled: true)
             return
         }
-        if isCapturing {
-            let generation = activeGenerationID
-            let connection = activeClient
-            resetSession()
-            if let generation, let connection { Task { try? await connection.cancel(generation) } }
-        } else if activity.isBusy, let index = pendingDictations.lastIndex(where: { $0.session == sessionID }) {
+        if isCapturing { discardCapture(); return }
+        if activity.isBusy, let index = pendingDictations.lastIndex(where: { $0.session == sessionID }) {
             let pending = pendingDictations[index]
             // Already headed to history only; cancelling the server run would lose it.
             if pending.gate.state == .discard { return }
@@ -770,6 +766,19 @@ final class InlayController: ObservableObject {
             showEarlierDictation(earlier)
             return
         }
+        showCancelled()
+    }
+
+    /// Throws the current capture away without keeping it in history.
+    private func discardCapture() {
+        let generation = activeGenerationID
+        let connection = activeClient
+        resetSession()
+        if let generation, let connection { Task { try? await connection.cancel(generation) } }
+        showCancelled()
+    }
+
+    private func showCancelled() {
         let remaining = pendingDictations.last?.session
         sessionID = remaining ?? UUID()
         activity = remaining == nil ? .idle : .transcribing
@@ -1056,7 +1065,7 @@ final class InlayController: ObservableObject {
         guard activity == .recording else { cancelDictation(); return }
         let releasedAt = ProcessInfo.processInfo.systemUptime
         destinationTask?.finish()
-        guard releasedAt - recordingStart >= Self.minimumTake else { cancelDictation(); return }
+        guard releasedAt - recordingStart >= Self.minimumTake else { discardCapture(); return }
         guard let id = activeGenerationID, let connection = activeClient, let uploadTask, let uploadPipe else {
             failSession("This recording has no server session.", cancelServer: true); return
         }
