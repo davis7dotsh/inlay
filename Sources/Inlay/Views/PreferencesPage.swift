@@ -18,6 +18,16 @@ private struct DevicePreferencesForm: View {
     @State private var deviceName = ""
     @State private var showingDiagnostics = false
 
+    /// Screen hints need Screen Recording to capture and Accessibility to find the focused window.
+    private var screenContextWarning: String? {
+        guard controller.useScreenContext else { return nil }
+        if !controller.permissions.screenRecording {
+            return "Allow Screen Recording below, then reopen \(InlayBuild.current.displayName)."
+        }
+        return controller.permissions.accessibility ? nil
+            : "Allow Accessibility below so screen hints can find the window you are dictating into."
+    }
+
     var body: some View {
         Form {
             Section {
@@ -73,12 +83,10 @@ private struct DevicePreferencesForm: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Use on-screen words as vocabulary hints", isOn: $controller.useScreenContext)
                         .accessibilityIdentifier("preferences.screen-context")
-                    Text(controller.useScreenContext && !controller.permissions.screenRecording
-                         ? "Allow Screen Recording below, then reopen \(InlayBuild.current.displayName)."
-                         : "Reads the focused window on this Mac when a take starts. Only unusual names and terms are sent to the server; screenshots and screen text are not.")
+                    Text(screenContextWarning
+                         ?? "Reads the focused window on this Mac when a take starts. Only unusual names and terms are sent to the server; screenshots and screen text are not.")
                         .font(.caption)
-                        .foregroundStyle(controller.useScreenContext && !controller.permissions.screenRecording
-                                         ? InlayPalette.warning : InlayPalette.muted)
+                        .foregroundStyle(screenContextWarning == nil ? InlayPalette.muted : InlayPalette.warning)
                 }
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
