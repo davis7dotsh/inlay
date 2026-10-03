@@ -9,16 +9,16 @@ The server is an independent TypeScript/Fastify HTTP process that owns models, s
 
 ## Linux
 
-The release workflow publishes `inlay-server-linux-x64-cuda.tar.gz` on `server-v*` tags and manual dispatch. Extract that tarball to `/opt/inlay`. That package is Ampere and newer only: SM 80, 86, 89, 90, 120, and 121. Tesla T4 and RTX 20-series (SM 75) will not run it. The helpers load `libcuda.so.1` from the host driver. CUDA 13.0.2 needs Linux driver 580.95.05 or newer, and newer compatible drivers work. The package does not include the CUDA toolkit. Keep model weights outside the package.
+The `Server release packages` workflow builds `inlay-server-linux-x64-cuda.tar.gz` as a workflow artifact on `server-v*` tags and manual dispatch. Download the `inlay-server-linux-x64-cuda` artifact from the Actions run and unzip it to get the tarball and its checksum. The package targets SM 80, 86, 89, 90, 120, and 121; Tesla T4 and RTX 20-series (SM 75) will not run it. The helpers link the CUDA runtime statically and load `libcuda.so.1` from the host driver, which must be 580.95.05 or newer for CUDA 13.0.2. Keep model weights outside the package.
 
-The unit listens on `0.0.0.0` as the `inlay` user. That user must be able to open the host NVIDIA device nodes. If those nodes are group-accessible only, add `inlay` to that group (usually `render` or `video`).
+The unit listens on `0.0.0.0` as the `inlay` user. That user must be able to open the host NVIDIA device nodes; if they are group-accessible only, add `inlay` to that group (usually `render` or `video`).
 
 ```sh
 sudo useradd --system --user-group --home /var/lib/inlay --shell /usr/sbin/nologin inlay
 sudo mkdir -p /opt/inlay
 sudo install -d -o inlay -g inlay -m 750 /var/lib/inlay /var/lib/inlay/models
 sudo install -d -o inlay -g inlay -m 700 /etc/inlay
-sudo tar -xzf inlay-server-linux-x64-cuda.tar.gz -C /opt/inlay --strip-components=1
+sudo tar -xzf inlay-server-linux-x64-cuda.tar.gz -C /opt/inlay --strip-components=1 --no-same-owner
 ```
 
 Place the pinned files at `/var/lib/inlay/models/ggml-large-v3-turbo.bin` and `/var/lib/inlay/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf` so `inlay` can read them. Install a token of at least 32 characters, with no whitespace, at `/etc/inlay/token`, owned by `inlay`, with mode `0600`:
@@ -27,7 +27,7 @@ Place the pinned files at `/var/lib/inlay/models/ggml-large-v3-turbo.bin` and `/
 printf '%s' 'replace-with-a-token-of-at-least-32-characters' | sudo install -o inlay -g inlay -m 600 /dev/stdin /etc/inlay/token
 ```
 
-The package includes `inlay-server.service`. Install that unit once, outside the package:
+Linux packages (CPU and CUDA) include `inlay-server.service`. Install that unit once, outside the package:
 
 ```sh
 sudo cp /opt/inlay/inlay-server.service /etc/systemd/system/inlay-server.service
@@ -36,8 +36,6 @@ sudo systemctl enable --now inlay-server
 ```
 
 To update, stop the service, replace `/opt/inlay`, and start it again. Weights and history under `/var/lib/inlay` stay put, and so does the installed unit.
-
-Without a GPU, build on the machine with `./scripts/build-server.sh` (`INLAY_CUDA` defaults to `OFF`) or `docker build -f Server/Dockerfile --target cpu`. If the host cannot place a matching CUDA runtime next to the binary, use the `--target cuda` image below.
 
 ## Models
 
@@ -84,7 +82,7 @@ Expected size: 2,497,281,120 bytes. SHA-256: `3605803b982cb64aead44f6c1b2ae36e3a
 
 Install Bun 1.4.2 and initialize submodules with `git submodule update --init --recursive`. macOS requires Apple Silicon and full Xcode with its Metal compiler for the MLX helper; the complete client/helper build uses Xcode 26+ and Swift 6.2+. If Metal is missing, run `xcodebuild -downloadComponent MetalToolchain`.
 
-Linux requires Bun, a C/C++ toolchain, CMake, Git, curl, pkg-config, and libcurl development headers. Swift is not required. The [Dockerfile](Dockerfile) provides a pinned Ubuntu 24.04 build environment. `./scripts/build-server.sh` is the macOS package and the Linux no-GPU fallback; `INLAY_CUDA` defaults to `OFF`.
+Linux requires Bun, a C/C++ toolchain, CMake, Git, curl, pkg-config, and libcurl development headers. Swift is not required. CUDA builds also need a compatible NVIDIA driver and CUDA toolkit. The [Dockerfile](Dockerfile) provides a pinned Ubuntu 24.04 build environment.
 
 ```sh
 ./scripts/build-server.sh                  # macOS Metal/MLX; Linux CPU
@@ -103,7 +101,7 @@ bun run build:server --all               # Mac arm64, Linux x64 and Linux arm64
 
 Cross builds live under `build/server-coordinators`. Bun cross-compiles the coordinator; complete installation archives combine it with helpers built on each matching platform. Installed packages need neither Bun nor Node. Full Linux release packages target Ubuntu 24.04 or a compatible glibc/libstdc++ environment; Mac packages require Apple Silicon and macOS 14+. Linux x64 coordinators use Bun's baseline CPU target. Native helper CPU/CUDA compatibility remains determined by its CMake build flags.
 
-The release workflow produces complete platform tarballs and SHA-256 checksums, including `inlay-server-linux-x64-cuda.tar.gz`. Extract a package, retain its `server` directory together, install the pinned model weights separately, then use the arguments below. On Linux the CUDA package already includes the systemd unit described above. Developer ID distribution still requires signing/notarization credentials; the draft Mac build is ad-hoc signed with Bun's executable entitlements.
+The release workflow produces complete platform tarballs and SHA-256 checksums, including the Linux CUDA package above. Extract a package, retain its `server` directory together, install the pinned model weights separately, then use the arguments below. Developer ID distribution still requires signing/notarization credentials; the draft Mac build is ad-hoc signed with Bun's executable entitlements.
 
 The archive lock uses Bun FFI to call libc `flock`, matching the reference Swift server. The lock is held for the server process lifetime. A running Swift server and Bun server must never share a data directory.
 
