@@ -1,0 +1,391 @@
+import InlayCore
+import InlayAPI
+import SwiftUI
+
+struct DevicePreferencesPage: View {
+    @ObservedObject var controller: InlayController
+
+    var body: some View {
+        DevicePreferencesForm(controller: controller, preferences: controller.preferences)
+    }
+}
+
+private struct DevicePreferencesForm: View {
+    @ObservedObject var controller: InlayController
+    @ObservedObject var preferences: ClientPreferencesStore
+    @StateObject private var keyRecorder = HoldKeyRecorder()
+    @State private var keyRecorderMessage: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var endpoint = ""
+    @State private var token = ""
+    @State private var deviceName = ""
+    @State private var showingDiagnostics = false
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Server address", text: $endpoint, prompt: Text("http://localhost:8391"))
+                    .autocorrectionDisabled()
+                    .accessibilityIdentifier("preferences.endpoint")
+                SecureField("Access token", text: $token)
+                    .accessibilityIdentifier("preferences.token")
+                TextField("Device name", text: $deviceName)
+                    .accessibilityIdentifier("preferences.device-name")
+                HStack {
+                    ServerConnectionStatus(controller: controller)
+                    Button("Connect") {
+                        controller.errorMessage = nil
+                        controller.saveConnection(endpoint: endpoint, token: token, deviceName: deviceName)
+                    }
+                        .disabled(controller.isBusy || endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("preferences.connect")
+                }
+                InlayActionMessage(message: preferences.errorMessage ?? controller.errorMessage)
+            } header: { Text("Connection").textCase(nil) }
+
+            Section {
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        if keyRecorder.isRecording {
+                            Button("Cancel", action: stopKeyRecording)
+                                .buttonStyle(.borderless)
+                                .accessibilityIdentifier("preferences.shortcut-cancel")
+                        }
+                        Button(action: keyRecorder.isRecording ? stopKeyRecording : startKeyRecording) {
+                            HStack(spacing: 6) {
+                                if keyRecorder.isRecording {
+                                    Image(systemName: "record.circle.fill")
+                                        .symbolEffect(.pulse, isActive: !reduceMotion)
+                                    Text("Press a key…")
+                                } else {
+                                    Text(controller.shortcut.symbol)
+                                    Text(controller.shortcut.title)
+                                }
+                            }
+                            .frame(minWidth: 109)
+                        }
+                        .accessibilityIdentifier("preferences.shortcut")
+                        .accessibilityLabel(keyRecorder.isRecording
+                            ? "Waiting for a key press"
+                            : "Dictation key, \(controller.shortcut.title)")
+                        .accessibilityHint(keyRecorder.isRecording ? "Cancels key recording" : "Records a new dictation key")
+                    }
+                } label: {
+                    Text("Dictation key")
+                    Text(keyRecorderCaption)
+                        .foregroundStyle(keyRecorderMessage == nil ? InlayPalette.muted : InlayPalette.warning)
+                }
+                Picker("Trigger", selection: $controller.activationMode) {
+                    ForEach(HotkeyActivationMode.allCases) { mode in Text(mode.title).tag(mode) }
+                }
+                .accessibilityIdentifier("preferences.activation")
+                LabeledContent {
+                    Button {
+                        if controller.isCheckingShortcut { controller.stopShortcutCheck() }
+                        else { controller.startShortcutCheck(); showingDiagnostics = true }
+                    } label: {
+                        Text(controller.isCheckingShortcut ? "Stop checking" : "Check shortcut")
+                            .frame(minWidth: 109)
+                    }
+                    // The hold monitor is suspended during key recording; a
+                    // shortcut check against it would only produce silence.
+                    .disabled(keyRecorder.isRecording)
+                } label: {
+                    Text(controller.isCheckingShortcut ? "Hold the key for a second" : "Shortcut check")
+                }
+                DisclosureGroup("Shortcut diagnostics", isExpanded: $showingDiagnostics) {
+                    ScrollView {
+                        Text(controller.shortcutCheckText.isEmpty ? "Run a shortcut check to see events." : controller.shortcutCheckText)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 90)
+                }
+                Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
+                    .accessibilityIdentifier("preferences.mute-output")
+                Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
+                if let error = controller.loginItemError {
+                    Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
+                }
+            } header: { Text("This Mac").textCase(nil) }
+            .disabled(controller.isBusy)
+
+            Section {
+                PermissionRow(title: "Microphone", detail: "Capture audio while dictating.", granted: controller.permissions.microphone,
+                              reviewGranted: true, action: controller.requestMicrophone)
+                PermissionRow(title: "Accessibility", detail: "Recognize your dictation key and insert text.", granted: controller.permissions.accessibility,
+                              reviewGranted: true, action: controller.requestAccessibility)
+                HStack {
+                    PermissionHelpButton()
+                    Spacer()
+                    Button("Check again") { controller.refreshPermissions() }
+                }
+            } header: { Text("Permissions").textCase(nil) }
+
+            Section {
+                HStack(spacing: 8) {
+                    Text("\(InlayBuild.current.displayName)").font(.headline)
+                    Spacer()
+                    if InlayBuild.current.isDevelopment {
+                        Text("Development build").foregroundStyle(InlayPalette.muted)
+                    } else {
+                        Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+                            .foregroundStyle(InlayPalette.muted)
+                    }
+                }
+                Text("Quitting this app leaves your server running.")
+                    .font(.caption)
+                    .foregroundStyle(InlayPalette.muted)
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .toggleStyle(.switch)
+        .frame(maxWidth: 760)
+        .frame(maxWidth: .infinity)
+        .onAppear {
+            endpoint = preferences.endpoint
+            token = preferences.token
+            deviceName = preferences.deviceName
+            controller.refreshPermissions()
+            keyRecorder.onCapture = {
+                controller.setKeyRecording(false)
+                controller.shortcut = $0
+            }
+            // The recorder consumes Escape itself while it is listening.
+            keyRecorder.onCancel = { controller.setKeyRecording(false) }
+            keyRecorder.onTimeout = {
+                controller.setKeyRecording(false)
+                // macOS can swallow Globe presses before the app sees them, and
+                // the Fn note only shows once Fn is chosen, so repeat it here.
+                keyRecorderMessage = "No key pressed. Click to try again. If Fn / Globe does nothing, set ‘Press Globe key to’ to ‘Do Nothing’ in Keyboard settings."
+            }
+        }
+        .onDisappear {
+            if keyRecorder.isRecording { stopKeyRecording() }
+        }
+    }
+
+    private var keyRecorderCaption: String {
+        let keys = HoldKey.allCases.map(\.title)
+        let choices = keys.dropLast().joined(separator: ", ") + ", or " + (keys.last ?? "")
+        if keyRecorder.isRecording { return "Press \(choices). Esc cancels." }
+        if let keyRecorderMessage { return keyRecorderMessage }
+        let hint = "Click to change. Use \(choices)."
+        return controller.shortcut.note.map { "\(hint)\n\($0)" } ?? hint
+    }
+
+    private func startKeyRecording() {
+        keyRecorderMessage = nil
+        controller.setKeyRecording(true)
+        keyRecorder.start()
+    }
+
+    private func stopKeyRecording() {
+        keyRecorder.stop()
+        controller.setKeyRecording(false)
+    }
+}
+
+struct ServerPreferencesPage: View {
+    @ObservedObject var controller: InlayController
+    @State private var draft = ServerPreferences()
+    @State private var base: PreferencesSnapshot?
+    @State private var expandedLists = Set<String>()
+
+    private var dirty: Bool { base.map { draft != $0.preferences } ?? false }
+    private var changedRemotely: Bool {
+        guard let base, let latest = controller.sharedPreferences else { return false }
+        return dirty && base.revision != latest.revision
+    }
+    private var available: Bool { controller.sharedPreferences != nil && controller.serverHealth != nil }
+    private let languages = [
+        ("English", "en"), ("Detect automatically", "auto"), ("Spanish", "es"), ("French", "fr"),
+        ("German", "de"), ("Italian", "it"), ("Portuguese", "pt"), ("Dutch", "nl"), ("Japanese", "ja"),
+        ("Chinese", "zh"), ("Korean", "ko"), ("Hindi", "hi"), ("Arabic", "ar"), ("Polish", "pl"),
+        ("Russian", "ru"), ("Ukrainian", "uk"), ("Swedish", "sv")
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                ServerConnectionStatus(controller: controller)
+                Button("Discard changes") { loadLatest() }
+                    .opacity(dirty ? 1 : 0)
+                    .disabled(!dirty)
+                Button("Save shared preferences") {
+                    controller.errorMessage = nil
+                    controller.updateSharedPreferences(draft, expectedRevision: base?.revision)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!available || !dirty || changedRemotely || draft.validationError != nil || controller.isSavingPreferences)
+                .accessibilityIdentifier("preferences.save-shared")
+            }
+            .frame(height: 34)
+            .padding(.horizontal, 28)
+            .padding(.top, 24)
+            .padding(.bottom, 10)
+
+            HStack {
+                InlayActionMessage(message: changedRemotely
+                    ? "Shared preferences changed on another device. Reload to continue."
+                    : (draft.validationError ?? controller.errorMessage))
+                Button("Reload") { loadLatest() }
+                    .opacity(changedRemotely ? 1 : 0)
+                    .disabled(!changedRemotely)
+            }
+            .padding(.horizontal, 28)
+
+            Form {
+                if let health = controller.serverHealth {
+                    Section {
+                        runtimeRow("Voice", runtime: health.speech)
+                        runtimeRow("Proofreading", runtime: health.proofreading)
+                    } header: { Text("Server models").textCase(nil) }
+                }
+                Section {
+                    Picker("Language", selection: $draft.language) {
+                        ForEach(languages, id: \.1) { name, code in Text(name).tag(code) }
+                    }
+                    Toggle("Proofread with Qwen", isOn: $draft.textCorrectionEnabled)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Cleanup instructions")
+                            Spacer()
+                            Button("Reset to default") {
+                                draft.proofreadingPrompt = ServerPreferences.defaultProofreadingPrompt
+                            }
+                            .disabled(draft.proofreadingPrompt == ServerPreferences.defaultProofreadingPrompt)
+                            .accessibilityIdentifier("preferences.reset-cleanup-prompt")
+                        }
+                        TextEditor(text: $draft.proofreadingPrompt)
+                            .font(.body)
+                            .scrollContentBackground(.hidden)
+                            .padding(7)
+                            .frame(height: 352)
+                            .background(InlayPalette.surface, in: RoundedRectangle(cornerRadius: 6))
+                            .overlay { RoundedRectangle(cornerRadius: 6).stroke(InlayPalette.muted.opacity(0.25)) }
+                            .accessibilityLabel("Cleanup instructions")
+                            .accessibilityIdentifier("preferences.cleanup-prompt")
+                    }
+                    TextField("Recognition vocabulary", text: $draft.vocabulary, axis: .vertical)
+                        .lineLimit(3...5)
+                        .help("Names and specialized terms to help voice recognition.")
+                } header: { Text("Processing").textCase(nil) }
+                .disabled(!available)
+
+                Section {
+                    Toggle("Keep original microphone audio", isOn: $draft.keepOriginalAudio)
+                        .accessibilityIdentifier("preferences.keep-original")
+                    Text("Whisper audio is always kept. This also saves the original microphone audio for future dictations.")
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.muted)
+                } header: { Text("Shared history").textCase(nil) }
+                .disabled(!available)
+
+                Section {
+                    dictionaryEditor
+                } header: { Text("Dictionary").textCase(nil) }
+                .disabled(!available)
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .toggleStyle(.switch)
+        }
+        .frame(maxWidth: 800)
+        .frame(maxWidth: .infinity)
+        .onAppear {
+            loadLatest()
+            controller.refreshServer()
+        }
+        .onChange(of: controller.sharedPreferences) { old, latest in
+            if base == nil || !dirty || latest?.preferences == draft {
+                loadLatest()
+            }
+        }
+    }
+
+    @ViewBuilder private var dictionaryEditor: some View {
+        ForEach($draft.dictionary.lists) { $list in
+            DisclosureGroup(isExpanded: Binding(
+                get: { expandedLists.contains(list.id) },
+                set: { if $0 { expandedLists.insert(list.id) } else { expandedLists.remove(list.id) } }
+            )) {
+                TextField("List name", text: $list.name)
+                ForEach($list.entries) { $entry in
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("Preferred spelling", text: $entry.term)
+                            TextField("Words or phrases to replace, separated by commas", text: Binding(
+                                get: { entry.aliases.joined(separator: ", ") },
+                                set: { value in
+                                    entry.aliases = value.isEmpty ? [] : value.components(separatedBy: ",")
+                                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                                }
+                            ))
+                            .font(.caption)
+                            .help("Use narrow phrases: preferred ‘auth middleware’, replace ‘off middleware’. Replacing ‘off’ alone also changes ordinary uses of that word.")
+                        }
+                        Toggle(isOn: $entry.isPriority) {
+                            Image(systemName: entry.isPriority ? "star.fill" : "star")
+                        }
+                        .toggleStyle(.button)
+                        .buttonStyle(.borderless)
+                        .tint(InlayPalette.accentInk)
+                        .help("Priority words are suggested first when model space is limited.")
+                        .accessibilityLabel("Prioritize \(entry.term.isEmpty ? "word" : entry.term)")
+                        .accessibilityIdentifier("preferences.dictionary-priority.\(entry.id)")
+                        Button {
+                            list.entries.removeAll { $0.id == entry.id }
+                        } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.borderless)
+                            .help("Remove word")
+                            .accessibilityLabel("Remove \(entry.term.isEmpty ? "word" : entry.term)")
+                    }
+                    .padding(.vertical, 6)
+                }
+                HStack {
+                    Button("Add word") { list.entries.append(DictionaryEntry(term: "")) }
+                    Spacer()
+                    Button("Remove list", role: .destructive) {
+                        draft.dictionary.lists.removeAll { $0.id == list.id }
+                    }
+                }
+                .padding(.top, 8)
+            } label: {
+                HStack {
+                    Text(list.name.isEmpty ? "New list" : list.name)
+                    Spacer()
+                    Text("\(list.entries.count)").foregroundStyle(InlayPalette.muted)
+                }
+            }
+        }
+        Button("Add list") {
+            let list = DictionaryList(name: "New list")
+            draft.dictionary.lists.append(list)
+            expandedLists.insert(list.id)
+        }
+    }
+
+    private func runtimeRow(_ title: String, runtime: ModelRuntimeInfo) -> some View {
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(runtime.modelID).lineLimit(1)
+                    Text(runtime.message ?? runtime.backend)
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.muted)
+                        .lineLimit(2)
+                }
+                StatusDot(color: runtime.ready ? InlayPalette.success : InlayPalette.warning)
+            }
+        }
+    }
+
+    private func loadLatest() {
+        guard let snapshot = controller.sharedPreferences else { return }
+        base = snapshot
+        draft = snapshot.preferences
+    }
+}

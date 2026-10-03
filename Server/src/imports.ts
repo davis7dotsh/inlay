@@ -88,7 +88,7 @@ function sourceOmissions(document: JSONObject) {
       entry.artifact === "source.json" ||
       !positiveInteger(entry.observedByteCount) ||
       !validSHA256(entry.observedSHA256) ||
-      !["archived", "not-archived"].includes(String(entry.status))
+      (entry.status !== "archived" && entry.status !== "not-archived")
     ) {
       throw new ServiceError(
         400,
@@ -129,7 +129,7 @@ function recordedProvenanceFieldCount(document: JSONObject) {
     for (const field of Object.values(object(source.values) ? source.values : {})) {
       if (!object(field) || field.archiveReason !== "exceeds-source-json-limit") continue;
       if (
-        !["text", "blob"].includes(String(field.type)) ||
+        (field.type !== "text" && field.type !== "blob") ||
         !positiveInteger(field.byteCount) ||
         !validSHA256(field.sha256) ||
         field.archiveStatus !== "not-archived" ||
@@ -275,7 +275,12 @@ function mergedSourceJSON(old: Uint8Array, incoming: Uint8Array) {
   for (const document of [earlier, newer])
     if (objectArray(document.archiveOmissions))
       for (const omission of document.archiveOmissions) {
-        const key = `${String(omission.artifact ?? "")}:${String(omission.observedSHA256 ?? "")}:${String(omission.sourceName ?? "")}:${Number(omission.sourceRowID ?? 0)}`;
+        const key = JSON.stringify([
+          omission.artifact ?? "",
+          omission.observedSHA256 ?? "",
+          omission.sourceName ?? "",
+          Number(omission.sourceRowID ?? 0),
+        ]);
         if (!seenOmissions.has(key)) {
           seenOmissions.add(key);
           omissions.push(omission);
