@@ -57,7 +57,9 @@ final class ScreenContextCapture {
         guard CGPreflightScreenCaptureAccess(), !IsSecureEventInputEnabled(),
               let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-              let image = await windowImage(of: app.processIdentifier), !Task.isCancelled else { return [] }
+              let image = await windowImage(of: app.processIdentifier), !Task.isCancelled,
+              // Focus can move into a password field while the window is captured.
+              !IsSecureEventInputEnabled() else { return [] }
         let recognition = Task.detached(priority: .userInitiated) {
             (try? await ScreenContext.recognizeLines(in: image)) ?? []
         }

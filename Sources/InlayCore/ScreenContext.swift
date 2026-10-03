@@ -120,9 +120,10 @@ public enum ScreenContext {
                !countryDomainExtensions.contains(suffix) || text.contains(where: { $0.isUppercase || $0 == "_" }) {
                 continue
             }
-            // Lowercase final labels cover every unlisted top-level domain (Acme.email);
-            // capitalized ones are member names such as Stripe.Event.
-            if commonTopLevelDomains.contains(suffix) || label == suffix
+            // A lowercase first or final label covers unlisted top-level domains in any
+            // case (Acme.email, portal.Travel); member names such as Stripe.Event remain.
+            let first = match.output.0.prefix { $0 != "." }
+            if commonTopLevelDomains.contains(suffix) || label == suffix || first == first.lowercased()
                 || text[match.range.upperBound...].first == ":" { return true }
         }
         return false
