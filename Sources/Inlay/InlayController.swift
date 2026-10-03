@@ -1160,6 +1160,7 @@ final class InlayController: ObservableObject {
                         message: "Cancelled before pasting. Kept in history."))
                     try Task.checkCancellation()
                     if sessionID == current {
+                        lastDelivery = "Saved to history"
                         lastDeliveryStatus = .kept
                         activity = .success
                         statusMessage = "Saved to history"
