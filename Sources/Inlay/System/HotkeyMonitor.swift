@@ -202,6 +202,8 @@ final class HotkeyMonitor {
     var onPress: (() -> Bool)?
     var onRelease: (() -> Void)?
     var onCancel: (() -> Void)?
+    /// Explicit cancellation also applies to recordings started by a device.
+    var onEscape: (() -> Void)?
     /// Tap health, not a claim that a particular key event was delivered.
     var onStatusChange: ((Bool) -> Void)?
     /// Set only during an explicit, bounded shortcut check. No persistent log.
@@ -327,7 +329,7 @@ final class HotkeyMonitor {
             // cancel must not arm the chord block, or the next tap is swallowed.
             active = false
             if physicalDown { blockCurrentHold() }
-            onCancel?()
+            if let onEscape { onEscape() } else { onCancel?() }
             return
         }
         switch type {

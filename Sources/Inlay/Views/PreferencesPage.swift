@@ -77,6 +77,10 @@ private struct DevicePreferencesForm: View {
             } header: { Text("This Mac").textCase(nil) }
             .disabled(controller.isBusy)
 
+            if controller.hasDetectedDJIMicrophone || controller.djiMicButtonEnabled {
+                DJIMicButtonPreferences(controller: controller)
+            }
+
             Section {
                 PermissionRow(title: "Microphone", detail: "Capture audio while dictating.", granted: controller.permissions.microphone,
                               reviewGranted: true, action: controller.requestMicrophone)
@@ -116,6 +120,32 @@ private struct DevicePreferencesForm: View {
             deviceName = preferences.deviceName
             controller.refreshPermissions()
         }
+    }
+}
+
+private struct DJIMicButtonPreferences: View {
+    @ObservedObject var controller: InlayController
+
+    var body: some View {
+        Section {
+            Toggle("Use DJI mic button", isOn: $controller.djiMicButtonEnabled)
+                .accessibilityIdentifier("preferences.dji-mic-button")
+            Text("Press the transmitter’s linking button once to start, then again to stop and insert. Works with Mic Mini, Mini 2, and Mini 2S receivers connected by USB-C.")
+                .font(.caption)
+                .foregroundStyle(InlayPalette.muted)
+            if controller.djiMicButtonEnabled {
+                Text(controller.djiMicButtonStatus.message)
+                    .accessibilityIdentifier("preferences.dji-mic-status")
+                if controller.djiMicButtonStatus == .permissionRequired {
+                    Button("Allow Input Monitoring", action: controller.requestInputMonitoring)
+                }
+                Button("Check receiver", action: controller.retryDJIMicButton)
+                Text("Uses the input selected under Microphone. Bluetooth-only connections do not send button presses. Disable other DJI button mappings before enabling this.")
+                    .font(.caption)
+                    .foregroundStyle(InlayPalette.muted)
+            }
+        } header: { Text("DJI mic button").textCase(nil) }
+        .disabled(controller.isBusy)
     }
 }
 

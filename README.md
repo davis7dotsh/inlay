@@ -29,6 +29,14 @@ Use your own model paths if they are already installed. The script builds the se
 
 **Test microphone** shows a result in Inlay without inserting it. Fn/Globe is also supported; set macOS **Keyboard → Press Globe key to → Do Nothing** if its system action conflicts.
 
+## DJI mic button
+
+Connect a DJI Mic Mini, Mini 2, or Mini 2S receiver over USB-C. The **DJI mic button** section on the **This Mac** page appears once Inlay first detects a DJI microphone and stays visible afterward. Enable **Use DJI mic button** and allow Input Monitoring when requested. Press the transmitter's linking button once to start dictation, then again to stop and insert. Escape cancels. Inlay uses the input selected under **Microphone**; choose the DJI receiver there to record from it.
+
+The button uses the receiver's USB consumer-control interface (`2CA3:4011`), as documented by [dji-mic-wispr-flow](https://github.com/caezium/dji-mic-wispr-flow). Bluetooth-only connections do not send these events. Inlay handles the receiver directly without Karabiner; disable other DJI button mappings first. While enabled, Inlay captures the receiver's consumer controls so its button does not change system volume. Keyboard volume keys remain available. Disabling the feature or quitting releases the receiver.
+
+Repeated button events are ignored. A press while earlier takes are transcribing starts a new take; presses during keyboard dictation or a microphone test are ignored. Unplugging the receiver cancels its active recording; sleep and locking the Mac interrupt recording too. **Check receiver** retries capture after changing permissions or disabling another mapping tool.
+
 ## Use a server on another machine
 
 Follow the [server guide](Server/README.md) for macOS, Linux, or containers. On the client Mac, build and open only the app:

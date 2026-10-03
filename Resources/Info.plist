@@ -27,7 +27,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Inlay records your microphone only while you dictate and sends audio to your configured Inlay server for transcription and shared history.</string>
 	<key>NSInputMonitoringUsageDescription</key>
-	<string>Inlay listens for your chosen hold-to-dictate key. It does not store your keystrokes.</string>
+	<string>Inlay listens for your chosen hold-to-dictate key and the optional DJI mic receiver button. It does not store your keystrokes.</string>
 	<!-- HTTP is validated in ServerEndpoint and limited to loopback/Tailscale IPs. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>

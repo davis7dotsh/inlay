@@ -89,6 +89,15 @@ final class InlayController: ObservableObject {
     @Published var errorMessage: String?
     @Published var permissions: PermissionSnapshot
     @Published var isHotkeyActive = false
+    @Published private(set) var hasDetectedDJIMicrophone = UserDefaults.standard.bool(forKey: "hasDetectedDJIMicrophone")
+    @Published var djiMicButtonEnabled = false {
+        didSet {
+            guard djiMicButtonEnabled != oldValue else { return }
+            if !applyingConfiguration { configuration.update { $0.djiMicButtonEnabled = djiMicButtonEnabled } }
+            refreshDJIMicButton()
+        }
+    }
+    @Published private(set) var djiMicButtonStatus: DJIMicButtonStatus = .disabled
     @Published private(set) var isCheckingShortcut = false
     @Published private(set) var shortcutCheckText = ""
     @Published var shortcut: HoldKey = .rightOption {
@@ -160,6 +169,9 @@ final class InlayController: ObservableObject {
     private let serverClientFactory: (() throws -> ServerClient)?
     private let hotkey = HotkeyMonitor()
     private let outputMuter = SystemOutputMuter()
+    private let djiMicButton = DJIMicButtonMonitor()
+    private var djiSuspensions: Set<String> = []
+    private var recordingTrigger: DictationTrigger?
     private var subscriptions: Set<AnyCancellable> = []
     private var applyingConfiguration = false
     private var recordingTimer: Timer?
@@ -222,6 +234,7 @@ final class InlayController: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
     private var lockObserver: NSObjectProtocol?
+    private var unlockObserver: NSObjectProtocol?
 
     init(configuration: ConfigurationStore, startServices: Bool = true,
          recorder: AudioRecorder? = nil, audioDevices: AudioDeviceStore? = nil,
@@ -248,6 +261,7 @@ final class InlayController: ObservableObject {
         CapturedAudio.cleanupOrphans()
         try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("Inlay-remote-preview"))
         hasInitialized = true
+        refreshDJIMicButton()
         updateLoginItem()
         refreshServer()
         monitorTask = Task { [weak self] in
@@ -268,6 +282,7 @@ final class InlayController: ObservableObject {
         if let mode = HotkeyActivationMode(rawValue: settings.activationMode), activationMode != mode { activationMode = mode }
         if launchAtLogin != settings.launchAtLogin { launchAtLogin = settings.launchAtLogin }
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
+        if djiMicButtonEnabled != settings.djiMicButtonEnabled { djiMicButtonEnabled = settings.djiMicButtonEnabled }
         applyingConfiguration = false
     }
 
@@ -697,7 +712,7 @@ final class InlayController: ObservableObject {
     func toggleTestRecording() {
         guard !hotkey.isHoldingFn else { return }
         if isCapturing { finishDictation() }
-        else { beginDictation(isTest: true) }
+        else { beginDictation(trigger: .test) }
     }
 
     func cancelDictation() {
@@ -736,6 +751,7 @@ final class InlayController: ObservableObject {
     }
 
     private func resetSession() {
+        recordingTrigger = nil
         sessionID = UUID()
         hotkey.clearLatchedTake()
         microphoneStartTask?.cancel(); microphoneStartTask = nil
@@ -809,18 +825,35 @@ final class InlayController: ObservableObject {
         monitorTask?.cancel(); refreshTask?.cancel(); hudTask?.cancel(); permissionTask?.cancel()
         configuration.stopWatching()
         subscriptions.removeAll()
-        audioDevices.stop(); hotkey.stop(); continuationAnchors.removeAll()
+        audioDevices.stop(); hotkey.stop(); djiMicButton.stop(); continuationAnchors.removeAll()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         if let lockObserver { DistributedNotificationCenter.default().removeObserver(lockObserver) }
+        if let unlockObserver { DistributedNotificationCenter.default().removeObserver(unlockObserver) }
         try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("Inlay-remote-preview"))
     }
 
     private func bindServices() {
-        audioDevices.onChange = { [weak self] devices, defaultUID in self?.microphones.update(devices: devices, systemDefaultUID: defaultUID) }
+        audioDevices.onChange = { [weak self] devices, defaultUID in
+            guard let self else { return }
+            microphones.update(devices: devices, systemDefaultUID: defaultUID)
+            if !hasDetectedDJIMicrophone, devices.contains(where: {
+                $0.name.localizedCaseInsensitiveContains("DJI")
+                    || $0.name.caseInsensitiveCompare("Wireless Mic Rx") == .orderedSame
+            }) {
+                hasDetectedDJIMicrophone = true
+                UserDefaults.standard.set(true, forKey: "hasDetectedDJIMicrophone")
+            }
+        }
         recorder.onLevel = { [weak self] level in guard let self, isCapturing else { return }; recordingFeedback.append(level) }
         recorder.onInterruption = { [weak self] message in self?.failSession(message, cancelServer: true) }
         hotkey.onStatusChange = { [weak self] in self?.isHotkeyActive = $0 }
+        djiMicButton.onStatusChange = { [weak self] in self?.djiMicButtonStatus = $0 }
+        djiMicButton.onPress = { [weak self] in self?.receiveDJIMicButton($0) }
+        djiMicButton.onDisconnect = { [weak self] id in
+            guard let self, isCapturing, recordingTrigger == .dji(id) else { return }
+            cancelDictation()
+        }
         hotkey.onPress = { [weak self] in
             guard let self else { return false }
             if isCheckingShortcut {
@@ -828,26 +861,40 @@ final class InlayController: ObservableObject {
                 // No take started, so a double-tap monitor must not latch.
                 return false
             }
-            return beginDictation(isTest: false)
+            return beginDictation(trigger: .keyboard)
         }
         hotkey.onRelease = { [weak self] in
             guard let self else { return }
             if isCheckingShortcut { appendShortcutCheck("Hold released."); return }
-            if !isTestSession { finishDictation() }
+            if recordingTrigger == .keyboard { finishDictation() }
         }
         hotkey.onCancel = { [weak self] in
             guard let self else { return }
             if isCheckingShortcut { appendShortcutCheck("Hold cancelled; microphone stayed off.") }
-            else if isBusy { cancelDictation() }
+            else if isBusy, recordingTrigger == .keyboard { cancelDictation() }
+        }
+        hotkey.onEscape = { [weak self] in
+            guard let self, !isCheckingShortcut else { return }
+            if isBusy { cancelDictation() }
             else { dismissFeedback() }
+        }
+    }
+
+    private func receiveDJIMicButton(_ deviceID: UInt64) {
+        guard djiMicButtonEnabled, !isCheckingShortcut, !isShuttingDown, djiSuspensions.isEmpty else { return }
+        switch DictationTrigger.djiButtonAction(deviceID: deviceID, activity: activity, current: recordingTrigger) {
+        case .start: beginDictation(trigger: .dji(deviceID))
+        case .finish: finishDictation()
+        case .ignore: break
         }
     }
 
     /// Returns whether a take actually started. A double-tap monitor latches
     /// only on true, so a rejected start cannot leave a phantom recording.
     @discardableResult
-    private func beginDictation(isTest: Bool) -> Bool {
+    private func beginDictation(trigger: DictationTrigger) -> Bool {
         guard !isCapturing, !isShuttingDown else { return false }
+        let isTest = trigger == .test
         stopShortcutCheck()
         guard isServerReady else { showError(serverStatusMessage); refreshServer(); onShowWindow?(); return false }
         guard permissions.microphone else { showError("Allow microphone access, then try again."); onShowWindow?(); return false }
@@ -860,6 +907,7 @@ final class InlayController: ObservableObject {
         sessionID = UUID()
         let current = sessionID
         isTestSession = isTest
+        recordingTrigger = trigger
         recordingClipboardChangeCount = NSPasteboard.general.changeCount
         insertionDestination = nil
         recordingInputName = input.name
@@ -1218,11 +1266,33 @@ final class InlayController: ObservableObject {
         })
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.willPowerOffNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) {
-                [weak self] _ in MainActor.assumeIsolated { self?.restForSystem() }
+                [weak self] _ in MainActor.assumeIsolated {
+                    // Power-off has no resume notification if it is cancelled.
+                    if name != NSWorkspace.willPowerOffNotification { self?.djiSuspensions.insert(name.rawValue) }
+                    self?.restForSystem()
+                }
+            })
+        }
+        for (resume, pause) in [(NSWorkspace.didWakeNotification, NSWorkspace.willSleepNotification),
+                                (NSWorkspace.sessionDidBecomeActiveNotification, NSWorkspace.sessionDidResignActiveNotification)] {
+            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: resume, object: nil, queue: .main) {
+                [weak self] _ in MainActor.assumeIsolated {
+                    self?.djiSuspensions.remove(pause.rawValue)
+                    self?.refreshDJIMicButton()
+                }
             })
         }
         lockObserver = DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) {
-            [weak self] _ in MainActor.assumeIsolated { self?.restForSystem() }
+            [weak self] _ in MainActor.assumeIsolated {
+                self?.djiSuspensions.insert("screenLocked")
+                self?.restForSystem()
+            }
+        }
+        unlockObserver = DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) {
+            [weak self] _ in MainActor.assumeIsolated {
+                self?.djiSuspensions.remove("screenLocked")
+                self?.refreshDJIMicButton()
+            }
         }
     }
 
@@ -1237,11 +1307,24 @@ final class InlayController: ObservableObject {
             showError("Recording interrupted while your Mac was away. Check shared history for completed results.")
         }
         continuationAnchors.removeAll()
+        refreshDJIMicButton()
     }
+
+    private func refreshDJIMicButton() {
+        guard hasInitialized, !isShuttingDown else { return }
+        djiMicButton.refresh(enabled: djiMicButtonEnabled, suspended: !djiSuspensions.isEmpty)
+    }
+
+    func retryDJIMicButton() {
+        guard hasInitialized, !isShuttingDown, !isBusy else { return }
+        djiMicButton.retry(enabled: djiMicButtonEnabled, suspended: !djiSuspensions.isEmpty)
+    }
+
     func refreshPermissions() {
         let current = PermissionSnapshot.capture()
         if current != permissions { permissions = current }
         audioDevices.refresh()
+        refreshDJIMicButton()
         if permissions.canListenForHotkey {
             isHotkeyActive = hotkey.start()
         } else {
