@@ -17,7 +17,7 @@ Run these commands from the repository root. Weights use about 4 GB of disk; run
 INLAY_MODEL_DIR="$PWD/.local/models" ./scripts/download-model.sh
 ```
 
-This installs and verifies `ggml-parakeet-tdt-0.6b-v3-f16.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh` and `Sources/InlayCore/SpeechModel.swift`. The server build separately downloads the pinned Silero VAD model. This branch requires Parakeet weights; existing Whisper weights cannot be reused.
+This installs and verifies `ggml-parakeet-tdt-0.6b-v3-f16.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh` and `Sources/InlayCore/SpeechModel.swift`. The server build separately downloads the pinned Silero VAD model. Existing Whisper weights cannot be reused; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
 
 Parakeet automatically recognizes 25 European languages. The language preference guides proofreading and does not force recognition. The preference values are unchanged; choose Automatic for languages without a named proofreading option. The helper exposes no detected language ID. Recognition vocabulary hints are unsupported (zero budget); dictionary replacements and Qwen hints still apply. Older language preferences remain accepted for proofreading and never block automatic recognition; they do not expand Parakeet’s supported speech languages.
 
@@ -109,7 +109,7 @@ For server-only development alongside an installed Inlay instance, use `--port 8
 | `--proof-helper`, `--proof-model`   | `INLAY_TEXT_ENGINE_PATH`, `INLAY_TEXT_MODEL`       |
 | `--dev`                             | `INLAY_DEV=1`                                      |
 
-The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches `~/Library/Application Support/Inlay/Models/ggml-parakeet-tdt-0.6b-v3-f16.bin` and `~/.inlay/models/Qwen3-4B-Instruct-2507-MLX-4bit`. Existing installations can retain their archive, token file, and model locations with the arguments or overrides above; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
+The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches `~/Library/Application Support/Inlay/Models/ggml-parakeet-tdt-0.6b-v3-f16.bin` and `~/.inlay/models/Qwen3-4B-Instruct-2507-MLX-4bit`. Existing installations can retain their archive, token file, and Qwen model location with the arguments or overrides above, but must install the Parakeet weights; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
 
 ## Remote access
 
