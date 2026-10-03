@@ -306,7 +306,7 @@ struct HistoryPage: View {
         DisclosureGroup("\(title): \(hints.omittedTerms.count) terms did not fit") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Used: \(hints.includedTerms.isEmpty ? "None" : hints.includedTerms.joined(separator: ", "))")
-                Text("Unused: \(hints.omittedTerms.joined(separator: ", "))")
+                Text("Did not fit: \(hints.omittedTerms.joined(separator: ", "))")
             }
             .font(.caption)
             .foregroundStyle(InlayPalette.muted)

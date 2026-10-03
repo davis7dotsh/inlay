@@ -232,8 +232,12 @@ export class NativeInference implements InferenceBackend {
     try {
       await this.verifier.verify(this.configuration.speechModel, this.speechPin, signal);
     } catch (error) {
-      // Earlier installs still point at Whisper weights; say how to replace them.
-      if (error instanceof InferenceError && error.code === "unavailable")
+      // A readable file that fails the pin is usually an earlier install's Whisper weights.
+      const readable = await access(this.configuration.speechModel, constants.R_OK).then(
+        () => true,
+        () => false,
+      );
+      if (error instanceof InferenceError && error.code === "unavailable" && readable)
         throw new InferenceError(
           "unavailable",
           "The speech model must be Parakeet v3. Run scripts/download-model.sh.",
