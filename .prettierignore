@@ -12,3 +12,5 @@ Resources/
 TextEngine/Sources/
 THIRD_PARTY_NOTICES.md
 LICENSE
+
+.claude/

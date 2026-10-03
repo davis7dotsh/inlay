@@ -309,7 +309,10 @@ export interface components {
       name: string;
     };
     ServerPreferences: {
-      /** @enum {string} */
+      /**
+       * @description Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
+       * @enum {string}
+       */
       language:
         | "en"
         | "auto"

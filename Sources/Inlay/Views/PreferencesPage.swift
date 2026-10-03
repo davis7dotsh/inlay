@@ -131,11 +131,15 @@ struct ServerPreferencesPage: View {
         return dirty && base.revision != latest.revision
     }
     private var available: Bool { controller.sharedPreferences != nil && controller.serverHealth != nil }
+    // The wire values form a closed enum; keep them stable. Other Parakeet
+    // languages use automatic proofreading without adding enum cases.
     private let languages = [
-        ("English", "en"), ("Detect automatically", "auto"), ("Spanish", "es"), ("French", "fr"),
-        ("German", "de"), ("Italian", "it"), ("Portuguese", "pt"), ("Dutch", "nl"), ("Japanese", "ja"),
-        ("Chinese", "zh"), ("Korean", "ko"), ("Hindi", "hi"), ("Arabic", "ar"), ("Polish", "pl"),
-        ("Russian", "ru"), ("Ukrainian", "uk"), ("Swedish", "sv")
+        ("English", "en"), ("Automatic", "auto"), ("Spanish", "es"), ("French", "fr"),
+        ("German", "de"), ("Italian", "it"), ("Portuguese", "pt"), ("Dutch", "nl"),
+        ("Polish", "pl"), ("Russian", "ru"), ("Ukrainian", "uk"), ("Swedish", "sv"),
+        ("Japanese (proofreading only)", "ja"), ("Chinese (proofreading only)", "zh"),
+        ("Korean (proofreading only)", "ko"), ("Hindi (proofreading only)", "hi"),
+        ("Arabic (proofreading only)", "ar")
     ]
 
     var body: some View {
@@ -176,9 +180,11 @@ struct ServerPreferencesPage: View {
                     } header: { Text("Server models").textCase(nil) }
                 }
                 Section {
-                    Picker("Language", selection: $draft.language) {
+                    Picker("Proofreading language", selection: $draft.language) {
                         ForEach(languages, id: \.1) { name, code in Text(name).tag(code) }
                     }
+                    Text("Parakeet recognizes 25 European languages automatically. Use Automatic for other proofreading languages.")
+                        .font(.caption).foregroundStyle(InlayPalette.muted)
                     Toggle("Proofread with Qwen", isOn: $draft.textCorrectionEnabled)
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -200,16 +206,13 @@ struct ServerPreferencesPage: View {
                             .accessibilityLabel("Cleanup instructions")
                             .accessibilityIdentifier("preferences.cleanup-prompt")
                     }
-                    TextField("Recognition vocabulary", text: $draft.vocabulary, axis: .vertical)
-                        .lineLimit(3...5)
-                        .help("Names and specialized terms to help voice recognition.")
                 } header: { Text("Processing").textCase(nil) }
                 .disabled(!available)
 
                 Section {
                     Toggle("Keep original microphone audio", isOn: $draft.keepOriginalAudio)
                         .accessibilityIdentifier("preferences.keep-original")
-                    Text("Whisper audio is always kept. This also saves the original microphone audio for future dictations.")
+                    Text("Transcription audio is always kept. This also saves the original microphone audio for future dictations.")
                         .font(.caption)
                         .foregroundStyle(InlayPalette.muted)
                 } header: { Text("Shared history").textCase(nil) }

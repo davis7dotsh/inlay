@@ -32,8 +32,11 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
     INLAY_VAD_PATH: resolve(projectDirectory, "build/server/resources/silero-vad.bin"),
     INLAY_TEXT_ENGINE_PATH: resolve(projectDirectory, "build/server/helpers/inlay-text-engine"),
     INLAY_SPEECH_MODEL: isMac
-      ? resolve(homedir(), "Library/Application Support/Inlay/Models/ggml-large-v3-turbo.bin")
-      : resolve(directory, "models/ggml-large-v3-turbo.bin"),
+      ? resolve(
+          homedir(),
+          "Library/Application Support/Inlay/Models/ggml-parakeet-tdt-0.6b-v3-f16.bin",
+        )
+      : resolve(directory, "models/ggml-parakeet-tdt-0.6b-v3-f16.bin"),
     INLAY_TEXT_MODEL: isMac
       ? resolve(homedir(), ".inlay/models/Qwen3-4B-Instruct-2507-MLX-4bit")
       : resolve(directory, "models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
