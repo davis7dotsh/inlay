@@ -164,6 +164,7 @@ struct HistoryPage: View {
                     Label(sourceLabel(selected),
                           systemImage: selected.importedSource == nil ? "laptopcomputer" : "square.and.arrow.down")
                     if selected.importedSource == nil { Text(statusLabel(selected.status)) }
+                    if selected.delivery?.status == "cancelled" { Text("Not pasted") }
                     if let sourceStatus = selected.importedSource?.sourceStatus, !sourceStatus.isEmpty {
                         Text("Flow status: \(sourceStatus)")
                     }
@@ -249,6 +250,15 @@ struct HistoryPage: View {
                                 }
                             }
                         }
+                    }
+                    // Last, so the other buttons stay put when it appears or disappears.
+                    if selected.canTranscribeAgain {
+                        Button("Transcribe again") {
+                            controller.errorMessage = nil
+                            controller.retryGeneration(selected.id)
+                        }
+                        .disabled(controller.retryingGenerationIDs.contains(selected.id))
+                        .help("Transcribe the saved audio again. Nothing is pasted.")
                     }
                     Spacer()
                 }
@@ -484,5 +494,12 @@ private struct WisprFlowImportSheet: View {
             Button("Close") { dismiss() }
             Button("Try again") { controller.prepareWisprFlowImport() }
         }
+    }
+}
+
+private extension GenerationRecord {
+    /// Sealed audio outlives a failed or cancelled run on the server.
+    var canTranscribeAgain: Bool {
+        importedSource == nil && inferenceAudio != nil && (status == .failed || status == .cancelled)
     }
 }

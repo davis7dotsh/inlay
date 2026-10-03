@@ -178,6 +178,9 @@ export function createHTTPServer(service: GenerationService, token?: string) {
   app.post<{ Params: IDParams }>("/v1/generations/:id/cancel", (request) =>
     service.cancel(identifier(request.params.id)),
   );
+  app.post<{ Params: IDParams }>("/v1/generations/:id/retry", async (request, reply) =>
+    reply.code(202).send(await service.retry(identifier(request.params.id))),
+  );
   app.post<{ Params: IDParams }>("/v1/generations/:id/delivery", (request) =>
     service.recordDelivery(
       identifier(request.params.id),
