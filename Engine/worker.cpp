@@ -352,11 +352,11 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         if (argument == "--help") {
-            std::fputs("Usage: sotto-engine --model PATH --vad-model PATH [--threads 1..32]\nJSON lines on stdin and stdout; diagnostics only on stderr.\n", stderr);
+            std::fputs("Usage: inlay-engine --model PATH --vad-model PATH [--threads 1..32]\nJSON lines on stdin and stdout; diagnostics only on stderr.\n", stderr);
             return 0;
         }
         if ((argument != "--model" && argument != "--vad-model" && argument != "--threads") || i + 1 >= argc) {
-            emitError("Usage: sotto-engine --model PATH --vad-model PATH [--threads 1..32]");
+            emitError("Usage: inlay-engine --model PATH --vad-model PATH [--threads 1..32]");
             return 2;
         }
         const std::string value = argv[++i];
@@ -400,7 +400,7 @@ int main(int argc, char **argv) {
     const std::unique_ptr<whisper_vad_context, decltype(&whisper_vad_free)> vad(
         whisper_vad_init_from_file_with_params(vadModel.c_str(), vadParameters), whisper_vad_free);
     if (!vad) {
-        emitError("The local speech detector could not load. Rebuild Sotto to restore it.");
+        emitError("The local speech detector could not load. Rebuild Inlay to restore it.");
         return 1;
     }
     emit({{"type", "ready"}, {"engineVersion", whisper_version()}});

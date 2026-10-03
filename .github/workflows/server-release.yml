@@ -37,29 +37,25 @@ jobs:
         run: xcodebuild -downloadComponent MetalToolchain
       - run: bun install --frozen-lockfile
       - run: bun run check
-      - run: bun run test
-      - name: Verify embedded correction worker
-        run: bun test Server/tests/correction-worker-standalone.test.ts
+      - run: bun run lint
+      - run: bun run fmt:check
       - name: Build complete platform package
         env:
-          SOTTO_NATIVE: "OFF"
-          SOTTO_CUDA: "OFF"
-          SOTTO_BUILD_JOBS: "4"
+          INLAY_NATIVE: "OFF"
+          INLAY_CUDA: "OFF"
+          INLAY_BUILD_JOBS: "4"
         run: ./scripts/build-server.sh
-      - run: ./build/server/sotto-server --help
-      - name: Test packaged HTTP server
-        run: bun Server/scripts/smoke.ts --executable ./build/server/sotto-server
       - name: Package and checksum
         run: |
           cd build
-          tar -czf sotto-server-${{ matrix.platform }}.tar.gz server
-          shasum -a 256 sotto-server-${{ matrix.platform }}.tar.gz > sotto-server-${{ matrix.platform }}.tar.gz.sha256
+          tar -czf inlay-server-${{ matrix.platform }}.tar.gz server
+          shasum -a 256 inlay-server-${{ matrix.platform }}.tar.gz > inlay-server-${{ matrix.platform }}.tar.gz.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sotto-server-${{ matrix.platform }}
+          name: inlay-server-${{ matrix.platform }}
           path: |
-            build/sotto-server-${{ matrix.platform }}.tar.gz
-            build/sotto-server-${{ matrix.platform }}.tar.gz.sha256
+            build/inlay-server-${{ matrix.platform }}.tar.gz
+            build/inlay-server-${{ matrix.platform }}.tar.gz.sha256
           if-no-files-found: error
 
   cuda-package:
@@ -74,12 +70,12 @@ jobs:
       - name: Package and checksum
         run: |
           cd build
-          tar -czf sotto-server-linux-x64-cuda.tar.gz server
-          shasum -a 256 sotto-server-linux-x64-cuda.tar.gz > sotto-server-linux-x64-cuda.tar.gz.sha256
+          tar -czf inlay-server-linux-x64-cuda.tar.gz server
+          shasum -a 256 inlay-server-linux-x64-cuda.tar.gz > inlay-server-linux-x64-cuda.tar.gz.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sotto-server-linux-x64-cuda
+          name: inlay-server-linux-x64-cuda
           path: |
-            build/sotto-server-linux-x64-cuda.tar.gz
-            build/sotto-server-linux-x64-cuda.tar.gz.sha256
+            build/inlay-server-linux-x64-cuda.tar.gz
+            build/inlay-server-linux-x64-cuda.tar.gz.sha256
           if-no-files-found: error

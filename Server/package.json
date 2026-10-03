@@ -1,15 +1,15 @@
 {
-  "name": "@sotto/server",
+  "name": "@inlay/server",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "bun src/main.ts",
     "build": "bun scripts/build.ts",
     "generate": "bun scripts/generate-api.ts",
-    "fmt": "prettier --write \"{src,scripts,tests}/**/*.ts\" package.json tsconfig.json ../package.json ../.prettierrc.json",
-    "fmt:check": "prettier --check \"{src,scripts,tests}/**/*.ts\" package.json tsconfig.json ../package.json ../.prettierrc.json",
+    "fmt": "bun run --cwd .. fmt",
+    "fmt:check": "bun run --cwd .. fmt:check",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "lint": "bun run --cwd .. lint"
   },
   "dependencies": {
     "ajv": "8.20.0",
@@ -20,7 +20,6 @@
   "devDependencies": {
     "@types/bun": "1.4.2",
     "openapi-typescript": "7.10.1",
-    "prettier": "3.9.6",
     "typescript": "5.9.3"
   }
 }

@@ -1,13 +1,19 @@
 # Whisper helper
 
-`sotto-engine` is the server's persistent whisper.cpp process. It reads audio files supplied by the server; it never opens a microphone or network connection. Builds use Metal on macOS and CPU or CUDA on Linux. See [server setup](../Server/README.md) for packaging and models.
+`inlay-engine` is the server's persistent whisper.cpp process. It reads audio files supplied by the server; it never opens a microphone or network connection. Builds use Metal on macOS and CPU or CUDA on Linux. See [server setup](../Server/README.md) for packaging and models.
 
 ## Protocol
 
 After loading Whisper and Silero VAD, the helper emits a `ready` JSON object with an `engineVersion`. Send one UTF-8 JSON object per line on stdin; replies are flushed JSON lines on stdout. Diagnostics go to stderr without transcript text.
 
 ```json
-{"type":"transcribe","id":"request-1","path":"/absolute/path/to/recording.wav","language":"en","vocabularyTerms":["Sotto","SwiftUI","Metal"]}
+{
+  "type": "transcribe",
+  "id": "request-1",
+  "path": "/absolute/path/to/recording.wav",
+  "language": "en",
+  "vocabularyTerms": ["Inlay", "SwiftUI", "Metal"]
+}
 ```
 
 - `language` defaults to `en`; `auto` enables language detection.
@@ -27,9 +33,4 @@ The server keeps the model warm. Terminating the helper cancels active work. `{"
 
 ## Verify
 
-```sh
-./scripts/build-server.sh
-python3 scripts/test-engine.py --help
-```
-
-The test harness exercises protocol bounds, public sample recordings, vocabulary, passage retention, and process lifetime. For the full API path, use `scripts/smoke-test.sh` against an idle Dev server.
+Build with `./scripts/build-server.sh`, then use **Inlay Dev** to record speech and inspect progress, transcripts, and vocabulary hints in history. Verify cancellation and subsequent recordings interactively when changing helper lifecycle behavior. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.

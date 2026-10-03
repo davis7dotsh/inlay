@@ -1,15 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(SottoEngine LANGUAGES C CXX)
+    project(InlayEngine LANGUAGES C CXX)
 endif()
 
 if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(FATAL_ERROR "Sotto's server supports macOS and Linux.")
+    message(FATAL_ERROR "Inlay's server supports macOS and Linux.")
 endif()
 
 # Keep Whisper's ggml independent from the text helper's version.
-option(SOTTO_CUDA "Use CUDA for Linux inference" OFF)
+option(INLAY_CUDA "Use CUDA for Linux inference" OFF)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -28,10 +28,10 @@ else()
     set(GGML_METAL OFF CACHE BOOL "" FORCE)
     set(GGML_ACCELERATE OFF CACHE BOOL "" FORCE)
     set(GGML_BLAS OFF CACHE BOOL "" FORCE)
-    set(GGML_CUDA ${SOTTO_CUDA} CACHE BOOL "" FORCE)
+    set(GGML_CUDA ${INLAY_CUDA} CACHE BOOL "" FORCE)
     # Static cudart/cublas so the tarball does not need /usr/local/cuda.
     # libcuda.so.1 still comes from the host driver. Do not pull in NCCL.
-    if(SOTTO_CUDA)
+    if(INLAY_CUDA)
         set(GGML_STATIC ON CACHE BOOL "" FORCE)
         set(GGML_CUDA_NCCL OFF CACHE BOOL "" FORCE)
     endif()
@@ -44,10 +44,10 @@ if(NOT EXISTS "${WHISPER_SOURCE}/include/whisper.h")
 endif()
 add_subdirectory("${WHISPER_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/whisper")
 
-add_executable(sotto-engine worker.cpp)
-target_compile_features(sotto-engine PRIVATE cxx_std_17)
-target_compile_options(sotto-engine PRIVATE -Wall -Wextra -Wpedantic)
-target_include_directories(sotto-engine SYSTEM PRIVATE "${WHISPER_SOURCE}/examples")
-target_link_libraries(sotto-engine PRIVATE whisper Threads::Threads)
-set_target_properties(sotto-engine PROPERTIES
+add_executable(inlay-engine worker.cpp)
+target_compile_features(inlay-engine PRIVATE cxx_std_17)
+target_compile_options(inlay-engine PRIVATE -Wall -Wextra -Wpedantic)
+target_include_directories(inlay-engine SYSTEM PRIVATE "${WHISPER_SOURCE}/examples")
+target_link_libraries(inlay-engine PRIVATE whisper Threads::Threads)
+set_target_properties(inlay-engine PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Engine")
