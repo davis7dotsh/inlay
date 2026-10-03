@@ -2,7 +2,7 @@ import Foundation
 @_exported import InlayDomain
 
 public enum InlayAPI {
-    public static let version = 2
+    public static let version = 3
     public static let defaultPort = 8391
     public static let maximumRecordingSeconds = 180
     public static let maximumChunkBytes = 1_048_576
@@ -158,8 +158,12 @@ public struct FinishGenerationRequest: Codable, Sendable {
     public var inferenceFrames: Int64
     public var originalFrames: Int64?
     public var continuationID: UUID?
-    public init(inferenceFrames: Int64, originalFrames: Int64? = nil, continuationID: UUID? = nil) {
+    /// Whisper hints read from the destination window; screen text itself stays on the Mac.
+    public var screenContextTerms: [String]?
+    public init(inferenceFrames: Int64, originalFrames: Int64? = nil, continuationID: UUID? = nil,
+                screenContextTerms: [String]? = nil) {
         self.inferenceFrames = inferenceFrames; self.originalFrames = originalFrames; self.continuationID = continuationID
+        self.screenContextTerms = screenContextTerms
     }
 }
 
@@ -343,6 +347,7 @@ public struct GenerationRecord: Codable, Equatable, Sendable, Identifiable {
     public var speech: ModelProvenance?
     public var proofreading: ModelProvenance?
     public var textProcessing: TextProcessingRecord?
+    public var screenContextTerms: [String]?
     public var recognitionHints: ModelHintUsage?
     public var proofreadingHints: ModelHintUsage?
     public var formattingRejectionReason: String?

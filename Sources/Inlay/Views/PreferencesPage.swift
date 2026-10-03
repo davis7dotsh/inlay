@@ -18,6 +18,16 @@ private struct DevicePreferencesForm: View {
     @State private var deviceName = ""
     @State private var showingDiagnostics = false
 
+    /// Screen hints need Screen Recording to capture and Accessibility to find the focused window.
+    private var screenContextWarning: String? {
+        guard controller.useScreenContext else { return nil }
+        if !controller.permissions.screenRecording {
+            return "Allow Screen Recording below, then reopen \(InlayBuild.current.displayName)."
+        }
+        return controller.permissions.accessibility ? nil
+            : "Allow Accessibility below so screen hints can find the window you are dictating into."
+    }
+
     var body: some View {
         Form {
             Section {
@@ -70,6 +80,14 @@ private struct DevicePreferencesForm: View {
                 }
                 Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
                     .accessibilityIdentifier("preferences.mute-output")
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Use on-screen words as vocabulary hints", isOn: $controller.useScreenContext)
+                        .accessibilityIdentifier("preferences.screen-context")
+                    Text(screenContextWarning
+                         ?? "Reads the focused window on this Mac when a take starts. Only unusual names and terms are sent to the server; screenshots and screen text are not.")
+                        .font(.caption)
+                        .foregroundStyle(screenContextWarning == nil ? InlayPalette.muted : InlayPalette.warning)
+                }
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
                     Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
@@ -82,6 +100,11 @@ private struct DevicePreferencesForm: View {
                               reviewGranted: true, action: controller.requestMicrophone)
                 PermissionRow(title: "Accessibility", detail: "Recognize your dictation key and insert text.", granted: controller.permissions.accessibility,
                               reviewGranted: true, action: controller.requestAccessibility)
+                if controller.useScreenContext {
+                    PermissionRow(title: "Screen Recording", detail: "Read on-screen words for vocabulary hints.",
+                                  granted: controller.permissions.screenRecording, reviewGranted: true,
+                                  action: controller.requestScreenRecording)
+                }
                 HStack {
                     PermissionHelpButton()
                     Spacer()

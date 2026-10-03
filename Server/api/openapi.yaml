@@ -2,13 +2,13 @@
 openapi: "3.1.0"
 info:
   title: "Inlay API"
-  version: "2.0.0"
+  version: "3.0.0"
   description: "Shared transport contract for the Swift client and TypeScript server. Optional properties are omitted rather than encoded as null. Dates use whole-second ISO8601 UTC timestamps."
 servers:
   - url: "http://localhost:8391"
 security:
   - bearerAuth: []
-x-inlay-apiVersion: 2
+x-inlay-apiVersion: 3
 x-inlay-defaultPort: 8391
 x-inlay-maximumRecordingSeconds: 180
 x-inlay-maximumChunkBytes: 1048576
@@ -755,8 +755,20 @@ components:
           format: "int64"
         continuationID:
           "$ref": "#/components/schemas/UUID"
+        screenContextTerms:
+          "$ref": "#/components/schemas/ScreenContextTerms"
       required:
         - "inferenceFrames"
+    ScreenContextTerms:
+      type: "array"
+      maxItems: 40
+      uniqueItems: true
+      description: "Unusual words the client read from the window being dictated into. They follow shared vocabulary as Whisper hints; recognized screen text itself stays on the client."
+      items:
+        type: "string"
+        minLength: 2
+        maxLength: 64
+        pattern: "^\\S(?:.*\\S)?$"
     AudioArtifact:
       type: "object"
       additionalProperties: false
@@ -1164,6 +1176,8 @@ components:
           "$ref": "#/components/schemas/ModelProvenance"
         textProcessing:
           "$ref": "#/components/schemas/TextProcessingRecord"
+        screenContextTerms:
+          "$ref": "#/components/schemas/ScreenContextTerms"
         recognitionHints:
           "$ref": "#/components/schemas/ModelHintUsage"
         proofreadingHints:
