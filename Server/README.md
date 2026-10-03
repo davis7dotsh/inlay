@@ -21,7 +21,7 @@ sudo install -d -o inlay -g inlay -m 700 /etc/inlay
 sudo tar -xzf inlay-server-linux-x64-cuda.tar.gz -C /opt/inlay --strip-components=1 --no-same-owner
 ```
 
-Place the pinned files at `/var/lib/inlay/models/ggml-large-v3-turbo.bin` and `/var/lib/inlay/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf` so `inlay` can read them. Install a token of at least 32 characters, with no whitespace, at `/etc/inlay/token`, owned by `inlay`, with mode `0600`:
+Place the pinned files at `/var/lib/inlay/models/ggml-parakeet-tdt-0.6b-v3-f16.bin` and `/var/lib/inlay/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf` so `inlay` can read them. Install a token of at least 32 characters, with no whitespace, at `/etc/inlay/token`, owned by `inlay`, with mode `0600`:
 
 ```sh
 printf '%s' 'replace-with-a-token-of-at-least-32-characters' | sudo install -o inlay -g inlay -m 600 /dev/stdin /etc/inlay/token

@@ -14,7 +14,7 @@ Environment=INLAY_SERVER_TOKEN_FILE=/etc/inlay/token
 Environment=INLAY_ENGINE_PATH=/opt/inlay/helpers/inlay-engine
 Environment=INLAY_TEXT_ENGINE_PATH=/opt/inlay/helpers/inlay-text-engine
 Environment=INLAY_VAD_PATH=/opt/inlay/resources/silero-vad.bin
-Environment=INLAY_SPEECH_MODEL=/var/lib/inlay/models/ggml-large-v3-turbo.bin
+Environment=INLAY_SPEECH_MODEL=/var/lib/inlay/models/ggml-parakeet-tdt-0.6b-v3-f16.bin
 Environment=INLAY_TEXT_MODEL=/var/lib/inlay/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 Restart=on-failure
 NoNewPrivileges=yes
