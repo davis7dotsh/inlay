@@ -1267,7 +1267,8 @@ final class InlayController: ObservableObject {
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.willPowerOffNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) {
                 [weak self] _ in MainActor.assumeIsolated {
-                    self?.djiSuspensions.insert(name.rawValue)
+                    // Power-off has no resume notification if it is cancelled.
+                    if name != NSWorkspace.willPowerOffNotification { self?.djiSuspensions.insert(name.rawValue) }
                     self?.restForSystem()
                 }
             })
