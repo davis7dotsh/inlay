@@ -132,7 +132,11 @@ public actor NativeInference {
     }
 
     public func warmUp(proofreadingEnabled: Bool = true) async throws {
-        _ = try await verifier.verify(configuration.speechModel, pin: speechPin)
+        do { _ = try await verifier.verify(configuration.speechModel, pin: speechPin) }
+        catch InferenceError.unavailable {
+            // Earlier installs still point at Whisper weights; say how to replace them.
+            throw InferenceError.unavailable("The speech model must be Parakeet v3. Run scripts/download-model.sh.")
+        }
         try await speech.ensureLoaded()
         if proofreadingEnabled {
             _ = try await verifier.verify(configuration.proofModel, pin: proofPin)

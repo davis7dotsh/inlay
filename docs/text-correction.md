@@ -8,7 +8,7 @@ Edit **Server preferences**, then **Save shared preferences**. All dictionary li
 
 - Preferred spellings normalize case. Explicit aliases replace whole words or phrases, such as `mini max → MiniMax`. Longer matches win, and replacements do not cascade.
 - Use narrow aliases like `off middleware → auth middleware`; a broad `off → auth` also changes legitimate “turn off.”
-- Star priority terms to suggest them to Qwen first. Parakeet does not support recognition vocabulary prompts; history reports those terms as unused with a zero token budget. Dictionary replacements and Qwen’s bounded hint budget still apply.
+- Star priority terms to suggest them to Qwen first. Parakeet does not support recognition vocabulary prompts, so the server sends none. Dictionary replacements and Qwen’s bounded hint budget still apply.
 - Saved recognition vocabulary remains in existing settings for compatibility, but Parakeet does not consume it. Use dictionary rules for deterministic replacements and dictionary names for Qwen cleanup.
 - The initial Personal list contains MiniMax and Codex. You can delete them or save an empty dictionary. There is no automatic learning from edits or history.
 

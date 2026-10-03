@@ -211,7 +211,8 @@ struct HistoryPage: View {
                                 }
                             }
                         }
-                        if let hints = selected.recognitionHints, !hints.omittedTerms.isEmpty {
+                        // Parakeet takes no vocabulary prompt; its takes report a zero budget.
+                        if let hints = selected.recognitionHints, hints.tokenBudget != 0, !hints.omittedTerms.isEmpty {
                             hintDetails("Voice vocabulary", hints: hints)
                         }
                         if let hints = selected.proofreadingHints, !hints.omittedTerms.isEmpty {
@@ -302,7 +303,7 @@ struct HistoryPage: View {
     }
 
     private func hintDetails(_ title: String, hints: ModelHintUsage) -> some View {
-        DisclosureGroup(hints.tokenBudget == 0 ? "\(title): unavailable with Parakeet" : "\(title): \(hints.omittedTerms.count) terms did not fit") {
+        DisclosureGroup("\(title): \(hints.omittedTerms.count) terms did not fit") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Used: \(hints.includedTerms.isEmpty ? "None" : hints.includedTerms.joined(separator: ", "))")
                 Text("Unused: \(hints.omittedTerms.joined(separator: ", "))")

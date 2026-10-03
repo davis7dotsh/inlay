@@ -49,7 +49,8 @@ public actor GenerationService {
     private var activeTask: Task<Void, Never>?
     private var warmTask: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
-    private var speechLoadFailed = false
+    /// Why the last warmup could not load speech; nil once it loads.
+    private var speechLoadError: String?
     private var warming = false
     private var stopping = false
     private var subscribers: [UUID: [UUID: AsyncStream<GenerationRecord>.Continuation]] = [:]
@@ -162,12 +163,11 @@ public actor GenerationService {
         let state = await inference.readiness(proofreadingEnabled: false)
         let writable = FileManager.default.isWritableFile(atPath: configuration.dataDirectory.path) && (try? requireDiskSpace()) != nil
         // Queue recordings through a reload, but not behind a helper that failed to start.
-        let unloadable = speechLoadFailed && !state.speechLoaded
-        let ready = !stopping && state.available && writable && !unloadable
+        let failure = state.speechLoaded ? nil : speechLoadError
+        let ready = !stopping && state.available && writable && failure == nil
         let message = stopping ? "The server is shutting down." : (!writable ? "Server storage is unavailable or full." :
             (ready ? (state.speechLoaded ? "Server ready." : "Loading server models; recordings will queue.") :
-                (unloadable ? "Speech model failed to load." :
-                    (warming ? "Loading server models…" : "Server models are unavailable."))))
+                (failure ?? (warming ? "Loading server models…" : "Server models are unavailable."))))
         if !state.speechLoaded, !warming, activeID == nil { beginWarmup() }
         return ServerHealth(isDev: configuration.development, ready: ready,
             speech: ModelRuntimeInfo(modelID: "parakeet-tdt-0.6b-v3", backend: Self.speechBackend, ready: state.speechLoaded),
@@ -200,9 +200,9 @@ public actor GenerationService {
         }
         if let existing = records.values.first(where: { $0.requestID == request.requestID && $0.device.id == request.device.id }) { return existing }
         let state = await inference.readiness(proofreadingEnabled: false)
-        guard state.available else { beginWarmup(); throw ServiceError(503, "server_unavailable", state.message) }
-        guard !speechLoadFailed || state.speechLoaded else {
-            beginWarmup(); throw ServiceError(503, "server_unavailable", "Speech model failed to load.")
+        let failure = state.speechLoaded ? nil : speechLoadError
+        guard state.available, failure == nil else {
+            beginWarmup(); throw ServiceError(503, "server_unavailable", failure ?? state.message)
         }
         if !state.speechLoaded { beginWarmup() }
         // Readiness suspends the actor; recheck shutdown and duplicate requests.
@@ -731,9 +731,9 @@ public actor GenerationService {
             let settings = record.settings.preferences
             record.status = .transcribing
             try save(record)
-            let vocabulary = settings.dictionary.recognitionVocabularyTerms(settings.vocabulary)
+            // Parakeet has no vocabulary prompt; dictionary rules apply after recognition.
             let speech = try await inference.transcribe(directory(id).appendingPathComponent("inference.wav"),
-                language: settings.language, vocabularyTerms: vocabulary,
+                language: settings.language, vocabularyTerms: [],
                 onProgress: { [weak self] value in Task { await self?.progress(id, value) } })
             try Task.checkCancellation()
             guard try get(id).status == .transcribing else { return }
@@ -1175,16 +1175,23 @@ public actor GenerationService {
         let enabled = preferences.preferences.textCorrectionEnabled
         warmTask = Task { [weak self, inference] in
             // A cancelled take or shutdown can interrupt loading; that is not a failure.
-            var failed: Bool?
-            do { try await inference.warmUp(proofreadingEnabled: enabled); failed = false }
+            var settled = false
+            var failure: String?
+            do { try await inference.warmUp(proofreadingEnabled: enabled); settled = true }
             catch InferenceError.cancelled {} catch is CancellationError {}
-            catch { failed = await !inference.readiness(proofreadingEnabled: false).speechLoaded }
-            await self?.warmupFinished(speechLoadFailed: failed)
+            catch {
+                settled = true
+                if await !inference.readiness(proofreadingEnabled: false).speechLoaded {
+                    if case InferenceError.unavailable(let message) = error { failure = message }
+                    else { failure = "Speech model failed to load." }
+                }
+            }
+            await self?.warmupFinished(settled: settled, speechLoadError: failure)
         }
     }
-    private func warmupFinished(speechLoadFailed failed: Bool?) {
+    private func warmupFinished(settled: Bool, speechLoadError failure: String?) {
         warming = false; warmTask = nil
-        if let failed { speechLoadFailed = failed }
+        if settled { speechLoadError = failure }
     }
     private static var speechBackend: String {
         #if os(macOS)

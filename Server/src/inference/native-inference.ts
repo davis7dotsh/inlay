@@ -229,7 +229,17 @@ export class NativeInference implements InferenceBackend {
   }
 
   async warmUp(proofreadingEnabled = true, signal?: AbortSignal) {
-    await this.verifier.verify(this.configuration.speechModel, this.speechPin, signal);
+    try {
+      await this.verifier.verify(this.configuration.speechModel, this.speechPin, signal);
+    } catch (error) {
+      // Earlier installs still point at Whisper weights; say how to replace them.
+      if (error instanceof InferenceError && error.code === "unavailable")
+        throw new InferenceError(
+          "unavailable",
+          "The speech model must be Parakeet v3. Run scripts/download-model.sh.",
+        );
+      throw error;
+    }
     await this.speech.ensureLoaded(signal);
     if (proofreadingEnabled) {
       await this.verifier.verify(this.configuration.proofModel, this.proofPin, signal);
