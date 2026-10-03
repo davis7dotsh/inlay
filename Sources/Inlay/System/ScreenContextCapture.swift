@@ -59,7 +59,7 @@ final class ScreenContextCapture {
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
               let image = await windowImage(of: app.processIdentifier), !Task.isCancelled else { return [] }
         let recognition = Task.detached(priority: .userInitiated) {
-            Task.isCancelled ? [] : (try? ScreenContext.recognizeLines(in: image)) ?? []
+            (try? await ScreenContext.recognizeLines(in: image)) ?? []
         }
         let lines = await withTaskCancellationHandler { await recognition.value } onCancel: { recognition.cancel() }
         guard !Task.isCancelled else { return [] }

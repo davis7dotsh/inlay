@@ -13,11 +13,15 @@ public enum ScreenContext {
 
     /// On-device text recognition. Language correction is off so unusual names keep
     /// their on-screen spelling instead of being "fixed" into dictionary words.
-    public static func recognizeLines(in image: CGImage) throws -> [String] {
+    public static func recognizeLines(in image: CGImage) async throws -> [String] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false
-        try VNImageRequestHandler(cgImage: image).perform([request])
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try VNImageRequestHandler(cgImage: image).perform([request])
+            try Task.checkCancellation()
+        } onCancel: { request.cancel() }
         return (request.results ?? []).compactMap { observation in
             guard let candidate = observation.topCandidates(1).first, candidate.confidence >= 0.4 else { return nil }
             return candidate.string
@@ -59,8 +63,7 @@ public enum ScreenContext {
             for chunk in line.split(whereSeparator: \.isWhitespace) {
                 defer { sentenceStart = chunk.last.map { ".!?:".contains($0) } ?? false }
                 // Skip emails, URLs, domains, and paths whole rather than leaking their parts.
-                guard !chunk.contains(where: { "@/\\".contains($0) }),
-                      chunk.lowercased().firstMatch(of: webAddressPattern) == nil else { continue }
+                guard !chunk.contains(where: { "@/\\".contains($0) }), !isWebAddress(chunk) else { continue }
                 for (index, match) in chunk.matches(of: tokenPattern).enumerated() {
                     remaining -= 1
                     if remaining < 0 { break lines }
@@ -87,8 +90,29 @@ public enum ScreenContext {
     /// Identifier-like runs: letters and digits joined by dots, underscores, hyphens, or apostrophes.
     private static let tokenPattern = #/[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}_+#]|[.\-'’](?=[\p{L}\p{N}]))*/#
 
-    private static let webAddressPattern =
-        #/^\W*(?:www\.|(?:[a-z0-9-]+\.)+(?:com|org|net|io|ai|dev|app|co|me|so|sh|gg|ly|tv|xyz|info|biz|gov|edu|us|uk|ca|au|nz|de|fr|nl|eu|in)\W*$)/#
+    private static let domainPattern = #/(?:[\p{L}\p{N}-]+\.)+([\p{L}]{2,24})/#
+    private static let commonTopLevelDomains: Set<String> = [
+        "com", "org", "net", "io", "ai", "dev", "app", "co", "me", "so", "sh", "gg", "ly", "tv", "xyz", "info", "biz",
+        "gov", "edu", "us", "uk", "ca", "au", "nz", "de", "fr", "nl", "eu", "in", "design", "site", "tech", "cloud",
+    ]
+    private static let fileExtensions: Set<String> = [
+        "c", "cc", "cpp", "cs", "css", "csv", "go", "h", "hpp", "html", "java", "js", "json", "jsx", "kt", "lock", "log",
+        "m", "md", "mjs", "pdf", "plist", "png", "py", "rb", "rs", "sh", "sql", "swift", "toml", "ts", "tsx", "txt",
+        "xml", "yaml", "yml",
+    ]
+
+    /// Domains are dropped whether written with a port, query, or fragment. A lowercase
+    /// dotted name counts as a domain unless it ends in a source-file extension, so
+    /// identifiers such as whisper.cpp, README.md, or Stripe.Event survive.
+    private static func isWebAddress(_ chunk: Substring) -> Bool {
+        let host = chunk.trimmingCharacters(in: .punctuationCharacters.union(.symbols))
+            .split(whereSeparator: { ":?#".contains($0) }).first.map(String.init) ?? ""
+        if host.lowercased().hasPrefix("www.") { return true }
+        guard let match = host.wholeMatch(of: domainPattern) else { return false }
+        let suffix = String(match.output.1).lowercased()
+        if commonTopLevelDomains.contains(suffix) && !fileExtensions.contains(suffix) { return true }
+        return host == host.lowercased() && !fileExtensions.contains(suffix)
+    }
 
     private static func normalized(_ token: String) -> String? {
         var token = token
