@@ -7,6 +7,36 @@ The server is an independent TypeScript/Fastify HTTP process that owns models, s
 | Apple Silicon macOS   | Parakeet TDT 0.6B v3 / whisper.cpp / Metal       | Qwen3-4B-Instruct-2507 / Swift MLX / 4-bit  |
 | Linux x86_64 or ARM64 | Parakeet TDT 0.6B v3 / whisper.cpp / CPU or CUDA | Qwen3-4B-Instruct-2507 / llama.cpp / Q4_K_M |
 
+## Linux
+
+The `Server release packages` workflow builds `inlay-server-linux-x64-cuda.tar.gz` as a workflow artifact on `server-v*` tags and manual dispatch. Download the `inlay-server-linux-x64-cuda` artifact from the Actions run and unzip it to get the tarball and its checksum. The package targets SM 80, 86, 89, 90, 120, and 121; Tesla T4 and RTX 20-series (SM 75) will not run it. The helpers link the CUDA runtime statically and load `libcuda.so.1` from the host driver, which must be 580.95.05 or newer for CUDA 13.0.2. Keep model weights outside the package.
+
+The unit runs as the `inlay` user and listens on `127.0.0.1:8391`. For remote clients, put it behind an HTTPS reverse proxy or bind it to the host's Tailscale IP with a `sudo systemctl edit inlay-server` override (`Environment=INLAY_SERVER_HOST=100.x.y.z`); see [remote access](#remote-access). The `inlay` user must be able to open the host NVIDIA device nodes; if they are group-accessible only, add `inlay` to that group (usually `render` or `video`).
+
+```sh
+sudo useradd --system --user-group --home /var/lib/inlay --shell /usr/sbin/nologin inlay
+sudo mkdir -p /opt/inlay
+sudo install -d -o inlay -g inlay -m 750 /var/lib/inlay /var/lib/inlay/models
+sudo install -d -o inlay -g inlay -m 700 /etc/inlay
+sudo tar -xzf inlay-server-linux-x64-cuda.tar.gz -C /opt/inlay --strip-components=1 --no-same-owner
+```
+
+Place the pinned files at `/var/lib/inlay/models/ggml-parakeet-tdt-0.6b-v3-f16.bin` and `/var/lib/inlay/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf` so `inlay` can read them. Install a token of at least 32 characters, with no whitespace, at `/etc/inlay/token`, owned by `inlay`, with mode `0600`:
+
+```sh
+printf '%s' 'replace-with-a-token-of-at-least-32-characters' | sudo install -o inlay -g inlay -m 600 /dev/stdin /etc/inlay/token
+```
+
+Linux packages (CPU and CUDA) include `inlay-server.service`. Install it outside the package:
+
+```sh
+sudo cp /opt/inlay/inlay-server.service /etc/systemd/system/inlay-server.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now inlay-server
+```
+
+To update, stop the service, replace `/opt/inlay`, copy the packaged unit to `/etc/systemd/system` again, run `sudo systemctl daemon-reload`, and start it. Keep local changes in `systemctl edit` overrides so updates do not replace them. Weights and history under `/var/lib/inlay` stay put.
+
 ## Models
 
 Run these commands from the repository root. Weights use about 4 GB of disk; runtime memory also includes model state and inference buffers. The server verifies pinned files before loading and keeps models warm. It does not download large weights automatically.
@@ -73,7 +103,7 @@ bun run build:server --all               # Mac arm64, Linux x64 and Linux arm64
 
 Cross builds live under `build/server-coordinators`. Bun cross-compiles the coordinator; complete installation archives combine it with helpers built on each matching platform. Installed packages need neither Bun nor Node. Full Linux release packages target Ubuntu 24.04 or a compatible glibc/libstdc++ environment; Mac packages require Apple Silicon and macOS 14+. Linux x64 coordinators use Bun's baseline CPU target. Native helper CPU/CUDA compatibility remains determined by its CMake build flags.
 
-The release workflow produces complete platform tarballs and SHA-256 checksums. Extract a package, retain its `server` directory together, install the pinned model weights separately, then use the arguments below. Developer ID distribution still requires signing/notarization credentials; the draft Mac build is ad-hoc signed with Bun's executable entitlements.
+The release workflow produces complete platform tarballs and SHA-256 checksums, including the Linux CUDA package above. Extract a package, retain its `server` directory together, install the pinned model weights separately, then use the arguments below. Developer ID distribution still requires signing/notarization credentials; the draft Mac build is ad-hoc signed with Bun's executable entitlements.
 
 The archive lock uses Bun FFI to call libc `flock`, matching the reference Swift server. The lock is held for the server process lifetime. A running Swift server and Bun server must never share a data directory.
 
@@ -130,7 +160,7 @@ docker build -f Server/Dockerfile --target cpu -t inlay-server:cpu .
 docker build -f Server/Dockerfile --target cuda -t inlay-server:cuda .
 ```
 
-`CUDA_ARCHITECTURES`, `CUDA_IMAGE`, `BUN_IMAGE`, `UBUNTU_IMAGE`, and `BUILD_JOBS` are build arguments. Choose CUDA architectures/toolkit/driver versions for your GPU. GPU containers require NVIDIA Container Toolkit and `--gpus all`; Linux containers on a Mac do not have Metal access.
+`--target cpu` is the portable no-GPU image, and it is what an unqualified `docker build` selects. `--target cuda` is the container fallback when the host cannot place a matching CUDA 13.0.2 runtime next to the binary: that image copies the toolkit and sets `LD_LIBRARY_PATH`. `CUDA_ARCHITECTURES`, `CUDA_IMAGE`, `BUN_IMAGE`, `UBUNTU_IMAGE`, and `BUILD_JOBS` are build arguments. Choose CUDA architectures/toolkit/driver versions for your GPU. GPU containers require NVIDIA Container Toolkit and `--gpus all`; Linux containers on a Mac do not have Metal access.
 
 Mount a directory containing the Parakeet `.bin` and Qwen `.gguf` files, plus a token file:
 
@@ -143,7 +173,7 @@ docker run --rm --name inlay-server \
   inlay-server:cpu
 ```
 
-For a GPU server, use `inlay-server:cuda` and add `--gpus all`. The example exposes only host loopback; use the remote-access setup above for clients on other machines. The container runs as UID 10001, which must be able to read model/token files and write `/data`. The named volume preserves history across container replacement.
+The example is the no-GPU image and exposes only host loopback; use the remote-access setup above for clients on other machines. For the container fallback, use `inlay-server:cuda` and add `--gpus all`. The container runs as UID 10001, which must be able to read model/token files and write `/data`. The named volume preserves history across container replacement.
 
 ## Development and verification
 
