@@ -11,7 +11,7 @@ The server is an independent TypeScript/Fastify HTTP process that owns models, s
 
 The `Server release packages` workflow builds `inlay-server-linux-x64-cuda.tar.gz` as a workflow artifact on `server-v*` tags and manual dispatch. Download the `inlay-server-linux-x64-cuda` artifact from the Actions run and unzip it to get the tarball and its checksum. The package targets SM 80, 86, 89, 90, 120, and 121; Tesla T4 and RTX 20-series (SM 75) will not run it. The helpers link the CUDA runtime statically and load `libcuda.so.1` from the host driver, which must be 580.95.05 or newer for CUDA 13.0.2. Keep model weights outside the package.
 
-The unit listens on `0.0.0.0` as the `inlay` user. That user must be able to open the host NVIDIA device nodes; if they are group-accessible only, add `inlay` to that group (usually `render` or `video`).
+The unit runs as the `inlay` user and listens on `127.0.0.1:8391`. For remote clients, put it behind an HTTPS reverse proxy or bind it to the host's Tailscale IP with a `sudo systemctl edit inlay-server` override (`Environment=INLAY_SERVER_HOST=100.x.y.z`); see [remote access](#remote-access). The `inlay` user must be able to open the host NVIDIA device nodes; if they are group-accessible only, add `inlay` to that group (usually `render` or `video`).
 
 ```sh
 sudo useradd --system --user-group --home /var/lib/inlay --shell /usr/sbin/nologin inlay
@@ -27,7 +27,7 @@ Place the pinned files at `/var/lib/inlay/models/ggml-parakeet-tdt-0.6b-v3-f16.b
 printf '%s' 'replace-with-a-token-of-at-least-32-characters' | sudo install -o inlay -g inlay -m 600 /dev/stdin /etc/inlay/token
 ```
 
-Linux packages (CPU and CUDA) include `inlay-server.service`. Install that unit once, outside the package:
+Linux packages (CPU and CUDA) include `inlay-server.service`. Install it outside the package:
 
 ```sh
 sudo cp /opt/inlay/inlay-server.service /etc/systemd/system/inlay-server.service
@@ -35,7 +35,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now inlay-server
 ```
 
-To update, stop the service, replace `/opt/inlay`, and start it again. Weights and history under `/var/lib/inlay` stay put, and so does the installed unit.
+To update, stop the service, replace `/opt/inlay`, copy the packaged unit to `/etc/systemd/system` again, run `sudo systemctl daemon-reload`, and start it. Keep local changes in `systemctl edit` overrides so updates do not replace them. Weights and history under `/var/lib/inlay` stay put.
 
 ## Models
 
