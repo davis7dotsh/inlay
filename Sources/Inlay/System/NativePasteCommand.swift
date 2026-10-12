@@ -119,8 +119,8 @@ struct NativePasteCommandDiscovery<Element> {
             }
             queue.append(contentsOf: descendants.map { ($0, depth + 1) })
         }
-        // A candidate found before a timeout is not unique. Skipped menus are
-        // accepted: invocation re-checks the item is Cmd-V before pressing it.
+        // A candidate found before a timeout is not unique. Skipped menus were
+        // never read, so uniqueness covers only the menus that were.
         guard !isCancelled(), now() < deadline else { return nil }
         return candidate
     }
