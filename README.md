@@ -6,7 +6,7 @@ The dev runner builds **Inlay Dev**, with separate settings and visible Dev labe
 
 ## Get started on one Mac
 
-You need Apple Silicon, macOS 14+, full Xcode 26+ with the Metal compiler, Bun 1.4.2, CMake, and Git. Xcode provides Swift; the client/MLX build requires Swift 6.2+. Bun manages JavaScript dependencies and builds standalone server executables.
+The app runs on Apple Silicon and macOS 14 or later. `Package.swift` and `LSMinimumSystemVersion` both set that floor to 14.0. Building requires a Mac: `scripts/build-app.sh` exits on Linux and other systems. The build needs full Xcode 26 or later, including the Metal compiler, because the client and the MLX helper require Swift 6.2+. You also need Bun 1.4.2, CMake, and Git. Xcode provides Swift. Bun manages JavaScript dependencies and builds standalone server executables. Linux can build and run the server; it cannot build `Inlay.app`.
 
 ```sh
 git clone --recurse-submodules https://github.com/davis7dotsh/inlay.git
@@ -23,7 +23,7 @@ export INLAY_TEXT_MODEL="$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
 
 Use your own model paths if they are already installed. The script builds the server and client, starts **http://localhost:8391**, and opens `build/Inlay Dev.app`. The first build fetches dependencies and the small Silero speech detector.
 
-1. Grant **Inlay Dev** Microphone and Accessibility permissions.
+1. Grant **Inlay Dev** Microphone and Accessibility. The window treats those two as required. Accessibility also listens for the dictation key, so do not add a separate Input Monitoring grant. Microphone is under **System Settings → Privacy & Security → Microphone**. Accessibility is under **Privacy & Security → Accessibility**, except on macOS 27 and later, where that list is **Privacy & Security → Device Control and Data Access**. If the server is on another machine, allow **Local Network** when macOS asks.
 2. Wait for the server to be ready. Focus a text field, hold **Right Option**, speak, and release.
 3. Change the shortcut under **This Mac**, choose inputs under **Microphone**, and edit shared cleanup instructions or dictionary entries under **Server preferences**.
 
@@ -58,7 +58,14 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-This listens on `0.0.0.0:8392`, uses `.local/dev-server/data`, and creates a private token file at `.local/dev-server/token`. Set the model-path exports above and build the native helpers once with `./scripts/build-server.sh` for dictation. Without helpers/models, the server still starts and health reports unavailable inference. On the same Mac, open [server health](http://localhost:8392/v1/health).
+This listens on `0.0.0.0:8392`, uses `.local/dev-server/data`, and creates a private token file at `.local/dev-server/token`. Build the native helpers once with `./scripts/build-server.sh` for dictation. On macOS, export the Parakeet and MLX paths from the Mac setup above. On Linux, keep the Parakeet path and point `INLAY_TEXT_MODEL` at the GGUF file instead:
+
+```sh
+export INLAY_SPEECH_MODEL="$PWD/.local/models/ggml-parakeet-tdt-0.6b-v3-f16.bin"
+export INLAY_TEXT_MODEL="$PWD/.local/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+```
+
+The MLX directory does not run on Linux. If those variables are unset, `bun run dev` looks under `~/Library/Application Support/Inlay/Models` and `~/.inlay/models` on macOS, and under `.local/dev-server/models` on Linux. Without helpers or models, the server still starts and health reports unavailable inference. On the same Mac, open [server health](http://localhost:8392/v1/health).
 
 ```sh
 bun run fmt
@@ -75,16 +82,20 @@ For the packaged Mac app and server:
 ./scripts/run-dev.sh start --skip-build   # Start existing builds
 ./scripts/run-dev.sh status
 ./scripts/run-dev.sh stop
-./scripts/run-dev.sh restart             # Rebuild and restart the server
+./scripts/run-dev.sh restart             # Rebuild the server and Mac client, then restart
 ```
 
-Keep the model-path exports set when starting the server. After rebuilding an already-open client, quit and reopen it to load the new executable. Signing uses an available Apple Development identity or ad-hoc signing; ad-hoc rebuilds may require granting permissions again.
+Keep `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` set when starting the server. On Linux, `INLAY_TEXT_MODEL` must be the GGUF file, and `run-dev.sh` builds and starts the server without the app. After rebuilding an already-open client, quit and reopen it to load the new executable. `scripts/build-app.sh` signs with `INLAY_SIGNING_IDENTITY` when that is set. Otherwise it uses the Apple Development identity only when exactly one is installed, and ad-hoc signs in every other case. Ad-hoc rebuilds may require granting permissions again. Neither path notarizes the app.
 
 The dev runner stores shared history/settings in `.local/server`, device preferences in `.local/client`, and logs in `.local/server.log`. Keep experiment notes and generated artifacts under the ignored `.local/` directory too. Quitting the app leaves the server running. Recordings require an online, available server and have a three-minute limit.
 
 For newly launched Electron apps, Inlay requests accessibility support when a take begins and checks for an editable field for up to three seconds while recording starts independently. The field must become verifiable before you release the key; a short first take or slow renderer can still use the clipboard fallback. Unsupported native apps do not wait for this preparation. Enabling an Electron accessibility tree can increase that app's memory and CPU use for its lifetime; Inlay leaves it enabled so other assistive tools can continue using it. This activation mechanism is specific to Electron; Chrome fields use their existing accessibility support.
 
 All connected Macs share history, tagged by device. Both original and inference audio are kept by default; **Keep original microphone audio** changes original retention for future takes. Back up the server data directory to preserve history.
+
+## Releases
+
+Nothing in this repository publishes a GitHub Release or a downloadable `Inlay.app`. Build the Mac app locally with `./scripts/build-app.sh` and copy `build/Inlay.app` where you want it. Server tarballs are Actions artifacts from the `Server release packages` workflow, produced by a `server-v*` tag or a manual run. Pull-request CI does not build the Mac app, the MLX helper, or the CUDA package. Details, artifact names, and checksums are in [how releases are produced](Server/README.md#releases).
 
 ## Reference
 

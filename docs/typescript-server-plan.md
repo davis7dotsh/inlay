@@ -1,6 +1,8 @@
 # Bun TypeScript server implementation plan
 
-Keep the native Swift client and replace the packaged HTTP coordinator with TypeScript, Fastify, and a Bun executable. Preserve API v1, existing archive layout, text behavior, and native inference helpers. The reference Swift server and domain packages remain available for source comparison. Verification follows [the development guide](development.md); automated tests are not allowed.
+This is the historical plan for replacing the packaged coordinator. It is not the current setup. The shipped server is `Server/`. The API version is 2, with routes still under `/v1`. Speech recognition is Parakeet, not Whisper. Current development uses [the development guide](development.md): `bun run dev` on port 8392 with data in `.local/dev-server`. Do not follow the API v1, Whisper, or `.local/typescript-server` notes below as present-day instructions.
+
+Keep the native Swift client and replace the packaged HTTP coordinator with TypeScript, Fastify, and a Bun executable. The plan below was written to preserve the then-current API, archive layout, text behavior, and native inference helpers. The reference Swift server and domain packages remain available for source comparison. Verification follows [the development guide](development.md); automated tests are not allowed.
 
 ## Phase 1: Contract and project foundation
 
@@ -29,7 +31,7 @@ typeOverrides:
 
 ## Phase 3: Native inference and durable coordinator
 
-- Supervise existing Whisper and Qwen helpers with fixed argument arrays, bounded JSON-lines parsing, one outstanding request per helper, readiness, warm reuse, deadlines, output validation, and stale-process generation guards.
+- Supervise the speech and Qwen helpers with fixed argument arrays, bounded JSON-lines parsing, one outstanding request per helper, readiness, warm reuse, deadlines, output validation, and stale-process generation guards. The shipped speech helper is Parakeet.
 - Preserve pinned model verification, optional proofreading fallback, and cancellation by terminating/replacing busy helpers. Preserve idle warm helpers on cancellation.
 - Port generation admission, per-device request idempotency, preference compare-and-swap revisions, chunk sequence/replay validation, finite samples, exact final frame counts, WAV sealing, disk checks, and serial FIFO processing.
 - Keep private file permissions, exclusive directory ownership, atomic metadata writes, paginated shared history, allowlisted artifacts, restart recovery, upload expiry, and Wispr Flow staging/reconciliation.
@@ -52,6 +54,6 @@ typeOverrides:
 ## Intended result
 
 - Bun-managed Fastify server and standalone coordinators for the supported platforms.
-- Full v1 contract with generated TypeScript and Swift transport models.
+- The contract at the time of the plan, with generated TypeScript and Swift transport models. The shipped health field is API version 2.
 - Native Swift client behavior, native model helpers, and archive compatibility preserved.
 - Isolated verified draft, independent reviews, committed branch, and a green PR.

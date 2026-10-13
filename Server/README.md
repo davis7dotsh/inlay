@@ -9,7 +9,9 @@ The server is an independent TypeScript/Fastify HTTP process that owns models, s
 
 ## Linux
 
-The `Server release packages` workflow builds `inlay-server-linux-x64-cuda.tar.gz` as a workflow artifact on `server-v*` tags and manual dispatch. Download the `inlay-server-linux-x64-cuda` artifact from the Actions run and unzip it to get the tarball and its checksum. The package targets SM 80, 86, 89, 90, 120, and 121; Tesla T4 and RTX 20-series (SM 75) will not run it. The helpers link the CUDA runtime statically and load `libcuda.so.1` from the host driver, which must be 580.95.05 or newer for CUDA 13.0.2. Keep model weights outside the package.
+The [Server release packages](#releases) workflow uploads tarballs as Actions artifacts on `server-v*` tags and manual dispatch. It does not create a GitHub Release. CPU packages are `inlay-server-linux-x64-cpu.tar.gz` and `inlay-server-linux-arm64-cpu.tar.gz`. The CUDA package is `inlay-server-linux-x64-cuda.tar.gz`. There is no ARM CUDA package. Download the matching artifact from the Actions run and unzip it to get the tarball and its checksum. CPU and CUDA packages install the same way; the commands below use the CUDA filename.
+
+The CUDA package targets SM 80, 86, 89, 90, 120, and 121. Tesla T4 and RTX 20-series (SM 75) will not run it. The helpers link the CUDA runtime statically and load `libcuda.so.1` from the host driver, which must be 580.95.05 or newer for CUDA 13.0.2. Keep model weights outside the package. The CPU packages do not use the GPU.
 
 The unit runs as the `inlay` user and listens on `127.0.0.1:8391`. For remote clients, put it behind an HTTPS reverse proxy or bind it to the host's Tailscale IP with a `sudo systemctl edit inlay-server` override (`Environment=INLAY_SERVER_HOST=100.x.y.z`); see [remote access](#remote-access). The `inlay` user must be able to open the host NVIDIA device nodes; if they are group-accessible only, add `inlay` to that group (usually `render` or `video`).
 
@@ -47,7 +49,7 @@ Run these commands from the repository root. Weights use about 4 GB of disk; run
 INLAY_MODEL_DIR="$PWD/.local/models" ./scripts/download-model.sh
 ```
 
-This installs and verifies `ggml-parakeet-tdt-0.6b-v3-f16.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh` and `Sources/InlayCore/SpeechModel.swift`. The server build separately downloads the pinned Silero VAD model. Existing Whisper weights cannot be reused; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
+This installs and verifies `ggml-parakeet-tdt-0.6b-v3-f16.bin`. The URL, revision, and checksum are pinned in `scripts/download-model.sh`, `Sources/InlayCore/SpeechModel.swift`, and `Server/src/inference/model-pins.ts`. The packaged TypeScript server checks `model-pins.ts` before it loads weights. The server build separately downloads the pinned Silero VAD model. Existing Whisper weights cannot be reused; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
 
 Parakeet automatically recognizes 25 European languages. The language preference guides proofreading and does not force recognition. The preference values are unchanged; choose Automatic for languages without a named proofreading option. The helper exposes no detected language ID. Parakeet takes no recognition vocabulary; dictionary replacements and Qwen hints still apply. Older language preferences remain accepted for proofreading and never block automatic recognition; they do not expand Parakeet’s supported speech languages.
 
@@ -101,9 +103,30 @@ bun run build:server                     # Native coordinator in build/server
 bun run build:server --all               # Mac arm64, Linux x64 and Linux arm64
 ```
 
-Cross builds live under `build/server-coordinators`. Bun cross-compiles the coordinator; complete installation archives combine it with helpers built on each matching platform. Installed packages need neither Bun nor Node. Full Linux release packages target Ubuntu 24.04 or a compatible glibc/libstdc++ environment; Mac packages require Apple Silicon and macOS 14+. Linux x64 coordinators use Bun's baseline CPU target. Native helper CPU/CUDA compatibility remains determined by its CMake build flags.
+Cross builds live under `build/server-coordinators`. Bun cross-compiles the coordinator; complete installation archives combine it with helpers built on each matching platform. Installed packages need neither Bun nor Node. Full Linux packages target Ubuntu 24.04 or a compatible glibc/libstdc++ environment. Mac server packages require Apple Silicon and macOS 14+. Linux x64 coordinators use Bun's baseline CPU target. Native helper CPU/CUDA compatibility remains determined by its CMake build flags.
 
-The release workflow produces complete platform tarballs and SHA-256 checksums, including the Linux CUDA package above. Extract a package, retain its `server` directory together, install the pinned model weights separately, then use the arguments below. Developer ID distribution still requires signing/notarization credentials; the draft Mac build is ad-hoc signed with Bun's executable entitlements.
+[Releases](#releases) are Actions artifacts, not GitHub Releases, and they do not include `Inlay.app`. Extract a package, keep its `server` directory together, install the pinned model weights separately, then use the arguments below.
+
+## Releases
+
+CI does not publish a GitHub Release, a notarized Mac app, or a `.dmg`. Copy `build/Inlay.app` from a local `./scripts/build-app.sh` run. That script is not part of either workflow.
+
+[`.github/workflows/server-release.yml`](../.github/workflows/server-release.yml) (`Server release packages`) runs when a tag matching `server-v*` is pushed, or when someone starts it with `workflow_dispatch`. Workflow permissions are `contents: read`, so the run can upload artifacts and cannot create a Release. Each artifact is a zip of one tarball plus a `shasum -a 256` checksum file. Retention is the repository default. The tarball's top directory is `server`: the executable, native helpers, Silero VAD, notices, and on Linux `inlay-server.service`.
+
+| Artifact                       | Build                                                     |
+| ------------------------------ | --------------------------------------------------------- |
+| `inlay-server-darwin-arm64`    | `./scripts/build-server.sh` on the `macos-26` runner      |
+| `inlay-server-linux-x64-cpu`   | `./scripts/build-server.sh` on `ubuntu-24.04`             |
+| `inlay-server-linux-arm64-cpu` | `./scripts/build-server.sh` on `ubuntu-24.04-arm`         |
+| `inlay-server-linux-x64-cuda`  | `docker build -f Server/Dockerfile --target cuda-package` |
+
+The three `build-server.sh` jobs set `INLAY_NATIVE=OFF`, `INLAY_CUDA=OFF`, and `INLAY_BUILD_JOBS=4`. Linux jobs install CMake, a C/C++ toolchain, pkg-config, and libcurl headers first. The Mac job downloads the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`) and then ad-hoc signs the helpers and `inlay-server`. The server binary is signed with `Server/entitlements.plist` so Bun can JIT. That is not Developer ID signing, not notarization, and not `Inlay.app`. `Inlay.app` uses `Resources/Inlay.entitlements` (microphone) and is signed only by `scripts/build-app.sh`.
+
+The CUDA job does not run `bun run check`, `bun run lint`, or `bun run fmt:check` before the image build. The other three jobs do. CUDA architectures come from the Dockerfile default `80;86;89;90;120;121`.
+
+Pull-request CI is [`.github/workflows/server.yml`](../.github/workflows/server.yml). On every pull request and on pushes to `main` it runs formatting, lint, and TypeScript checks; compiles the Swift packages on `macos-26` without launching the app; cross-compiles Bun coordinators; and builds complete Linux CPU packages. `swift build` does not compile the MLX Metal helper. This workflow does not build `Inlay.app`, the Mac server package, or the CUDA package, and it does not publish anything.
+
+Download an artifact from the workflow run, unzip it, check the `.sha256` file, then extract the tarball as in [Linux](#linux). Model weights stay outside the package.
 
 The archive lock uses Bun FFI to call libc `flock`, matching the reference Swift server. The lock is held for the server process lifetime. A running Swift server and Bun server must never share a data directory.
 
@@ -128,7 +151,7 @@ On Linux, replace the last path with the GGUF file. Add `--dev` for a developmen
 
 Check `curl http://localhost:8391/v1/health`; HTTP reachability alone does not mean inference is available. The `ready` field means the server can accept a recording, including while other recordings are uploading or processing. Finished uploads queue for serial inference; model runtime fields separately report whether helpers are loaded. Quitting a client does not stop this process. Use launchd, systemd, or container supervision for boot/restart behavior; the scripts do not install a service.
 
-For server-only development alongside an installed Inlay instance, use `--port 8392 --data-dir "$PWD/.local/typescript-server" --dev` with your helper/model arguments. Start the executable directly or use `bun run dev:server` with those arguments. The client dev runner starts the app and defaults to port 8391; avoid it when preserving a running installation.
+`bun run dev` is the hot-reloading source server and already isolates itself on port 8392 under `.local/dev-server`. `bun run dev:server` runs `Server/src/main.ts` without those defaults: pass `--host`, `--port`, `--data-dir`, the helper paths, and the model paths yourself, or start `./build/server/inlay-server` the same way. Do not reuse `.local/typescript-server`; that directory is not a current default. The client dev runner (`./scripts/run-dev.sh`) binds `127.0.0.1` on port 8391 and uses `.local/server`. Avoid it when preserving a running installation.
 
 | Argument                            | Environment variable                               |
 | ----------------------------------- | -------------------------------------------------- |

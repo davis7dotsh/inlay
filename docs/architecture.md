@@ -1,6 +1,6 @@
 # Architecture
 
-Inlay's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use the same OpenAPI v1 contract whether they run on one machine or across the network.
+Inlay's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use API version 2. The contract is `Server/api/openapi.yaml` (OpenAPI 3.1). HTTP paths stay under `/v1`, and the client requires `apiVersion` 2 before dictation. The same contract applies on one machine or across the network.
 
 ## Code map
 
@@ -58,7 +58,7 @@ The regular app uses `~/Library/Application Support/Inlay`; Dev uses `~/Library/
 
 ## Storage
 
-The server's `--data-dir` (normally `.local/server` in development) contains:
+The server's `--data-dir` contains the layout below. `./scripts/run-dev.sh` uses `.local/server`. `bun run dev` uses `.local/dev-server/data` and ignores an inherited `INLAY_SERVER_DATA_DIR`. An installed Linux service uses `/var/lib/inlay`.
 
 ```text
 preferences.json

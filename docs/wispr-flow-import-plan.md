@@ -1,5 +1,7 @@
 # Import Wispr Flow history into Inlay
 
+The import path described here is already implemented. Live routes are in `Server/src/http-server.ts` and `Server/src/imports.ts`. The Mac reader is `Sources/Inlay/WisprFlowSourceReader.swift`, and History launches it from `Sources/Inlay/Views/HistoryPage.swift`. `Sources/InlayServerKit` is the reference Swift server, not the packaged one. Do not add a second import implementation there. The sections below are the design record.
+
 The current feature reads the local Wispr Flow database and its complete backups. It previews the recoverable rows, then imports only after an explicit click. The import archives source fields and media without running Inlay's models or changing Wispr Flow. Choosing an arbitrary SQLite file or ingesting an account export remains future work.
 
 ## Goal and source
@@ -44,7 +46,7 @@ Keep Wispr Flow dictionary state as an import artifact. Any change to Inlay's ac
 
 ## Phase 3 — server import path and safe reruns
 
-Add authenticated import routes in [`InlayHTTPServer.swift`](../Sources/InlayServerKit/InlayHTTPServer.swift) and archival writes in [`GenerationService.swift`](../Sources/InlayServerKit/GenerationService.swift). The existing `POST /v1/generations` and audio/finish routes require a live recording and model readiness, so they must not be reused for historical rows. The server cannot open a client-side Wispr Flow path, especially when it runs on another machine.
+The packaged server implements the import routes in [`http-server.ts`](../Server/src/http-server.ts) and [`imports.ts`](../Server/src/imports.ts). The reference Swift server has the same shape in [`InlayHTTPServer.swift`](../Sources/InlayServerKit/InlayHTTPServer.swift) and [`GenerationService.swift`](../Sources/InlayServerKit/GenerationService.swift). The existing `POST /v1/generations` and audio/finish routes require a live recording and model readiness, so they must not be reused for historical rows. The server cannot open a client-side Wispr Flow path, especially when it runs on another machine.
 
 Use a bounded per-session protocol: send a small manifest and display text, upload allowlisted files with byte counts/checksums, then commit. Validate source ID, dates, text sizes, file signatures, attachment limits, and checksums on the server. Place files in a private staging directory, write metadata last, atomically move the complete directory under `generations/<UUID>/`, then publish it in memory. Extend the artifact endpoint's allowlist for typed imported files; never accept arbitrary filesystem paths from the client.
 
