@@ -237,6 +237,24 @@ paths:
           required: true
           schema:
             "$ref": "#/components/schemas/UUID"
+  "/v1/generations/{id}/retry":
+    post:
+      operationId: "retryGeneration"
+      responses:
+        "202":
+          description: "Accepted"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/GenerationRecord"
+        default:
+          "$ref": "#/components/responses/APIError"
+      parameters:
+        - name: "id"
+          in: "path"
+          required: true
+          schema:
+            "$ref": "#/components/schemas/UUID"
   "/v1/generations/{id}/delivery":
     post:
       operationId: "recordDelivery"

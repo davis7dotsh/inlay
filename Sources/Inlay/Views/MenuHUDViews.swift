@@ -75,6 +75,7 @@ extension DictationDeliveryStatus {
         case .listUpdated: "list.number"
         case .unconfirmed: "questionmark"
         case .failed: "exclamationmark"
+        case .kept: "tray.and.arrow.down"
         }
     }
 
@@ -87,6 +88,7 @@ extension DictationDeliveryStatus {
         case .listUpdated: "List updated"
         case .unconfirmed: "Check insertion"
         case .failed: "Dictation failed"
+        case .kept: "Saved to history"
         }
     }
 
@@ -112,9 +114,9 @@ struct DictationHUD: View {
                 .frame(width: Self.width, height: Self.noticeHeight)
         }
         .task(id: presentation.id) { await enter() }
-        .onChange(of: controller.activity) { _, activity in
-            guard presentation.id != nil, !activity.isCapturing else { return }
-            withAnimation(morphAnimation) { expanded = false }
+        .onChange(of: controller.hudExpanded) { _, value in
+            guard presentation.id != nil, entered else { return }
+            withAnimation(morphAnimation) { expanded = value }
         }
     }
 
@@ -132,7 +134,7 @@ struct DictationHUD: View {
         guard presentation.id != nil else { return }
         if reduceMotion {
             entered = true
-            expanded = controller.activity.isCapturing
+            expanded = controller.hudExpanded
             return
         }
         await Task.yield()
@@ -141,7 +143,7 @@ struct DictationHUD: View {
         // This only stages the visual; microphone startup never waits for it.
         do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
         guard !Task.isCancelled, presentation.id != nil else { return }
-        withAnimation(morphAnimation) { expanded = controller.activity.isCapturing }
+        withAnimation(morphAnimation) { expanded = controller.hudExpanded }
     }
 
     private var capsule: some View {
@@ -185,7 +187,44 @@ struct DictationHUD: View {
         .accessibilityIdentifier("hud.status")
     }
 
-    private var expandedContent: some View {
+    @ViewBuilder private var expandedContent: some View {
+        if let deadline = controller.undoDeadline { undoContent(until: deadline) }
+        else { captureContent }
+    }
+
+    /// A cancelled take is still saved; this offers a few seconds to paste it.
+    private func undoContent(until deadline: Date) -> some View {
+        HStack(spacing: 8) {
+            Button { controller.undoCancellation() } label: {
+                HStack(spacing: 7) {
+                    UndoCountdown(deadline: deadline, duration: InlayController.undoWindow)
+                    Text("Undo").font(.system(size: 12, weight: .semibold))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(InlayPalette.accentInk)
+                .frame(height: 28)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Paste this dictation after all")
+            .accessibilityLabel("Undo cancel")
+            .accessibilityHint("Paste this dictation. Otherwise it is only saved to history.")
+            .accessibilityIdentifier("hud.undo")
+            Button { controller.keepCancelledTake() } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    .frame(width: 22, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(InlayPalette.muted)
+            .help("Save to history without pasting")
+            .accessibilityLabel("Keep cancelled")
+            .accessibilityIdentifier("hud.undo-dismiss")
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private var captureContent: some View {
         HStack(spacing: 10) {
             DevBadge()
             HStack(spacing: 8) {
@@ -235,7 +274,7 @@ struct DictationHUD: View {
         case .idle: "Ready"
         case .starting: "Starting microphone"
         case .recording: "Listening"
-        case .transcribing: "Processing"
+        case .transcribing: controller.isUndoPending ? "Cancelled. Undo to paste" : "Processing"
         case .delivering: "Inserting"
         case .success, .failed: result.hudLabel
         }
@@ -247,6 +286,30 @@ struct DictationHUD: View {
             if result.needsAttention { controller.onShowWindow?() }
             controller.dismissFeedback()
         }
+    }
+}
+
+/// Seconds left to undo, drawn as a draining ring around the count.
+struct UndoCountdown: View {
+    let deadline: Date
+    let duration: TimeInterval
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.1)) { context in
+            let remaining = max(0, deadline.timeIntervalSince(context.date))
+            ZStack {
+                Circle().stroke(InlayPalette.muted.opacity(0.25), lineWidth: 2)
+                Circle()
+                    .trim(from: 0, to: remaining / duration)
+                    .stroke(InlayPalette.accentInk, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Text("\(Int(remaining.rounded(.up)))")
+                    .font(.system(size: 10, weight: .semibold))
+                    .monospacedDigit()
+            }
+            .frame(width: 20, height: 20)
+        }
+        .accessibilityHidden(true)
     }
 }
 

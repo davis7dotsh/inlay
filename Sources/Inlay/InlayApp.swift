@@ -231,7 +231,7 @@ private final class DictationPanel: NSPanel {
     private var noticeSubscription: AnyCancellable?
     private var activitySubscription: AnyCancellable?
     private var compactTask: Task<Void, Never>?
-    private var activity: DictationActivity = .idle
+    private var expanded = false
     private var showsNotice = false
     private var compact = false
 
@@ -264,10 +264,13 @@ private final class DictationPanel: NSPanel {
             .map { $0 != nil }
             .removeDuplicates()
             .sink { [weak self] visible in self?.setNoticeVisible(visible) }
-        activitySubscription = controller.$activity.removeDuplicates().sink { [weak self] activity in
-            self?.activity = activity
-            self?.updateCompactState()
-        }
+        activitySubscription = controller.$activity.combineLatest(controller.$undoDeadline)
+            .map { activity, deadline in activity.isCapturing || deadline != nil }
+            .removeDuplicates()
+            .sink { [weak self] expanded in
+                self?.expanded = expanded
+                self?.updateCompactState()
+            }
     }
 
     override var canBecomeKey: Bool { false }
@@ -288,7 +291,7 @@ private final class DictationPanel: NSPanel {
 
     private func updateCompactState() {
         compactTask?.cancel()
-        if activity.isCapturing {
+        if expanded {
             compact = false
             updateFrame()
         } else {
