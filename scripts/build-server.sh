@@ -95,6 +95,8 @@ if [[ "$server_platform" == Darwin ]]; then
     codesign --force --sign - --entitlements Server/entitlements.plist "$staging_dir/inlay-server"
 fi
 cp "$vad_model" "$staging_dir/resources/silero-vad.bin"
+# Docker and service installs run the server as a different user than the builder.
+chmod 644 "$staging_dir/resources/silero-vad.bin"
 for library in whisper llama; do
     license_path="$project_dir/vendor/$library.cpp/LICENSE"
     if [[ ! -f "$license_path" && "${INLAY_SKIP_NATIVE:-0}" == 1 ]]; then
@@ -109,6 +111,9 @@ done
 cp Resources/*-LICENSE.txt THIRD_PARTY_NOTICES.md "$staging_dir/resources/"
 bun Server/scripts/licenses.ts "$staging_dir/resources/javascript-LICENSES.txt"
 cp Server/README.md "$staging_dir/README.md"
+if [[ "$server_platform" == Linux ]]; then
+    cp Server/inlay-server.service "$staging_dir/inlay-server.service"
+fi
 prior_package="$project_dir/build/.server-previous-$$"
 if [[ -d build/server ]]; then mv build/server "$prior_package"; fi
 if ! mv "$staging_dir" "$project_dir/build/server"; then

@@ -15,7 +15,7 @@ bun run dev
 - The launcher ignores inherited `INLAY_SERVER_DATA_DIR` settings. Select another development archive explicitly with `--data-dir`.
 - A private token is created once at `.local/dev-server/token` and reused on reload. Do not print or commit its value. Use the token in the native client's server settings; `INLAY_SERVER_TOKEN_FILE` or `--token-file` can select an existing token file.
 - On the same Mac, open [server health](http://localhost:8392/v1/health) in the collaborative browser. For another machine, discover its current Tailscale hostname/address and use the selected port; follow [remote access](../Server/README.md#remote-access) for HTTPS and token setup.
-- The server starts without native assets and reports `ready: false`. To enable dictation, follow [model setup](../Server/README.md#models), set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL`, and run `./scripts/build-server.sh` once to build the real helpers and VAD. Existing helpers can be selected with `INLAY_ENGINE_PATH`, `INLAY_TEXT_ENGINE_PATH`, and `INLAY_VAD_PATH`.
+- The server starts without native assets and reports `ready: false`. To enable dictation, follow [model setup](../Server/README.md#models), set `INLAY_SPEECH_MODEL` to the pinned Parakeet v3 `.bin` and `INLAY_TEXT_MODEL` to the Qwen model, and run `./scripts/build-server.sh` once to build the real helpers and VAD. Existing helpers can be selected with `INLAY_ENGINE_PATH`, `INLAY_TEXT_ENGINE_PATH`, and `INLAY_VAD_PATH`.
 - Pass normal server arguments to override defaults, for example `bun run dev --port 8393 --data-dir "$PWD/.local/another-dev-archive"`. Use `bun run dev --help` for arguments. Keep model files outside Git.
 
 ## Native app

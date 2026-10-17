@@ -118,6 +118,11 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.muteOutputWhileRecording = muteOutputWhileRecording } }
         }
     }
+    @Published var preserveClipboard = false {
+        didSet {
+            if !applyingConfiguration { configuration.update { $0.preserveClipboard = preserveClipboard } }
+        }
+    }
     @Published var statusMessage = "Connecting to server…"
     @Published private(set) var serverHealth: ServerHealth?
     @Published private(set) var serverStatusMessage = "Connecting…"
@@ -282,6 +287,7 @@ final class InlayController: ObservableObject {
         if let mode = HotkeyActivationMode(rawValue: settings.activationMode), activationMode != mode { activationMode = mode }
         if launchAtLogin != settings.launchAtLogin { launchAtLogin = settings.launchAtLogin }
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
+        if preserveClipboard != settings.preserveClipboard { preserveClipboard = settings.preserveClipboard }
         applyingConfiguration = false
     }
 
@@ -1266,7 +1272,8 @@ final class InlayController: ObservableObject {
             let outcome = await inserter.deliver(record.insertionText, copying: record.finalText,
                                                   to: destination, clipboardUnchangedSince: clipboardCount,
                                                   waitUntilReady: { await self.waitForCaptureRelease() },
-                                                  isCaptureActive: { self.isHoldingCapture })
+                                                  isCaptureActive: { self.isHoldingCapture },
+                                                  preservingClipboard: preserveClipboard)
             guard !Task.isCancelled else { return DeliveryReceipt(status: "failed", message: "Delivery cancelled") }
             if let anchor { continuationAnchors.removeAll { $0.destination == anchor } }
             switch outcome {

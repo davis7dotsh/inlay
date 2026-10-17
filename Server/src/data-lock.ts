@@ -13,11 +13,18 @@ export function acquireDataDirectoryLock(directory: string) {
   const library = dlopen(libraryPath, {
     flock: { args: ["i32", "i32"], returns: "i32" },
   });
+  // `bun --watch` reloads by exec in place. Close-on-exec drops the old lock so the
+  // reloaded server can take it again. fs.constants does not expose O_CLOEXEC.
+  const closeOnExec = process.platform === "darwin" ? 0x1000000 : 0o2000000;
   let descriptor: number | undefined;
   try {
     descriptor = openSync(
       join(directory, ".server.lock"),
-      constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      constants.O_RDWR |
+        constants.O_CREAT |
+        constants.O_NOFOLLOW |
+        constants.O_NONBLOCK |
+        closeOnExec,
       0o600,
     );
     if (!fstatSync(descriptor).isFile()) {

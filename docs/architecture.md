@@ -15,7 +15,7 @@ Inlay's native Swift macOS client handles microphone capture, shortcuts, and cur
 | `Sources/InlayDomain`     | Dictionary, list formatting, rewrite validation, and composition.                           |
 | `Sources/InlayServerKit`  | Reference Swift server retained for source comparison.                                      |
 | `Sources/InlayServer`     | Reference Swift server command-line entry point.                                            |
-| `Engine`                  | Persistent whisper.cpp speech helper; Metal on Mac, CPU/CUDA on Linux.                      |
+| `Engine`                  | Persistent Parakeet speech helper (vendored whisper.cpp); Metal on Mac, CPU/CUDA on Linux.  |
 | `TextEngine`              | Persistent Qwen helper; Swift MLX on Mac, llama.cpp on Linux.                               |
 
 The server talks to helpers over bounded JSON-lines pipes. Models warm at startup and stay loaded. The client contains no model helpers; it never starts or stops the server. The application has no Python runtime dependency.
@@ -27,7 +27,7 @@ Bun manages all JavaScript dependencies and compiles the coordinator plus its co
 1. The client asks the server to create a generation with its device identity. The server freezes shared settings and accepts independent uploads from any connected client. Offline or unavailable speech recognition prevents capture; other recordings do not.
 2. The client pins its microphone and uploads acknowledged, sequenced PCM chunks while recording. Inference audio is mono 16 kHz float32; optional original audio keeps the microphone rate/channels as float32.
 3. Release stops capture, drains uploads, and sends final frame counts. The microphone is available for the next take while earlier uploads finish. The server checks the complete intervals and seals WAV files. Recordings must be 0.25–180 seconds.
-4. Sealed recordings enter a FIFO processing queue. One job at a time runs Whisper, mechanical cleanup, dictionary rules, and list formatting. Optional Qwen output passes through dictionary rules and deterministic rewrite checks. Rejection or proofreading failure retains the pre-proofreading text. Cancelling one upload or queued job does not interrupt another.
+4. Sealed recordings enter a FIFO processing queue. One job at a time runs Parakeet, mechanical cleanup, dictionary rules, and list formatting. Optional Qwen output passes through dictionary rules and deterministic rewrite checks. Rejection or proofreading failure retains the pre-proofreading text. Cancelling one upload or queued job does not interrupt another.
 5. NDJSON events carry progress and the saved final result for each generation. Each pending client take retains its original server connection and destination. The client serializes delivery attempts, verifies focus/caret safety, and reports each outcome separately from inference completion.
 
 Interrupted partial uploads expire; a complete upload can finish after the client disconnects. Pending takes recover interrupted event streams by checking their saved generation and reconnecting. Opening history never pastes an old result. Restarting the server marks unfinished generations failed and retains completed history. There is no offline capture queue or automatic audio-upload retry.
@@ -38,17 +38,19 @@ Only the new `insertionText` can be inserted; `previewText` may include earlier 
 
 The Mac rechecks destination, selection, protected fields, modifiers, and clipboard state before delivery. Unsafe destinations use clipboard or preview fallback. Only confirmed insertion advances cursor-based continuation. Editor text and Accessibility handles stay on the Mac.
 
+Pasting stages the transcript on the clipboard temporarily and restores the previous contents once insertion is confirmed. When insertion cannot be confirmed, or no editable field is found, the transcript stays on the clipboard as a backup. With **Never leave transcripts on the clipboard** enabled under **This Mac**, Inlay never keeps that backup: unconfirmed words stay in the app to copy, and the previous clipboard returns once insertion is confirmed or after 1.5 seconds. An app that reads the paste later than that inserts the previous clipboard instead.
+
 Microphone capture uses input-only Core Audio without changing system routing or playback volume. Route changes apply to the next take. Release, cancellation, sleep/lock, or device loss ends capture.
 
 With **Mute system audio while recording** enabled under **This Mac**, the default output device is muted when a take starts and restored when capture ends. Only mute controls Inlay changed are restored, so output that was already muted stays muted. A client crash during a take can leave output muted.
 
 ## Settings
 
-| Scope          | Where to edit                    | What it owns                                                                                                          |
-| -------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, microphone priority/selection. |
-| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                      |
-| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).          |
+| Scope          | Where to edit                    | What it owns                                                                                                                                  |
+| -------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, clipboard preservation, microphone priority/selection. |
+| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                              |
+| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                  |
 
 Shared saves use revisions to reject stale concurrent edits. Settings are snapshotted when the server accepts a take; changes affect future recordings. Update shared settings through the UI/API rather than editing files while the server runs.
 

@@ -13,10 +13,10 @@ git clone --recurse-submodules https://github.com/davis7dotsh/inlay.git
 cd inlay
 ```
 
-[Download the pinned Whisper and Qwen models](Server/README.md#models) into `.local/models`, then build and start:
+[Download the pinned Parakeet and Qwen models](Server/README.md#models) into `.local/models`, then build and start:
 
 ```sh
-export INLAY_SPEECH_MODEL="$PWD/.local/models/ggml-large-v3-turbo.bin"
+export INLAY_SPEECH_MODEL="$PWD/.local/models/ggml-parakeet-tdt-0.6b-v3-f16.bin"
 export INLAY_TEXT_MODEL="$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
 ./scripts/run-dev.sh
 ```
@@ -47,7 +47,7 @@ Set its URL and token under **This Mac**. Use HTTPS for remote hosts, or HTTP wi
 - The regular app now uses `~/Library/Application Support/Inlay`; Dev uses `~/Library/Application Support/Inlay Dev`. With both clients quit, copy your existing `config.json` and `client.json` into the corresponding new directory to retain device settings and identity. A custom `INLAY_CLIENT_DATA_DIR` can continue using the existing client directory. The packaged dev runner's `.local/client` directory is unchanged.
 - Re-enter the server token under **This Mac**. Release and Dev credentials use separate Keychain services, `dev.davis.inlay.server` and `dev.davis.inlay.dev.server`, scoped to the client directory and endpoint. Grant **Inlay** or **Inlay Dev** Microphone and Accessibility permissions for the new app identity, and enable launch at login again if desired.
 - Retain the existing server archive with `--data-dir` or `INLAY_SERVER_DATA_DIR`, and keep the same token file. Back up the archive before switching servers and stop the previous server before opening that archive with the new executable. History and shared preferences retain their existing format; the default workspace archives are unchanged. Container upgrades must mount the existing data volume rather than create an empty one under the new example name.
-- Keep installed model files in place and set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` to their existing paths. The Mac runner's default model locations now use the Inlay name; explicit overrides preserve models installed under older directories.
+- Replace the speech model: the old Whisper file fails the Parakeet pin. Run `scripts/download-model.sh`, then set `INLAY_SPEECH_MODEL` to the full path of the downloaded `ggml-parakeet-tdt-0.6b-v3-f16.bin`, and delete the old `ggml-large-v3-turbo.bin` if desired. Keep the installed Qwen model in place and set `INLAY_TEXT_MODEL` to its existing path. The Mac runner's default model locations now use the Inlay name; explicit overrides preserve models installed under older directories.
 
 ## Daily development
 
@@ -92,6 +92,6 @@ All connected Macs share history, tagged by device. Both original and inference 
 - [Architecture, configuration, and storage](docs/architecture.md)
 - [Dictionary and cleanup instructions](docs/text-correction.md)
 - [HTTP API](docs/client-server-contract.md)
-- [Whisper helper](Engine/README.md) and [Qwen helpers](TextEngine/README.md)
+- [Parakeet helper](Engine/README.md) and [Qwen helpers](TextEngine/README.md)
 
 [MIT](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)

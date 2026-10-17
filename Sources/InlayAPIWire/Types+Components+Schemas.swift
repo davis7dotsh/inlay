@@ -246,6 +246,8 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/ServerPreferences`.
         public struct ServerPreferences: Codable, Hashable, Sendable {
+            /// Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
+            ///
             /// - Remark: Generated from `#/components/schemas/ServerPreferences/language`.
             @frozen public enum LanguagePayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case en = "en"
@@ -266,6 +268,8 @@ extension Components {
                 case uk = "uk"
                 case sv = "sv"
             }
+            /// Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
+            ///
             /// - Remark: Generated from `#/components/schemas/ServerPreferences/language`.
             public var language: Components.Schemas.ServerPreferences.LanguagePayload
             /// Missing values use the built-in cleanup prompt; maximum UTF-8 size is 4096 bytes.
@@ -285,7 +289,7 @@ extension Components {
             /// Creates a new `ServerPreferences`.
             ///
             /// - Parameters:
-            ///   - language:
+            ///   - language: Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
             ///   - proofreadingPrompt: Missing values use the built-in cleanup prompt; maximum UTF-8 size is 4096 bytes.
             ///   - vocabulary: Maximum UTF-8 size is 16384 bytes.
             ///   - dictionary:

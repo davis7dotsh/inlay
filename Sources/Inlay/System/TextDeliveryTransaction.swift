@@ -47,6 +47,9 @@ struct TextDeliveryEnvironment {
 struct TextDeliveryTransaction {
     let pasteboard: NSPasteboard
     let environment: TextDeliveryEnvironment
+    /// Never leave the transcript on the clipboard as a backup. The user's
+    /// clipboard is restored after every paste, confirmed or not.
+    var preservesClipboard = false
 
     func deliver(_ text: String, copying clipboardText: String, strategy: TextDeliveryStrategy,
                  clipboardUnchangedSince changeCount: Int) async -> InsertionOutcome {
@@ -113,7 +116,7 @@ struct TextDeliveryTransaction {
         case .valid: break
         case .blocked(let reason): return .failed(reason: reason)
         case .changed(let reason):
-            let copied = clipboard.keepBackup(clipboardText, unchangedSince: changeCount)
+            let copied = keepBackup(clipboardText, in: &clipboard, unchangedSince: changeCount)
             return copied ? .copied(reason: "Copied to clipboard") : .failed(reason: reason)
         }
         guard !environment.modifiersAreHeld() else {
@@ -133,17 +136,19 @@ struct TextDeliveryTransaction {
             return .failed(reason: reason)
         case .unavailable:
             if shouldDeferForCapture { return nil }
-            let copied = clipboard.keepBackup(clipboardText, unchangedSince: changeCount)
+            let copied = keepBackup(clipboardText, in: &clipboard, unchangedSince: changeCount)
             return copied ? .copied(reason: "Copied to clipboard") :
                 .failed(reason: "macOS could not send the paste. Your words are ready to copy.")
         }
 
-        let confirmation = await confirm(text)
+        // Without a backup, a slow editor that reads after restoration pastes the
+        // previous clipboard instead, so hold the staged paste longer.
+        let confirmation = await confirm(text, within: .milliseconds(preservesClipboard ? 1_500 : 700))
         guard !Task.isCancelled, confirmation != .blocked else {
             return .unconfirmed(clipboardBackup: false)
         }
         if confirmation == .confirmed { return .inserted }
-        return .unconfirmed(clipboardBackup: clipboard.keepBackup(clipboardText, unchangedSince: changeCount))
+        return .unconfirmed(clipboardBackup: keepBackup(clipboardText, in: &clipboard, unchangedSince: changeCount))
     }
 
     private static let cancelled = "Dictation was cancelled. Nothing was copied."
@@ -167,10 +172,11 @@ struct TextDeliveryTransaction {
         return .blocked(reason: "A keyboard shortcut is still held. Your words are ready to copy.")
     }
 
-    private func confirm(_ text: String) async -> DeliveryConfirmation {
-        let deadline = ContinuousClock.now.advanced(by: .milliseconds(700))
+    private func confirm(_ text: String, within window: Duration = .milliseconds(700)) async -> DeliveryConfirmation {
+        let deadline = ContinuousClock.now.advanced(by: window)
+        let lastAttempt = Int(window / .milliseconds(100))
         var lastObserved: DeliveryConfirmation = .pending
-        for attempt in 0...7 {
+        for attempt in 0...lastAttempt {
             guard !Task.isCancelled else { return .blocked }
             guard attempt == 0 || ContinuousClock.now < deadline else { break }
             lastObserved = await environment.confirmation(text)
@@ -178,7 +184,7 @@ struct TextDeliveryTransaction {
             // Editors without caret metadata still need time to consume their
             // queued paste before a newer pre-delivery clipboard is restored.
             guard lastObserved == .pending || lastObserved == .unavailable else { return lastObserved }
-            guard attempt < 7, ContinuousClock.now < deadline else { break }
+            guard attempt < lastAttempt, ContinuousClock.now < deadline else { break }
             do { try await environment.pause(100_000_000) }
             catch { return .blocked }
         }
@@ -191,8 +197,12 @@ struct TextDeliveryTransaction {
             .failed(reason: reason + " Your words are ready to copy.")
     }
 
+    private func keepBackup(_ text: String, in clipboard: inout DeliveryClipboardLease, unchangedSince count: Int) -> Bool {
+        !preservesClipboard && clipboard.keepBackup(text, unchangedSince: count)
+    }
+
     private func copyNewChunk(_ text: String, expectedCount: Int) -> Bool {
-        guard !Task.isCancelled, case .success(let snapshot) = ClipboardSnapshot.capture(pasteboard),
+        guard !preservesClipboard, !Task.isCancelled, case .success(let snapshot) = ClipboardSnapshot.capture(pasteboard),
               OwnedPasteboardRevisions.onlyOwnedChanges(on: pasteboard, since: expectedCount,
                                                         through: snapshot.changeCount) else { return false }
         var clipboard = DeliveryClipboardLease(pasteboard: pasteboard, snapshot: snapshot)

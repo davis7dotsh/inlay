@@ -618,6 +618,7 @@ components:
       additionalProperties: false
       properties:
         language:
+          description: "Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history."
           type: "string"
           enum:
             - "en"
