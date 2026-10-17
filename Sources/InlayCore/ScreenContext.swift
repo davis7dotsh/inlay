@@ -2,9 +2,9 @@ import CoreGraphics
 import Foundation
 import Vision
 
-/// Recognition hints drawn from text visible in the window being dictated into.
-/// Recognized text stays on the Mac; only a short list of unusual terms (names,
-/// identifiers, product words) is sent to the server as Whisper vocabulary.
+/// Dormant recognition-hint extraction for a future hint-capable speech backend.
+/// Parakeet does not consume vocabulary hints, so the current dictation flow
+/// does not capture screen text or call this extractor.
 public enum ScreenContext {
     public static let maximumTerms = 40
     public static let maximumTermBytes = 64

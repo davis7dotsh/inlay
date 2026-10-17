@@ -57,3 +57,26 @@ jobs:
             build/inlay-server-${{ matrix.platform }}.tar.gz
             build/inlay-server-${{ matrix.platform }}.tar.gz.sha256
           if-no-files-found: error
+
+  cuda-package:
+    name: Package linux-x64-cuda
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+      - name: Build CUDA package
+        run: docker build -f Server/Dockerfile --target cuda-package --output type=local,dest=build .
+      - name: Package and checksum
+        run: |
+          cd build
+          tar --owner=0 --group=0 --numeric-owner -czf inlay-server-linux-x64-cuda.tar.gz server
+          shasum -a 256 inlay-server-linux-x64-cuda.tar.gz > inlay-server-linux-x64-cuda.tar.gz.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: inlay-server-linux-x64-cuda
+          path: |
+            build/inlay-server-linux-x64-cuda.tar.gz
+            build/inlay-server-linux-x64-cuda.tar.gz.sha256
+          if-no-files-found: error

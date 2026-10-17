@@ -86,7 +86,7 @@ public enum InferenceError: Error, LocalizedError, Sendable {
     }
 }
 
-/// Runs whisper.cpp on either host platform, and the native Qwen helper (MLX
+/// Runs Parakeet via vendored whisper.cpp on either host platform, and the native Qwen helper (MLX
 /// on macOS, llama.cpp on Linux). Model/runtime paths belong to the server.
 public actor NativeInference {
     private let configuration: InferenceConfiguration
@@ -97,7 +97,7 @@ public actor NativeInference {
     public init(configuration: InferenceConfiguration) {
         self.configuration = configuration
         speech = HelperProcess(
-            name: "Whisper", executable: configuration.speechHelper,
+            name: "Parakeet", executable: configuration.speechHelper,
             arguments: ["--model", configuration.speechModel.path, "--vad-model", configuration.vadModel.path,
                         "--threads", String(configuration.threads)],
             requiredFiles: [configuration.speechModel, configuration.vadModel],
@@ -132,7 +132,11 @@ public actor NativeInference {
     }
 
     public func warmUp(proofreadingEnabled: Bool = true) async throws {
-        _ = try await verifier.verify(configuration.speechModel, pin: speechPin)
+        do { _ = try await verifier.verify(configuration.speechModel, pin: speechPin) }
+        catch InferenceError.unavailable where FileManager.default.isReadableFile(atPath: configuration.speechModel.path) {
+            // A readable file that fails the pin is usually an earlier install's Whisper weights.
+            throw InferenceError.unavailable("The speech model must be Parakeet v3. Run scripts/download-model.sh.")
+        }
         try await speech.ensureLoaded()
         if proofreadingEnabled {
             _ = try await verifier.verify(configuration.proofModel, pin: proofPin)
@@ -151,10 +155,10 @@ public actor NativeInference {
                       && $0.rangeOfCharacter(from: .controlCharacters) == nil
               }),
               vocabularyTerms.reduce(0, { $0 + $1.utf8.count }) <= 384 * 1024 else {
-            throw InferenceError.invalidRequest("Audio, language, or Whisper prompt is invalid.")
+            throw InferenceError.invalidRequest("Audio, language, or Parakeet prompt is invalid.")
         }
         guard Set(vocabularyTerms).count == vocabularyTerms.count else {
-            throw InferenceError.invalidRequest("Whisper vocabulary terms must be unique.")
+            throw InferenceError.invalidRequest("Parakeet vocabulary terms must be unique.")
         }
         let digest = try await verifier.verify(configuration.speechModel, pin: speechPin)
         let request = SpeechRequest(id: UUID().uuidString, path: audioURL.path, language: language, vocabularyTerms: vocabularyTerms)
@@ -167,12 +171,13 @@ public actor NativeInference {
               let elapsed = response.elapsed, elapsed.isFinite, elapsed >= 0,
               let language = response.language, !language.isEmpty, language.utf8.count <= 32 else {
             await speech.shutdown()
-            throw InferenceError.invalidResponse("Whisper returned an invalid transcript.")
+            throw InferenceError.invalidResponse("Parakeet returned an invalid transcript.")
         }
         let hints: ModelHintUsage?
         if let included = response.includedTerms, let omitted = response.omittedTerms,
            let tokenCount = response.tokenCount, let tokenBudget = response.tokenBudget,
-           tokenCount >= 0, tokenBudget > 0, tokenCount <= tokenBudget,
+           tokenCount >= 0, tokenBudget >= 0, tokenCount <= tokenBudget,
+           (tokenBudget > 0 || included.isEmpty),
            included.count + omitted.count == vocabularyTerms.count,
            Set(included).isDisjoint(with: omitted),
            Set(included + omitted) == Set(vocabularyTerms),
@@ -183,7 +188,7 @@ public actor NativeInference {
             hints = nil // Older helper responses have no vocabulary diagnostics.
         } else {
             await speech.shutdown()
-            throw InferenceError.invalidResponse("Whisper returned invalid vocabulary diagnostics.")
+            throw InferenceError.invalidResponse("Parakeet returned invalid vocabulary diagnostics.")
         }
         let state = await speech.snapshot()
         return SpeechInferenceResult(text: text, audioSeconds: duration, processingSeconds: elapsed,
@@ -230,9 +235,9 @@ public actor NativeInference {
     }
 
     private var speechPin: InferenceModelPin? {
-        // Sources/InlayCore/SpeechModel.swift: SpeechModel.turbo.
-        InferenceModelPin(bytes: 1_624_555_275,
-            sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69")
+        // Sources/InlayCore/SpeechModel.swift: SpeechModel.parakeet.
+        InferenceModelPin(bytes: 1_255_897_319,
+            sha256: "833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f")
     }
 
     private var proofPin: InferenceModelPin? {

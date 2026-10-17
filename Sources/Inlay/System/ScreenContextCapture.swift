@@ -4,9 +4,8 @@ import CoreGraphics
 import InlayCore
 import ScreenCaptureKit
 
-/// Reads unusual words from the frontmost window when a take starts, so Whisper
-/// can spell names and identifiers that are on screen. The window image and its
-/// recognized text stay in this process; only ranked terms reach the server.
+/// Dormant capture support for a future hint-capable speech backend. The current
+/// Parakeet dictation flow never constructs this helper or requests its permissions.
 @MainActor
 final class ScreenContextCapture {
     private var terms: [String]?

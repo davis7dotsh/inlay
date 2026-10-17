@@ -128,15 +128,6 @@ public struct PersonalDictionary: Codable, Equatable, Sendable {
         return Self.uniqueTerms((entries.filter(\.isPriority) + entries.filter { !$0.isPriority }).map(\.term))
     }
 
-    /// Freeform terms only guide speech recognition; adding them does not install
-    /// replacements or make them protected dictionary terms during proofreading.
-    public func recognitionVocabularyTerms(_ freeform: String) -> [String] {
-        let extras = freeform.components(separatedBy: CharacterSet(charactersIn: ",").union(.newlines))
-            .map { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-            .filter { !$0.isEmpty }
-        return Self.uniqueTerms(vocabularyTerms + extras)
-    }
-
     private static func uniqueTerms(_ terms: [String]) -> [String] {
         var seen = Set<String>()
         return terms.filter { seen.insert(DictionaryValidation.key($0)).inserted }

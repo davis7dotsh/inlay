@@ -309,7 +309,10 @@ export interface components {
       name: string;
     };
     ServerPreferences: {
-      /** @enum {string} */
+      /**
+       * @description Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
+       * @enum {string}
+       */
       language:
         | "en"
         | "auto"
@@ -377,7 +380,7 @@ export interface components {
       continuationID?: components["schemas"]["UUID"];
       screenContextTerms?: components["schemas"]["ScreenContextTerms"];
     };
-    /** @description Unusual words the client read from the window being dictated into. They follow shared vocabulary as Whisper hints; recognized screen text itself stays on the client. */
+    /** @description Compatibility-only screen vocabulary field. The current Parakeet backend ignores supplied terms without retaining them or sending them to speech inference or text correction. */
     ScreenContextTerms: string[];
     AudioArtifact: {
       filename: string;

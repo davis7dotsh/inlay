@@ -19,13 +19,13 @@ public struct SpeechModel: Sendable {
     }
 
     // Pinned upstream revision and LFS digest, not a mutable "latest" download.
-    public static let turbo = SpeechModel(
-        id: "whisper-large-v3-turbo",
-        name: "Whisper large-v3-turbo",
-        filename: "ggml-large-v3-turbo.bin",
-        byteCount: 1_624_555_275,
-        sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
-        downloadURL: URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo.bin")!
+    public static let parakeet = SpeechModel(
+        id: "parakeet-tdt-0.6b-v3",
+        name: "Parakeet TDT 0.6B v3",
+        filename: "ggml-parakeet-tdt-0.6b-v3-f16.bin",
+        byteCount: 1_255_897_319,
+        sha256: "833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f",
+        downloadURL: URL(string: "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/35156454d1a39de06863303dd209fd2bed6ee079/ggml-parakeet-tdt-0.6b-v3-f16.bin")!
     )
 }
 
@@ -46,7 +46,7 @@ public enum ModelIntegrityError: LocalizedError, Equatable {
 }
 
 public enum ModelIntegrity {
-    public static func verify(_ url: URL, model: SpeechModel = .turbo) -> Result<Void, ModelIntegrityError> {
+    public static func verify(_ url: URL, model: SpeechModel = .parakeet) -> Result<Void, ModelIntegrityError> {
         guard FileManager.default.fileExists(atPath: url.path) else { return .failure(.missing) }
         do {
             let attributes = try FileManager.default.attributesOfItem(atPath: url.path)

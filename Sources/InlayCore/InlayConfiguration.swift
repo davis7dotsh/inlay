@@ -8,26 +8,29 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public var activationMode: String
     public var launchAtLogin: Bool
     public var muteOutputWhileRecording: Bool
-    /// Read unusual words from the frontmost window as recognition hints.
+    public var preserveClipboard: Bool
+    /// Retained for compatibility; inactive while Parakeet has no vocabulary hints.
     public var useScreenContext: Bool
     public var microphones: MicrophonePreferences
 
     public static let `default` = InlayConfiguration()
 
     public init(holdKey: String = "rightOption", activationMode: String = "hold", launchAtLogin: Bool = false,
-                muteOutputWhileRecording: Bool = false, useScreenContext: Bool = false,
+                muteOutputWhileRecording: Bool = false, preserveClipboard: Bool = false,
+                useScreenContext: Bool = false,
                 microphones: MicrophonePreferences = MicrophonePreferences()) {
         schemaVersion = 1
         self.holdKey = holdKey
         self.activationMode = activationMode
         self.launchAtLogin = launchAtLogin
         self.muteOutputWhileRecording = muteOutputWhileRecording
+        self.preserveClipboard = preserveClipboard
         self.useScreenContext = useScreenContext
         self.microphones = microphones
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording, useScreenContext, microphones
+        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording, preserveClipboard, useScreenContext, microphones
     }
 
     public init(from decoder: Decoder) throws {
@@ -48,6 +51,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
                   activationMode: activationMode,
                   launchAtLogin: try values.value(Bool.self, for: .launchAtLogin, default: false),
                   muteOutputWhileRecording: try values.value(Bool.self, for: .muteOutputWhileRecording, default: false),
+                  preserveClipboard: try values.value(Bool.self, for: .preserveClipboard, default: false),
                   useScreenContext: try values.value(Bool.self, for: .useScreenContext, default: false),
                   microphones: values.contains(.microphones)
                     ? try values.decode(StrictMicrophones.self, forKey: .microphones).preferences

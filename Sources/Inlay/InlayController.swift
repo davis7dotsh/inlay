@@ -118,11 +118,9 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.muteOutputWhileRecording = muteOutputWhileRecording } }
         }
     }
-    @Published var useScreenContext = false {
+    @Published var preserveClipboard = false {
         didSet {
-            guard useScreenContext != oldValue else { return }
-            if !applyingConfiguration { configuration.update { $0.useScreenContext = useScreenContext } }
-            if useScreenContext, hasInitialized, !applyingConfiguration, !permissions.screenRecording { requestScreenRecording() }
+            if !applyingConfiguration { configuration.update { $0.preserveClipboard = preserveClipboard } }
         }
     }
     @Published var statusMessage = "Connecting to server…"
@@ -197,25 +195,23 @@ final class InlayController: ObservableObject {
         let upload: Task<FinishGenerationRequest, Error>
         let pipe: AudioChunkPipe
         let destination: InsertionDestinationCapture?
-        let screenContext: ScreenContextCapture?
         var task: Task<Void, Never>?
         var sealed = false
         /// Nil until the destination resolves; list continuation keys off its anchor.
         var target: (destination: InsertionDestination, anchor: DictationDestination?)?
 
         init(session: UUID, id: UUID, client: ServerClient, upload: Task<FinishGenerationRequest, Error>,
-             pipe: AudioChunkPipe, destination: InsertionDestinationCapture?, screenContext: ScreenContextCapture?) {
+             pipe: AudioChunkPipe, destination: InsertionDestinationCapture?) {
             self.session = session; self.id = id; self.client = client; self.upload = upload
-            self.pipe = pipe; self.destination = destination; self.screenContext = screenContext
+            self.pipe = pipe; self.destination = destination
         }
 
         func cancel() {
-            task?.cancel(); upload.cancel(); pipe.cancel(); destination?.cancel(); screenContext?.cancel()
+            task?.cancel(); upload.cancel(); pipe.cancel(); destination?.cancel()
         }
     }
     @Published private var insertionDestination: InsertionDestination?
     private var destinationTask: InsertionDestinationCapture?
-    private var screenContextTask: ScreenContextCapture?
     private var recordingClipboardChangeCount = 0
     private struct ContinuationAnchor {
         let destination: DictationDestination
@@ -242,7 +238,7 @@ final class InlayController: ObservableObject {
         preferences = ClientPreferencesStore(root: configuration.url.deletingLastPathComponent())
         microphones = MicrophonePreferencesStore(configuration: configuration)
         permissions = startServices ? PermissionSnapshot.capture()
-            : PermissionSnapshot(microphone: false, accessibility: false, inputMonitoring: false, screenRecording: false)
+            : PermissionSnapshot(microphone: false, accessibility: false, inputMonitoring: false)
         applyConfiguration(configuration.configuration)
         hotkey.key = shortcut
         microphones.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
@@ -277,7 +273,7 @@ final class InlayController: ObservableObject {
         if let mode = HotkeyActivationMode(rawValue: settings.activationMode), activationMode != mode { activationMode = mode }
         if launchAtLogin != settings.launchAtLogin { launchAtLogin = settings.launchAtLogin }
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
-        if useScreenContext != settings.useScreenContext { useScreenContext = settings.useScreenContext }
+        if preserveClipboard != settings.preserveClipboard { preserveClipboard = settings.preserveClipboard }
         applyingConfiguration = false
     }
 
@@ -752,7 +748,6 @@ final class InlayController: ObservableObject {
         uploadPipe?.cancel(); uploadPipe = nil
         uploadTask?.cancel(); uploadTask = nil
         destinationTask?.cancel(); destinationTask = nil
-        screenContextTask?.cancel(); screenContextTask = nil
         stopRecordingTimer()
         recorder.cancel()
         outputMuter.restore()
@@ -880,10 +875,6 @@ final class InlayController: ObservableObject {
         onHUDVisibility?(true)
         if muteOutputWhileRecording { outputMuter.mute() }
         if !isTest {
-            if useScreenContext, permissions.screenRecording {
-                screenContextTask = ScreenContextCapture(
-                    spellingLanguage: ScreenContextCapture.spellingLanguage(for: sharedPreferences?.preferences.language))
-            }
             let capture = TextInserter.beginDestinationCapture()
             destinationTask = capture
             Task { [weak self] in
@@ -973,13 +964,13 @@ final class InlayController: ObservableObject {
         let capturedDestination = insertionDestination
         let clipboardCount = recordingClipboardChangeCount
         let pending = PendingDictation(session: current, id: id, client: connection, upload: uploadTask,
-                                       pipe: uploadPipe, destination: destinationTask, screenContext: screenContextTask)
+                                       pipe: uploadPipe, destination: destinationTask)
         // Usually known at release, so a later take can continue a list in another field.
         let knownDestination: InsertionDestination? = test ? .clipboard : capturedDestination
         pending.target = knownDestination.map { Self.resolve($0, isTest: test, releasedAt: releasedAt) }
         pendingDictations.append(pending)
         activeGenerationID = nil; activeClient = nil; self.uploadTask = nil; self.uploadPipe = nil
-        destinationTask = nil; screenContextTask = nil; insertionDestination = nil; recordingListHint = nil; recordingInputName = nil
+        destinationTask = nil; insertionDestination = nil; recordingListHint = nil; recordingInputName = nil
         recorder.onChunk = nil
         let stopped = recorder.stopCapture()
         recorderStopTask = stopped
@@ -1016,9 +1007,6 @@ final class InlayController: ObservableObject {
                 let sharesEarlierAnchor = pendingDictations.prefix { $0 !== pending }
                     .contains { earlier in earlier.target.map { $0.anchor == anchor } ?? true }
                 finish.continuationID = sharesEarlierAnchor ? nil : anchor.flatMap { self.continuation(for: $0)?.generationID }
-                if let terms = await pending.screenContext?.value(waitingAtMost: .milliseconds(500)), !terms.isEmpty {
-                    finish.screenContextTerms = terms
-                }
                 try Task.checkCancellation()
                 pending.sealed = true // The server may accept a seal whose response is interrupted.
                 var result: GenerationRecord
@@ -1060,7 +1048,7 @@ final class InlayController: ObservableObject {
                 }
                 refreshServer()
             } catch {
-                pending.upload.cancel(); pending.pipe.cancel(); pending.destination?.cancel(); pending.screenContext?.cancel()
+                pending.upload.cancel(); pending.pipe.cancel(); pending.destination?.cancel()
                 if !pending.sealed { Task { try? await connection.cancel(id) } }
                 guard !Task.isCancelled else { return }
                 if sessionID == current {
@@ -1137,7 +1125,8 @@ final class InlayController: ObservableObject {
             let outcome = await inserter.deliver(record.insertionText, copying: record.finalText,
                                                   to: destination, clipboardUnchangedSince: clipboardCount,
                                                   waitUntilReady: { await self.waitForCaptureRelease() },
-                                                  isCaptureActive: { self.isHoldingCapture })
+                                                  isCaptureActive: { self.isHoldingCapture },
+                                                  preservingClipboard: preserveClipboard)
             guard !Task.isCancelled else { return DeliveryReceipt(status: "failed", message: "Delivery cancelled") }
             if let anchor { continuationAnchors.removeAll { $0.destination == anchor } }
             switch outcome {
@@ -1277,12 +1266,6 @@ final class InlayController: ObservableObject {
             _ = await PermissionManager.requestMicrophone()
             refreshPermissions()
         }
-    }
-
-    func requestScreenRecording() {
-        if permissions.screenRecording { PermissionManager.openScreenRecordingSettings() }
-        else { PermissionManager.requestScreenRecording() }
-        retryPermissions()
     }
 
     func requestAccessibility() {
