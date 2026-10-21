@@ -5,6 +5,8 @@ enum HoldKey: String, CaseIterable, Identifiable {
     case rightOption
     case rightControl
     case fn
+    case leftOption
+    case leftControl
 
     var id: String { rawValue }
 
@@ -13,13 +15,15 @@ enum HoldKey: String, CaseIterable, Identifiable {
         case .rightOption: "Right Option"
         case .rightControl: "Right Control"
         case .fn: "Fn / Globe"
+        case .leftOption: "Left Option"
+        case .leftControl: "Left Control"
         }
     }
 
     var symbol: String {
         switch self {
-        case .rightOption: "⌥"
-        case .rightControl: "⌃"
+        case .rightOption, .leftOption: "⌥"
+        case .rightControl, .leftControl: "⌃"
         case .fn: "fn"
         }
     }
@@ -33,6 +37,8 @@ enum HoldKey: String, CaseIterable, Identifiable {
         case .rightOption: 61
         case .rightControl: 62
         case .fn: 63
+        case .leftOption: 58
+        case .leftControl: 59
         }
     }
 
@@ -43,6 +49,8 @@ enum HoldKey: String, CaseIterable, Identifiable {
         case .rightOption: flags.rawValue & 0x00000040 != 0
         case .rightControl: flags.rawValue & 0x00002000 != 0
         case .fn: flags.contains(.maskSecondaryFn)
+        case .leftOption: flags.rawValue & 0x00000020 != 0
+        case .leftControl: flags.rawValue & 0x00000001 != 0
         }
     }
 
@@ -57,9 +65,25 @@ enum HoldKey: String, CaseIterable, Identifiable {
             if flags.rawValue & 0x00000001 != 0 { return true } // Left Control.
         case .fn:
             disallowed.remove(.maskSecondaryFn)
+        case .leftOption:
+            disallowed.remove(.maskAlternate)
+            if flags.rawValue & 0x00000040 != 0 { return true } // Right Option.
+        case .leftControl:
+            disallowed.remove(.maskControl)
+            if flags.rawValue & 0x00002000 != 0 { return true } // Right Control.
         }
         return !flags.intersection(disallowed).isEmpty
     }
+
+    /// Non-modifier keys a trigger can be recorded onto (they never type).
+    /// Keep in sync with the InlayConfiguration decoder allowlist.
+    static let recordableKeyTitles: [CGKeyCode: String] = [
+        122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6", 98: "F7",
+        100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12", 105: "F13",
+        107: "F14", 113: "F15", 106: "F16", 64: "F17", 79: "F18", 80: "F19", 90: "F20",
+    ]
+
+    static func customKeyTitle(_ code: CGKeyCode) -> String? { recordableKeyTitles[code] }
 
     func isPhysicallyDown(in flags: CGEventFlags, keyState: @autoclosure () -> Bool) -> Bool {
         // keyState can report a held modifier as up (observed for Right Option
@@ -83,6 +107,7 @@ enum HoldKey: String, CaseIterable, Identifiable {
 enum HotkeyActivationMode: String, CaseIterable, Identifiable {
     case hold
     case doubleTapToggle = "doubleTap"
+    case tapToggle = "tapToggle"
 
     var id: String { rawValue }
 
@@ -90,6 +115,17 @@ enum HotkeyActivationMode: String, CaseIterable, Identifiable {
         switch self {
         case .hold: "Hold to talk"
         case .doubleTapToggle: "Double tap to toggle"
+        case .tapToggle: "Tap to start and stop"
+        }
+    }
+
+    var isLatched: Bool { self != .hold }
+
+    var actionVerb: String {
+        switch self {
+        case .hold: "hold"
+        case .doubleTapToggle: "double tap"
+        case .tapToggle: "tap"
         }
     }
 }
@@ -124,11 +160,14 @@ struct HotkeyEventTap {
 struct HotkeyMonitorEnvironment {
     var permissions: () -> PermissionSnapshot
     var isKeyDown: (HoldKey) -> Bool
+    var isCustomKeyDown: (CGKeyCode) -> Bool = { CGEventSource.keyState(.hidSystemState, key: $0) }
     var flags: () -> CGEventFlags
     var now: () -> TimeInterval
     var createTap: (HotkeyMonitor) -> HotkeyEventTap?
     var delayPress: (@escaping @MainActor () -> Void) -> HotkeyCancellation
     var repeatingTimer: (TimeInterval, @escaping @MainActor () -> Void) -> HotkeyCancellation
+    /// Drops a custom trigger's own key events so the focused app does not also act on them.
+    var swallowKey: (CGKeyCode) -> HotkeyCancellation? = { _ in nil }
 
     static var live: Self {
         Self(
@@ -176,7 +215,8 @@ struct HotkeyMonitorEnvironment {
                 timer.tolerance = interval * 0.1
                 RunLoop.main.add(timer, forMode: .common)
                 return HotkeyCancellation { timer.invalidate() }
-            }
+            },
+            swallowKey: CustomKeySwallower.start
         )
     }
 }
@@ -192,7 +232,8 @@ private struct HotkeyListeningAccess: Equatable {
     }
 }
 
-/// Passive keyboard monitoring: no event is swallowed or rewritten. An explicit
+/// Passive keyboard monitoring: only a custom trigger key's own events are
+/// swallowed (see CustomKeySwallower); nothing is rewritten. An explicit
 /// shortcut check can inspect modifier events in memory, never typed characters.
 @MainActor
 final class HotkeyMonitor {
@@ -210,7 +251,7 @@ final class HotkeyMonitor {
     /// An accepted Fn hold is dedicated push-to-talk, not a modifier chord.
     /// Views use this same state to leave Escape available to the focused app.
     /// A double-tap take is latched, so Fn shortcuts during it stay ordinary.
-    var isHoldingFn: Bool { mode == .hold && key == .fn && physicalDown && active }
+    var isHoldingFn: Bool { mode == .hold && key == .fn && customKeyCode == nil && physicalDown && active }
     /// An accepted hold or a press still inside its acceptance delay.
     var isHoldInProgress: Bool { active || pendingPressID != nil }
 
@@ -233,9 +274,27 @@ final class HotkeyMonitor {
         }
     }
 
+    var customKeyCode: CGKeyCode? {
+        didSet {
+            guard customKeyCode != oldValue else { return }
+            awaitingObservedRelease = false
+            reset(cancelActive: true)
+            blockAlreadyHeldKey()
+            updateKeySwallower()
+        }
+    }
+    var isUsingCustomKey: Bool { customKeyCode != nil }
+    /// Command, Option, Control, or Shift make a custom key an app shortcut. Fn may
+    /// be needed to produce the function key itself, so it stays allowed.
+    nonisolated static let customKeyChordFlags: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
+    /// Modifier key codes (Command through Fn). Some keyboards emit a companion
+    /// keyDown for a modifier after its flagsChanged; that is not another key.
+    nonisolated static let modifierKeyCodes: Set<CGKeyCode> = Set(54...63)
+
     private let environment: HotkeyMonitorEnvironment
     private var tap: HotkeyEventTap?
     private var tapAccess: HotkeyListeningAccess?
+    private var keySwallower: (code: CGKeyCode, lifetime: HotkeyCancellation)?
     private var watchdog: HotkeyCancellation?
     private var healthCheck: HotkeyCancellation?
     private var sleepObserver: NSObjectProtocol?
@@ -292,7 +351,7 @@ final class HotkeyMonitor {
     /// A shortcut check must not turn into recording when the check ends while
     /// a modifier is still held or its debounce is pending.
     func requireFreshHold() {
-        let wasDown = physicalDown || environment.isKeyDown(key)
+        let wasDown = physicalDown || activeKeyIsDown()
         reset(cancelActive: true)
         awaitingObservedRelease = awaitingObservedRelease || wasDown
         blockAlreadyHeldKey()
@@ -305,7 +364,8 @@ final class HotkeyMonitor {
             return
         }
         let code = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-        if type == .flagsChanged || ((type == .keyDown || type == .keyUp) && code == key.keyCode) {
+        if customKeyCode == nil,
+           type == .flagsChanged || ((type == .keyDown || type == .keyUp) && code == key.keyCode) {
             diagnoseModifier(type: type, code: code, flags: event.flags)
         }
         if isHoldingFn {
@@ -320,8 +380,8 @@ final class HotkeyMonitor {
             return
         }
         if type == .keyDown, code == 53 {
-            // The controller decides whether anything is cancellable, including
-            // transcription after the hold key has already been released.
+            // The controller honors this only while capturing; Escape during
+            // processing belongs to the focused app.
             // Escape is a single cancel: it clears a hold or a double-tap latch
             // without also reporting that hold's own cancel. A latch-only
             // cancel must not arm the chord block, or the next tap is swallowed.
@@ -332,7 +392,13 @@ final class HotkeyMonitor {
         }
         switch type {
         case .flagsChanged:
-            if code == key.keyCode {
+            if customKeyCode != nil {
+                // A modifier during the debounce makes this press a chord. Once a
+                // hold is accepted, a modifier is ordinary input and keeps the take.
+                if physicalDown, !holdAccepted, !event.flags.intersection(Self.customKeyChordFlags).isEmpty {
+                    blockCurrentHold()
+                }
+            } else if code == key.keyCode {
                 if key.isDown(in: event.flags) {
                     beginHold(flags: event.flags)
                 } else {
@@ -342,9 +408,19 @@ final class HotkeyMonitor {
                 blockCurrentHold()
             }
         case .keyDown:
+            if let customKeyCode {
+                if code == customKeyCode {
+                    if !event.flags.intersection(Self.customKeyChordFlags).isEmpty {
+                        // Command+F5 and similar chords stay the focused app's shortcuts;
+                        // autorepeat under a modifier added mid-take does not end it.
+                        if physicalDown, !holdAccepted { blockCurrentHold() }
+                    } else if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 { beginCustomHold() }
+                } else if physicalDown, !Self.modifierKeyCodes.contains(code) {
+                    blockCurrentHold()
+                }
             // Some HID keyboards send a companion keyDown for the modifier
             // itself after flagsChanged. That is not an Option+other-key chord.
-            if code == key.keyCode {
+            } else if code == key.keyCode {
                 // Fn can arrive as keyDown first. Its event is authoritative;
                 // a hardware-state poll can still describe the previous frame.
                 // Flag-less or repeated companion events cannot start a hold.
@@ -356,7 +432,8 @@ final class HotkeyMonitor {
                 blockCurrentHold()
             }
         case .keyUp:
-            if key == .fn, code == key.keyCode { release() }
+            if let customKeyCode, code == customKeyCode { release() }
+            else if key == .fn, code == key.keyCode { release() }
         case .leftMouseDown, .rightMouseDown:
             // In particular, Option+letter shortcuts during the debounce window
             // remain ordinary shortcuts, not surprise microphone activations.
@@ -374,9 +451,8 @@ final class HotkeyMonitor {
             blockCurrentHold()
             return
         }
-        if mode == .doubleTapToggle {
-            // A tap's meaning is decided when it ends: two taps inside the
-            // window toggle recording, so no hold debounce applies.
+        if mode.isLatched {
+            // A tap's meaning is decided when it ends, so no hold debounce applies.
             return
         }
         if key == .fn {
@@ -386,6 +462,18 @@ final class HotkeyMonitor {
         } else {
             schedulePress()
         }
+    }
+
+    private func beginCustomHold() {
+        guard !physicalDown else { return }
+        physicalDown = true
+        armWatchdog()
+        guard !blockedUntilRelease else {
+            blockCurrentHold()
+            return
+        }
+        if mode.isLatched { return }
+        schedulePress()
     }
 
     private func schedulePress() {
@@ -406,11 +494,11 @@ final class HotkeyMonitor {
             onDiagnostic?("Hold rejected: waiting for a fresh press.")
             return
         }
-        guard environment.isKeyDown(key) else {
+        guard activeKeyIsDown() else {
             onDiagnostic?("Hold rejected: hardware key-state query says the key is up.")
             return
         }
-        guard !key.hasOtherModifiers(in: environment.flags()) else {
+        guard isUsingCustomKey || !key.hasOtherModifiers(in: environment.flags()) else {
             onDiagnostic?("Hold rejected: another modifier is held.")
             return
         }
@@ -436,6 +524,9 @@ final class HotkeyMonitor {
         }
         return true
     }
+
+    /// An accepted hold-mode take, as opposed to a pending press or a latch tap.
+    private var holdAccepted: Bool { active && mode == .hold }
 
     private func blockCurrentHold() {
         onDiagnostic?("Hold interrupted; release the key before trying again.")
@@ -465,15 +556,31 @@ final class HotkeyMonitor {
         awaitingObservedRelease = false
         watchdog?.cancel()
         watchdog = nil
-        if mode == .doubleTapToggle {
+        if mode.isLatched {
             guard wantsMonitoring, wasDown, !wasBlocked else { return }
-            registerToggleTap()
+            if mode == .tapToggle { registerLatchTap() } else { registerToggleTap() }
             return
         }
         if active {
             active = false
             onRelease?()
         }
+    }
+
+    private func registerLatchTap() {
+        if active {
+            active = false
+            onDiagnostic?("Tap ended the recording.")
+            onRelease?()
+            return
+        }
+        guard ensureListeningAccess() else { return }
+        guard onPress?() ?? true else {
+            onDiagnostic?("Tap ignored: recording did not start.")
+            return
+        }
+        active = true
+        onDiagnostic?("Tap accepted; recording stays on after release.")
     }
 
     private func registerToggleTap() {
@@ -502,7 +609,7 @@ final class HotkeyMonitor {
     /// A take that failed or was cancelled after starting must not leave a
     /// double-tap latch behind; the next double tap should start a new take.
     func clearLatchedTake() {
-        guard mode == .doubleTapToggle, active else { return }
+        guard mode.isLatched, active else { return }
         active = false
     }
 
@@ -515,7 +622,7 @@ final class HotkeyMonitor {
         // A shortcut check or Fn recovery can require an actual release event.
         // A possibly lagging hardware-state query cannot unlock that latch.
         guard !awaitingObservedRelease else { return }
-        if physicalDown, !environment.isKeyDown(key) {
+        if physicalDown, !activeKeyIsDown() {
             onDiagnostic?(pendingPressID == nil
                 ? "Watchdog: hardware key-state query reports release."
                 : "Watchdog: hardware query reports release before the 180 ms hold threshold.")
@@ -556,6 +663,7 @@ final class HotkeyMonitor {
     private func refreshTap(resetHold: Bool = false) -> Bool {
         let access = HotkeyListeningAccess(environment.permissions())
         if access.isGranted, !resetHold, let tap, tap.isValid(), tapAccess == access, tap.isEnabled() {
+            updateKeySwallower()
             reportStatus(true)
             return true
         }
@@ -575,6 +683,7 @@ final class HotkeyMonitor {
             blockAlreadyHeldKey()
             tap.setEnabled(true)
             if tap.isValid(), tap.isEnabled() {
+                updateKeySwallower()
                 reportStatus(true)
                 return true
             }
@@ -593,12 +702,27 @@ final class HotkeyMonitor {
         blockAlreadyHeldKey()
         let enabled = newTap.isValid() && newTap.isEnabled()
         if !enabled { discardTap() }
+        updateKeySwallower()
         reportStatus(enabled)
         return enabled
     }
 
+    /// Swallowing needs an active tap, which macOS allows only with Accessibility.
+    /// Without it, or if the tap cannot be made, the key passes through as before.
+    private func updateKeySwallower() {
+        let wanted = wantsMonitoring && tap != nil && tapAccess?.accessibility == true ? customKeyCode : nil
+        guard keySwallower?.code != wanted else { return }
+        keySwallower?.lifetime.cancel()
+        keySwallower = wanted.flatMap { code in environment.swallowKey(code).map { (code, $0) } }
+    }
+
+    private func activeKeyIsDown() -> Bool {
+        if let customKeyCode { return environment.isCustomKeyDown(customKeyCode) }
+        return environment.isKeyDown(key)
+    }
+
     private func blockAlreadyHeldKey() {
-        physicalDown = awaitingObservedRelease || environment.isKeyDown(key)
+        physicalDown = awaitingObservedRelease || activeKeyIsDown()
         blockedUntilRelease = physicalDown
         if physicalDown, tap != nil, !awaitingObservedRelease { armWatchdog() }
     }
@@ -608,6 +732,7 @@ final class HotkeyMonitor {
         let previous = tap
         tap = nil
         tapAccess = nil
+        updateKeySwallower()
         previous?.invalidate()
     }
 
@@ -622,7 +747,7 @@ final class HotkeyMonitor {
         pendingPress = nil
         pendingPressID = nil
         let wasActive = active
-        let latched = keepLatch && mode == .doubleTapToggle && active
+        let latched = keepLatch && mode.isLatched && active
         active = latched
         physicalDown = false
         blockedUntilRelease = false
@@ -637,8 +762,101 @@ final class HotkeyMonitor {
         watchdog?.cancel()
         healthCheck?.cancel()
         if let sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver) }
+        keySwallower?.lifetime.cancel()
         tap?.invalidate()
     }
+}
+
+/// An active tap on its own thread, so a busy main actor never delays system-wide
+/// typing. It is appended after the head-inserted listen-only monitor, which still
+/// observes every edge first. A release is dropped when its press was; a tap that
+/// stops mid-press (key change, lost access, timeout) can pass an unpaired release.
+private final class CustomKeySwallower: @unchecked Sendable {
+    private let keyCode: CGKeyCode
+    private var tap: CFMachPort?
+    private var source: CFRunLoopSource?
+    /// Touched only on the tap thread.
+    private var swallowingPress = false
+    /// Guards the handoff between the tap thread starting and cancellation.
+    private let lock = NSLock()
+    private var runLoop: CFRunLoop?
+    private var cancelled = false
+
+    private init(keyCode: CGKeyCode) { self.keyCode = keyCode }
+
+    static func start(_ keyCode: CGKeyCode) -> HotkeyCancellation? {
+        let swallower = CustomKeySwallower(keyCode: keyCode)
+        let retained = Unmanaged.passRetained(swallower)
+        let mask = (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .defaultTap,
+            eventsOfInterest: mask, callback: inlayKeySwallowCallback, userInfo: retained.toOpaque()
+        ), let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            retained.release()
+            return nil
+        }
+        swallower.tap = tap
+        swallower.source = source
+        let thread = Thread {
+            swallower.lock.lock()
+            guard !swallower.cancelled else {
+                swallower.lock.unlock()
+                retained.release()
+                return
+            }
+            let runLoop = CFRunLoopGetCurrent()
+            swallower.runLoop = runLoop
+            CFRunLoopAddSource(runLoop, source, .commonModes)
+            swallower.lock.unlock()
+            // Returns once cancel stops it or the invalidated source leaves it.
+            // Callbacks run only inside this call, so none can follow the release.
+            CFRunLoopRun()
+            retained.release()
+        }
+        thread.name = "dev.davis.inlay.custom-key"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        return HotkeyCancellation { swallower.cancel() }
+    }
+
+    private func cancel() {
+        lock.lock()
+        cancelled = true
+        let runLoop = runLoop
+        lock.unlock()
+        if let tap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
+        }
+        if let source { CFRunLoopSourceInvalidate(source) }
+        // The source is already removed, so a loop that has not started yet
+        // finds nothing to run; a running one is stopped and woken.
+        if let runLoop {
+            CFRunLoopStop(runLoop)
+            CFRunLoopWakeUp(runLoop)
+        }
+    }
+
+    fileprivate func filter(type: CGEventType, event: CGEvent) -> Bool {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return false
+        }
+        guard type == .keyDown || type == .keyUp,
+              CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)) == keyCode else { return false }
+        if type == .keyDown, event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+            swallowingPress = event.flags.intersection(HotkeyMonitor.customKeyChordFlags).isEmpty
+        }
+        let swallow = swallowingPress
+        if type == .keyUp { swallowingPress = false }
+        return swallow
+    }
+}
+
+private let inlayKeySwallowCallback: CGEventTapCallBack = { _, type, event, context in
+    guard let context else { return Unmanaged.passUnretained(event) }
+    let swallower = Unmanaged<CustomKeySwallower>.fromOpaque(context).takeUnretainedValue()
+    return swallower.filter(type: type, event: event) ? nil : Unmanaged.passUnretained(event)
 }
 
 private let inlayHotkeyCallback: CGEventTapCallBack = { _, type, event, context in

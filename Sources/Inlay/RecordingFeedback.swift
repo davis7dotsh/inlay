@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import InlayAPI
 import InlayCore
 
 /// High-frequency feedback is observed only by the waveform and clock leaves,
@@ -18,10 +19,10 @@ final class RecordingFeedback: ObservableObject {
     }
 
     func updateElapsed(_ elapsed: TimeInterval) {
-        let bounded = elapsed.isFinite ? min(LifecyclePolicy.maximumRecordingSeconds, max(0, elapsed)) : 0
+        let bounded = elapsed.isFinite ? min(Double(InlayAPI.maximumRecordingSeconds), max(0, elapsed)) : 0
         let seconds = Int(bounded)
         if seconds != elapsedSeconds { elapsedSeconds = seconds }
-        let remaining = Int(LifecyclePolicy.maximumRecordingSeconds) - seconds
+        let remaining = InlayAPI.maximumRecordingSeconds - seconds
         let notice: RecordingLimitNotice? = (1...30).contains(remaining) ? .approaching(secondsRemaining: remaining) : nil
         if limitNotice != notice { limitNotice = notice }
     }

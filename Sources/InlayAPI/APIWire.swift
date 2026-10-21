@@ -25,6 +25,13 @@ extension InlayAPI {
 }
 
 extension DeviceIdentity: APIWireModel { public typealias Wire = Components.Schemas.DeviceIdentity }
+extension DeviceSummary: APIWireModel { public typealias Wire = Components.Schemas.DeviceSummary }
+extension DeviceList: APIWireModel { public typealias Wire = Components.Schemas.DeviceList }
+extension EnrollDeviceRequest: APIWireModel { public typealias Wire = Components.Schemas.EnrollDeviceRequest }
+extension EnrollDeviceResponse: APIWireModel { public typealias Wire = Components.Schemas.EnrollDeviceResponse }
+extension StorageUsage: APIWireModel { public typealias Wire = Components.Schemas.StorageUsage }
+extension PurgeAudioRequest: APIWireModel { public typealias Wire = Components.Schemas.PurgeAudioRequest }
+extension PurgeAudioResult: APIWireModel { public typealias Wire = Components.Schemas.PurgeAudioResult }
 extension ServerPreferences: APIWireModel { public typealias Wire = Components.Schemas.ServerPreferences }
 extension PreferencesSnapshot: APIWireModel { public typealias Wire = Components.Schemas.PreferencesSnapshot }
 extension ModelRuntimeInfo: APIWireModel { public typealias Wire = Components.Schemas.ModelRuntimeInfo }
@@ -52,6 +59,7 @@ extension WisprFlowKnownIDsResponse: APIWireModel { public typealias Wire = Comp
 extension WisprFlowDictionaryArchiveReceipt: APIWireModel { public typealias Wire = Components.Schemas.WisprFlowDictionaryArchiveReceipt }
 extension ImportedSource: APIWireModel { public typealias Wire = Components.Schemas.ImportedSource }
 extension GenerationRecord: APIWireModel { public typealias Wire = Components.Schemas.GenerationRecord }
+extension GenerationSummary: APIWireModel { public typealias Wire = Components.Schemas.GenerationSummary }
 extension GenerationPage: APIWireModel { public typealias Wire = Components.Schemas.GenerationPage }
 extension APIErrorResponse: APIWireModel { public typealias Wire = Components.Schemas.APIErrorResponse }
 extension DictionaryEntry: APIWireModel { public typealias Wire = Components.Schemas.DictionaryEntry }

@@ -107,3 +107,21 @@ jobs:
           name: inlay-server-${{ matrix.platform }}-cpu
           path: build/inlay-server-${{ matrix.platform }}-cpu.tar.gz
           if-no-files-found: error
+
+  client-package:
+    name: Client package
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build the macOS app bundle
+        run: ./scripts/build-app.sh
+      - name: Verify bundle signature and metadata
+        run: |
+          codesign --verify --deep --strict "build/Inlay.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "build/Inlay.app/Contents/Info.plist")" = "dev.davis.inlay"
+          test -n "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "build/Inlay.app/Contents/Info.plist")"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: inlay-client-package
+          path: build/Inlay.app
+          if-no-files-found: error

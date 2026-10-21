@@ -44,7 +44,11 @@ jobs:
           INLAY_NATIVE: "OFF"
           INLAY_CUDA: "OFF"
           INLAY_BUILD_JOBS: "4"
-        run: ./scripts/build-server.sh
+        run: |
+          if [[ "$GITHUB_REF_NAME" == server-v* ]]; then
+            export INLAY_SERVER_VERSION="${GITHUB_REF_NAME#server-v}"
+          fi
+          ./scripts/build-server.sh
       - name: Package and checksum
         run: |
           cd build
@@ -80,3 +84,30 @@ jobs:
             build/inlay-server-linux-x64-cuda.tar.gz
             build/inlay-server-linux-x64-cuda.tar.gz.sha256
           if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [package, cuda-package]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/server-v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release-artifacts/*.tar.gz release-artifacts/*.sha256)
+          test ${#assets[@]} -gt 0
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$GITHUB_REF_NAME" --notes "Server $GITHUB_REF_NAME" "${assets[@]}"
+          fi

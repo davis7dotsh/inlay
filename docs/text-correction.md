@@ -10,7 +10,7 @@ Edit **Server preferences**, then **Save shared preferences**. All dictionary li
 - Use narrow aliases like `off middleware → auth middleware`; a broad `off → auth` also changes legitimate “turn off.”
 - Star priority terms to suggest them to Qwen first. Parakeet does not support recognition vocabulary prompts, so the server sends none. Dictionary replacements and Qwen’s bounded hint budget still apply.
 - Saved recognition vocabulary remains in existing settings for compatibility, but Parakeet does not consume it. Use dictionary rules for deterministic replacements and dictionary names for Qwen cleanup.
-- **Screen hints** are unavailable with the current Parakeet backend. The setting is disabled, no screen content is collected, and no Screen Recording or extra Accessibility permission is requested for hints. Supplied screen terms are ignored, not retained in new takes or sent to Qwen.
+- **Screen hints**, enabled per Mac, add up to 40 unusual words read on-device from the focused window. They follow dictionary names in Qwen's hint list, so dictionary names win the bounded budget, and rewrite validation treats them like dictionary names. Parakeet never receives them, and they do nothing when **Proofread with Qwen** is off. History shows the terms sent with each take. See [architecture](architecture.md#settings) for capture and privacy rules.
 - The initial Personal list contains MiniMax and Codex. You can delete them or save an empty dictionary. There is no automatic learning from edits or history.
 
 ## Cleanup instructions
@@ -30,7 +30,7 @@ The prompt guides Qwen; it cannot bypass the validation rules below.
 
 Rejected, unavailable, or failed proofreading keeps the already-cleaned, dictionary-corrected, list-formatted source. History records raw text, the proposed/accepted cleanup, its outcome/reason, verified corrections, and model details. See [storage](architecture.md#storage).
 
-The checks do not prove identical meaning. Parakeet can omit words; Qwen can mishandle homophones or instructions. The proofreader receives the current dictated chunk, language, preferred terms, and cleanup prompt—not surrounding documents, clipboard contents, or screenshots.
+The checks do not prove identical meaning. Parakeet can omit words; Qwen can mishandle homophones or instructions. The proofreader receives the current dictated chunk, language, preferred terms (including any screen-hint terms), and cleanup prompt—not surrounding documents, clipboard contents, or screenshots.
 
 ## Limits and verification
 

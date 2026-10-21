@@ -2,19 +2,54 @@
 openapi: "3.1.0"
 info:
   title: "Inlay API"
-  version: "3.0.0"
+  version: "5.0.0"
   description: "Shared transport contract for the Swift client and TypeScript server. Optional properties are omitted rather than encoded as null. Dates use whole-second ISO8601 UTC timestamps."
 servers:
   - url: "http://localhost:8391"
 security:
   - bearerAuth: []
-x-inlay-apiVersion: 3
+x-inlay-apiVersion: 5
 x-inlay-defaultPort: 8391
 x-inlay-maximumRecordingSeconds: 180
 x-inlay-maximumChunkBytes: 1048576
 x-inlay-maximumArtifactBytes: 8388608
 x-inlay-maximumDictionaryBytes: 8388608
+x-inlay-supportedLanguages:
+  [
+    "en",
+    "auto",
+    "es",
+    "fr",
+    "de",
+    "it",
+    "pt",
+    "nl",
+    "ja",
+    "zh",
+    "ko",
+    "hi",
+    "ar",
+    "pl",
+    "ru",
+    "uk",
+    "sv",
+  ]
+x-inlay-maximumMetadataBytes: 1048576
+x-inlay-maximumPreferencesBytes: 262144
 paths:
+  "/v1/liveness":
+    get:
+      operationId: "getLiveness"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/LivenessResponse"
+        default:
+          "$ref": "#/components/responses/APIError"
+      security: []
   "/v1/health":
     get:
       operationId: "getHealth"
@@ -27,7 +62,6 @@ paths:
                 "$ref": "#/components/schemas/ServerHealth"
         default:
           "$ref": "#/components/responses/APIError"
-      security: []
   "/v1/preferences":
     get:
       operationId: "getPreferences"
@@ -58,6 +92,98 @@ paths:
             schema:
               "$ref": "#/components/schemas/PreferencesSnapshot"
         x-maximumBytes: 262144
+  "/v1/devices/enroll":
+    post:
+      operationId: "enrollDevice"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/EnrollDeviceRequest"
+      responses:
+        "201":
+          description: "Device enrolled"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/EnrollDeviceResponse"
+        "200":
+          description: "Device credential rotated"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/EnrollDeviceResponse"
+        default:
+          "$ref": "#/components/responses/APIError"
+  "/v1/devices":
+    get:
+      operationId: "listDevices"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/DeviceList"
+        default:
+          "$ref": "#/components/responses/APIError"
+  "/v1/devices/close-legacy-enrollment":
+    post:
+      operationId: "closeLegacyEnrollment"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/DeviceList"
+        default:
+          "$ref": "#/components/responses/APIError"
+  "/v1/devices/{id}":
+    delete:
+      operationId: "revokeDevice"
+      responses:
+        "204":
+          description: "Device revoked"
+        default:
+          "$ref": "#/components/responses/APIError"
+      parameters:
+        - name: "id"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+  "/v1/storage":
+    get:
+      operationId: "getStorageUsage"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/StorageUsage"
+        default:
+          "$ref": "#/components/responses/APIError"
+  "/v1/storage/purge-audio":
+    post:
+      operationId: "purgeAudio"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/PurgeAudioRequest"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/PurgeAudioResult"
+        default:
+          "$ref": "#/components/responses/APIError"
   "/v1/generations":
     get:
       operationId: "listGenerations"
@@ -237,6 +363,24 @@ paths:
           required: true
           schema:
             "$ref": "#/components/schemas/UUID"
+  "/v1/generations/{id}/reprocess":
+    post:
+      operationId: "reprocessGeneration"
+      responses:
+        "202":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/GenerationRecord"
+        default:
+          "$ref": "#/components/responses/APIError"
+      parameters:
+        - name: "id"
+          in: "path"
+          required: true
+          schema:
+            "$ref": "#/components/schemas/UUID"
   "/v1/generations/{id}/delivery":
     post:
       operationId: "recordDelivery"
@@ -256,6 +400,20 @@ paths:
             schema:
               "$ref": "#/components/schemas/DeliveryReceipt"
         x-maximumBytes: 262144
+      parameters:
+        - name: "id"
+          in: "path"
+          required: true
+          schema:
+            "$ref": "#/components/schemas/UUID"
+  "/v1/generations/{id}/audio":
+    delete:
+      operationId: "deleteGenerationAudio"
+      responses:
+        "204":
+          description: "Audio deleted"
+        default:
+          "$ref": "#/components/responses/APIError"
       parameters:
         - name: "id"
           in: "path"
@@ -584,6 +742,122 @@ components:
           maxItems: 32
       required:
         - "lists"
+    StorageUsage:
+      type: "object"
+      additionalProperties: false
+      properties:
+        generationCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        audioByteCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        inferenceByteCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        originalByteCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        oldestAudioAt:
+          type: "string"
+          format: "date-time"
+        freeByteCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        audioRetentionDays:
+          type: "integer"
+          minimum: 0
+          maximum: 3650
+      required:
+        - "generationCount"
+        - "audioByteCount"
+        - "inferenceByteCount"
+        - "originalByteCount"
+        - "freeByteCount"
+        - "audioRetentionDays"
+    PurgeAudioRequest:
+      type: "object"
+      additionalProperties: false
+      properties:
+        olderThanDays:
+          type: "integer"
+          minimum: 0
+          maximum: 3650
+        kind:
+          "$ref": "#/components/schemas/AudioKind"
+    PurgeAudioResult:
+      type: "object"
+      additionalProperties: false
+      properties:
+        purgedRecordCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        freedByteCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+      required:
+        - "purgedRecordCount"
+        - "freedByteCount"
+    DeviceSummary:
+      type: "object"
+      additionalProperties: false
+      properties:
+        id:
+          type: "string"
+        name:
+          type: "string"
+        createdAt:
+          type: "string"
+          format: "date-time"
+        lastSeenAt:
+          type: "string"
+          format: "date-time"
+        revokedAt:
+          type: "string"
+          format: "date-time"
+      required:
+        - "id"
+        - "name"
+        - "createdAt"
+    DeviceList:
+      type: "object"
+      additionalProperties: false
+      properties:
+        devices:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/DeviceSummary"
+        legacyEnrollmentClosed:
+          type: "boolean"
+      required:
+        - "devices"
+        - "legacyEnrollmentClosed"
+    EnrollDeviceRequest:
+      type: "object"
+      additionalProperties: false
+      properties:
+        device:
+          "$ref": "#/components/schemas/DeviceIdentity"
+      required:
+        - "device"
+    EnrollDeviceResponse:
+      type: "object"
+      additionalProperties: false
+      properties:
+        device:
+          "$ref": "#/components/schemas/DeviceSummary"
+        token:
+          type: "string"
+      required:
+        - "device"
+        - "token"
     DeviceIdentity:
       type: "object"
       additionalProperties: false
@@ -633,6 +907,11 @@ components:
           type: "boolean"
         keepOriginalAudio:
           type: "boolean"
+        audioRetentionDays:
+          type: "integer"
+          minimum: 0
+          maximum: 3650
+          description: "Days to keep recording audio; 0 keeps it forever. Missing values use 90."
       required:
         - "language"
         - "vocabulary"
@@ -668,6 +947,14 @@ components:
         - "modelID"
         - "backend"
         - "ready"
+    LivenessResponse:
+      type: "object"
+      additionalProperties: false
+      properties:
+        status:
+          type: "string"
+      required:
+        - "status"
     ServerHealth:
       type: "object"
       additionalProperties: false
@@ -764,7 +1051,7 @@ components:
       type: "array"
       maxItems: 40
       uniqueItems: true
-      description: "Compatibility-only screen vocabulary field. The current Parakeet backend ignores supplied terms without retaining them or sending them to speech inference or text correction."
+      description: "Unusual words the client read from the window being dictated into. They follow dictionary names as Qwen proofreading hints within the shared hint budget; the window image and its recognized text stay on the client."
       items:
         type: "string"
         minLength: 2
@@ -1161,6 +1448,8 @@ components:
           "$ref": "#/components/schemas/AudioArtifact"
         originalAudio:
           "$ref": "#/components/schemas/AudioArtifact"
+        originalAudioOmittedReason:
+          type: "string"
         rawText:
           type: "string"
         finalText:
@@ -1199,6 +1488,10 @@ components:
           type: "number"
           minimum: 0
           maximum: 1
+        queuePosition:
+          type: "integer"
+          minimum: 1
+          maximum: 9007199254740991
         importedSource:
           "$ref": "#/components/schemas/ImportedSource"
       required:
@@ -1215,6 +1508,42 @@ components:
         - "finalText"
         - "insertionText"
         - "previewText"
+    GenerationSummary:
+      type: "object"
+      additionalProperties: false
+      properties:
+        id:
+          "$ref": "#/components/schemas/UUID"
+        device:
+          "$ref": "#/components/schemas/DeviceIdentity"
+        mode:
+          "$ref": "#/components/schemas/GenerationMode"
+        status:
+          "$ref": "#/components/schemas/GenerationStatus"
+        createdAt:
+          type: "string"
+          format: "date-time"
+        updatedAt:
+          type: "string"
+          format: "date-time"
+        previewText:
+          type: "string"
+        queuePosition:
+          type: "integer"
+          minimum: 1
+          maximum: 9007199254740991
+        originalAudioOmittedReason:
+          type: "string"
+        importedSource:
+          "$ref": "#/components/schemas/ImportedSource"
+      required:
+        - "id"
+        - "device"
+        - "mode"
+        - "status"
+        - "createdAt"
+        - "updatedAt"
+        - "previewText"
     GenerationPage:
       type: "object"
       additionalProperties: false
@@ -1222,7 +1551,7 @@ components:
         items:
           type: "array"
           items:
-            "$ref": "#/components/schemas/GenerationRecord"
+            "$ref": "#/components/schemas/GenerationSummary"
         nextCursor:
           type: "string"
       required:
@@ -1258,7 +1587,7 @@ components:
     bearerAuth:
       type: "http"
       scheme: "bearer"
-      description: "Optional on loopback. Required for remote binding. Native clients send no Origin header."
+      description: "Required on every route except liveness: a per-device token, or the admin token on device routes. Native clients send no Origin header."
   responses:
     APIError:
       description: "A request, admission, or server error."

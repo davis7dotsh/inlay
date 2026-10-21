@@ -12,6 +12,9 @@ public import struct Foundation.Date
 public import Foundation
 /// A type that performs HTTP operations defined by the OpenAPI document.
 public protocol APIProtocol: Sendable {
+    /// - Remark: HTTP `GET /v1/liveness`.
+    /// - Remark: Generated from `#/paths//v1/liveness/get(getLiveness)`.
+    func getLiveness(_ input: Operations.GetLiveness.Input) async throws -> Operations.GetLiveness.Output
     /// - Remark: HTTP `GET /v1/health`.
     /// - Remark: Generated from `#/paths//v1/health/get(getHealth)`.
     func getHealth(_ input: Operations.GetHealth.Input) async throws -> Operations.GetHealth.Output
@@ -21,6 +24,24 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PUT /v1/preferences`.
     /// - Remark: Generated from `#/paths//v1/preferences/put(updatePreferences)`.
     func updatePreferences(_ input: Operations.UpdatePreferences.Input) async throws -> Operations.UpdatePreferences.Output
+    /// - Remark: HTTP `POST /v1/devices/enroll`.
+    /// - Remark: Generated from `#/paths//v1/devices/enroll/post(enrollDevice)`.
+    func enrollDevice(_ input: Operations.EnrollDevice.Input) async throws -> Operations.EnrollDevice.Output
+    /// - Remark: HTTP `GET /v1/devices`.
+    /// - Remark: Generated from `#/paths//v1/devices/get(listDevices)`.
+    func listDevices(_ input: Operations.ListDevices.Input) async throws -> Operations.ListDevices.Output
+    /// - Remark: HTTP `POST /v1/devices/close-legacy-enrollment`.
+    /// - Remark: Generated from `#/paths//v1/devices/close-legacy-enrollment/post(closeLegacyEnrollment)`.
+    func closeLegacyEnrollment(_ input: Operations.CloseLegacyEnrollment.Input) async throws -> Operations.CloseLegacyEnrollment.Output
+    /// - Remark: HTTP `DELETE /v1/devices/{id}`.
+    /// - Remark: Generated from `#/paths//v1/devices/{id}/delete(revokeDevice)`.
+    func revokeDevice(_ input: Operations.RevokeDevice.Input) async throws -> Operations.RevokeDevice.Output
+    /// - Remark: HTTP `GET /v1/storage`.
+    /// - Remark: Generated from `#/paths//v1/storage/get(getStorageUsage)`.
+    func getStorageUsage(_ input: Operations.GetStorageUsage.Input) async throws -> Operations.GetStorageUsage.Output
+    /// - Remark: HTTP `POST /v1/storage/purge-audio`.
+    /// - Remark: Generated from `#/paths//v1/storage/purge-audio/post(purgeAudio)`.
+    func purgeAudio(_ input: Operations.PurgeAudio.Input) async throws -> Operations.PurgeAudio.Output
     /// - Remark: HTTP `GET /v1/generations`.
     /// - Remark: Generated from `#/paths//v1/generations/get(listGenerations)`.
     func listGenerations(_ input: Operations.ListGenerations.Input) async throws -> Operations.ListGenerations.Output
@@ -42,9 +63,15 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/generations/{id}/cancel`.
     /// - Remark: Generated from `#/paths//v1/generations/{id}/cancel/post(cancelGeneration)`.
     func cancelGeneration(_ input: Operations.CancelGeneration.Input) async throws -> Operations.CancelGeneration.Output
+    /// - Remark: HTTP `POST /v1/generations/{id}/reprocess`.
+    /// - Remark: Generated from `#/paths//v1/generations/{id}/reprocess/post(reprocessGeneration)`.
+    func reprocessGeneration(_ input: Operations.ReprocessGeneration.Input) async throws -> Operations.ReprocessGeneration.Output
     /// - Remark: HTTP `POST /v1/generations/{id}/delivery`.
     /// - Remark: Generated from `#/paths//v1/generations/{id}/delivery/post(recordDelivery)`.
     func recordDelivery(_ input: Operations.RecordDelivery.Input) async throws -> Operations.RecordDelivery.Output
+    /// - Remark: HTTP `DELETE /v1/generations/{id}/audio`.
+    /// - Remark: Generated from `#/paths//v1/generations/{id}/audio/delete(deleteGenerationAudio)`.
+    func deleteGenerationAudio(_ input: Operations.DeleteGenerationAudio.Input) async throws -> Operations.DeleteGenerationAudio.Output
     /// A bounded NDJSON stream of complete GenerationRecord values, with the latest record repeated as a two-second heartbeat. Ends after a terminal record.
     ///
     /// - Remark: HTTP `GET /v1/generations/{id}/events`.
@@ -75,6 +102,11 @@ public protocol APIProtocol: Sendable {
 
 /// Convenience overloads for operation inputs.
 extension APIProtocol {
+    /// - Remark: HTTP `GET /v1/liveness`.
+    /// - Remark: Generated from `#/paths//v1/liveness/get(getLiveness)`.
+    public func getLiveness(headers: Operations.GetLiveness.Input.Headers = .init()) async throws -> Operations.GetLiveness.Output {
+        try await getLiveness(Operations.GetLiveness.Input(headers: headers))
+    }
     /// - Remark: HTTP `GET /v1/health`.
     /// - Remark: Generated from `#/paths//v1/health/get(getHealth)`.
     public func getHealth(headers: Operations.GetHealth.Input.Headers = .init()) async throws -> Operations.GetHealth.Output {
@@ -92,6 +124,54 @@ extension APIProtocol {
         body: Operations.UpdatePreferences.Input.Body
     ) async throws -> Operations.UpdatePreferences.Output {
         try await updatePreferences(Operations.UpdatePreferences.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /v1/devices/enroll`.
+    /// - Remark: Generated from `#/paths//v1/devices/enroll/post(enrollDevice)`.
+    public func enrollDevice(
+        headers: Operations.EnrollDevice.Input.Headers = .init(),
+        body: Operations.EnrollDevice.Input.Body
+    ) async throws -> Operations.EnrollDevice.Output {
+        try await enrollDevice(Operations.EnrollDevice.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /v1/devices`.
+    /// - Remark: Generated from `#/paths//v1/devices/get(listDevices)`.
+    public func listDevices(headers: Operations.ListDevices.Input.Headers = .init()) async throws -> Operations.ListDevices.Output {
+        try await listDevices(Operations.ListDevices.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /v1/devices/close-legacy-enrollment`.
+    /// - Remark: Generated from `#/paths//v1/devices/close-legacy-enrollment/post(closeLegacyEnrollment)`.
+    public func closeLegacyEnrollment(headers: Operations.CloseLegacyEnrollment.Input.Headers = .init()) async throws -> Operations.CloseLegacyEnrollment.Output {
+        try await closeLegacyEnrollment(Operations.CloseLegacyEnrollment.Input(headers: headers))
+    }
+    /// - Remark: HTTP `DELETE /v1/devices/{id}`.
+    /// - Remark: Generated from `#/paths//v1/devices/{id}/delete(revokeDevice)`.
+    public func revokeDevice(
+        path: Operations.RevokeDevice.Input.Path,
+        headers: Operations.RevokeDevice.Input.Headers = .init()
+    ) async throws -> Operations.RevokeDevice.Output {
+        try await revokeDevice(Operations.RevokeDevice.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /v1/storage`.
+    /// - Remark: Generated from `#/paths//v1/storage/get(getStorageUsage)`.
+    public func getStorageUsage(headers: Operations.GetStorageUsage.Input.Headers = .init()) async throws -> Operations.GetStorageUsage.Output {
+        try await getStorageUsage(Operations.GetStorageUsage.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /v1/storage/purge-audio`.
+    /// - Remark: Generated from `#/paths//v1/storage/purge-audio/post(purgeAudio)`.
+    public func purgeAudio(
+        headers: Operations.PurgeAudio.Input.Headers = .init(),
+        body: Operations.PurgeAudio.Input.Body
+    ) async throws -> Operations.PurgeAudio.Output {
+        try await purgeAudio(Operations.PurgeAudio.Input(
             headers: headers,
             body: body
         ))
@@ -179,6 +259,17 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `POST /v1/generations/{id}/reprocess`.
+    /// - Remark: Generated from `#/paths//v1/generations/{id}/reprocess/post(reprocessGeneration)`.
+    public func reprocessGeneration(
+        path: Operations.ReprocessGeneration.Input.Path,
+        headers: Operations.ReprocessGeneration.Input.Headers = .init()
+    ) async throws -> Operations.ReprocessGeneration.Output {
+        try await reprocessGeneration(Operations.ReprocessGeneration.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `POST /v1/generations/{id}/delivery`.
     /// - Remark: Generated from `#/paths//v1/generations/{id}/delivery/post(recordDelivery)`.
     public func recordDelivery(
@@ -190,6 +281,17 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /v1/generations/{id}/audio`.
+    /// - Remark: Generated from `#/paths//v1/generations/{id}/audio/delete(deleteGenerationAudio)`.
+    public func deleteGenerationAudio(
+        path: Operations.DeleteGenerationAudio.Input.Path,
+        headers: Operations.DeleteGenerationAudio.Input.Headers = .init()
+    ) async throws -> Operations.DeleteGenerationAudio.Output {
+        try await deleteGenerationAudio(Operations.DeleteGenerationAudio.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// A bounded NDJSON stream of complete GenerationRecord values, with the latest record repeated as a two-second heartbeat. Ends after a terminal record.

@@ -179,6 +179,18 @@ export function dictionaryVocabularyTerms(dictionary: PersonalDictionary) {
 
 export const vocabularyTerms = dictionaryVocabularyTerms;
 
+/** Lone surrogates (\p{Cs}) would break helper and client JSON decoding. */
+export const validScreenContextTerm = (term: string) =>
+  term === term.trim() && !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(term);
+
+/** Dictionary names lead; screen terms only fill Qwen's remaining hint budget. */
+export function proofreadingTerms(
+  dictionary: PersonalDictionary,
+  screenContextTerms: readonly string[] = [],
+) {
+  return uniqueTerms([...dictionaryVocabularyTerms(dictionary), ...screenContextTerms]);
+}
+
 const escapePattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Match original graphemes once. Folded text retains an offset map, so canonical

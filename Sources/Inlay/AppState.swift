@@ -15,6 +15,3 @@ enum ModelStatus: Equatable {
     case missing, downloading, verifying, installed, failed
 }
 
-enum EngineStatus: Equatable {
-    case unloaded, loading, ready, transcribing, failed
-}

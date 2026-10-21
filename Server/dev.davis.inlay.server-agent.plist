@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Template rendered by scripts/install-service.sh and the Mac app.
+         __…__ placeholders are substituted with absolute paths; launchd
+         does not expand ~ in ProgramArguments. -->
+    <key>Label</key>
+    <string>__LABEL__</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__SERVER_DIR__/inlay-server</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8391</string>
+        <string>--data-dir</string>
+        <string>__DATA_DIR__</string>
+        <string>--speech-helper</string>
+        <string>__SERVER_DIR__/helpers/inlay-engine</string>
+        <string>--speech-model</string>
+        <string>__MODELS_DIR__/ggml-parakeet-tdt-0.6b-v3-f16.bin</string>
+        <string>--vad-model</string>
+        <string>__SERVER_DIR__/resources/silero-vad.bin</string>
+        <string>--proof-helper</string>
+        <string>__SERVER_DIR__/helpers/inlay-text-engine</string>
+        <string>--proof-model</string>
+        <string>__MODELS_DIR__/Qwen3-4B-Instruct-2507-MLX-4bit</string>
+        <string>--token-file</string>
+        <string>__TOKEN_FILE__</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>WorkingDirectory</key>
+    <string>__SERVER_DIR__</string>
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/server.log</string>
+</dict>
+</plist>

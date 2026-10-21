@@ -36,6 +36,7 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
     private var configuration: ConfigurationStore?
     private var startupTask: Task<Void, Never>?
     private var reopenRequested = false
+    private var initialPage: InlayPage = .dictation
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = ProcessInfo.processInfo.environment["INLAY_CLIENT_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -64,6 +65,12 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
         configureApplicationMenu()
         configureStatusItem()
         let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: "hasLaunched")
+            || (controller.preferences.endpoint == ClientPreferencesStore.defaultEndpoint
+                && controller.serverHealth == nil
+                && !LocalServerPaths.installedMarkerExists) {
+            initialPage = .device
+        }
         if reopenRequested || configuration.errorMessage != nil || !defaults.bool(forKey: "hasLaunched") || !controller.allPermissionsGranted {
             showWindow()
         }
@@ -109,15 +116,18 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false
             )
             window.title = InlayBuild.current.displayName
-            // Let native chrome obscure scrolling form content under the title.
-            window.titlebarAppearsTransparent = false
+            // The root view paints one glass surface under a transparent
+            // titlebar. An opaque titlebar lets AppKit derive its color from
+            // whichever page happens to sit at the top edge, so the bar
+            // changed color between tabs.
+            window.titlebarAppearsTransparent = true
             window.titleVisibility = .visible
             window.toolbarStyle = .unified
-            window.titlebarSeparatorStyle = .automatic
+            window.titlebarSeparatorStyle = .none
             window.backgroundColor = NSColor(InlayPalette.canvas)
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 820, height: 620)
-            window.contentViewController = NSHostingController(rootView: InlayWindowView(controller: controller))
+            window.contentViewController = NSHostingController(rootView: InlayWindowView(controller: controller, initialPage: initialPage))
             window.delegate = self
             if !window.setFrameUsingName(InlayBuild.current.windowAutosaveName) { window.center() }
             window.setFrameAutosaveName(InlayBuild.current.windowAutosaveName)
@@ -158,7 +168,8 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
         statusItem = NSStatusBar.system.statusItem(withLength: InlayBuild.current.isDevelopment ? 62 : 30)
         if let button = statusItem.button {
             InlayBrand.updateStatusButton(button, activity: controller.activity, shortcut: controller.shortcut,
-                                         activationMode: controller.activationMode)
+                                         activationMode: controller.activationMode,
+                                         showsAttention: controller.attentionPresented)
         }
         statusItem.button?.target = self
         statusItem.button?.action = #selector(togglePopover)
@@ -166,18 +177,21 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
         popover.behavior = .transient
         menuContent = NSHostingController(rootView: InlayMenuView(
             controller: controller, openWindow: { [weak self] in self?.showWindow() },
-            quit: { NSApp.terminate(nil) }
+            quit: { NSApp.terminate(nil) },
+            closeMenu: { [weak self] in self?.popover?.performClose(nil) }
         ))
         // This compact menu has bounded status/preview slots. Keep its frame
         // stable while open, and remeasure current content on the next opening.
         menuContent.sizingOptions = []
         popover.contentViewController = menuContent
-        activitySubscription = controller.$activity.combineLatest(controller.$shortcut, controller.$activationMode)
-            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 && $0.2 == $1.2 }
-            .sink { [weak self] activity, shortcut, activationMode in
-            guard let button = self?.statusItem.button else { return }
-            InlayBrand.updateStatusButton(button, activity: activity, shortcut: shortcut, activationMode: activationMode)
-        }
+        activitySubscription = controller.$activity
+            .combineLatest(controller.$shortcut, controller.$activationMode, controller.$attentionPresented)
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 && $0.2 == $1.2 && $0.3 == $1.3 }
+            .sink { [weak self] activity, shortcut, activationMode, attention in
+                guard let button = self?.statusItem.button else { return }
+                InlayBrand.updateStatusButton(button, activity: activity, shortcut: shortcut,
+                                              activationMode: activationMode, showsAttention: attention)
+            }
     }
 
     private func configureApplicationMenu() {
@@ -196,11 +210,15 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
 
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "Edit")
-        for (title, action, key) in [
-            ("Undo", "undo:", "z"), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
-            ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a"),
+        for (title, action, key, modifiers) in [
+            ("Undo", "undo:", "z", NSEvent.ModifierFlags.command),
+            ("Redo", "redo:", "Z", NSEvent.ModifierFlags([.command, .shift])),
+            ("Cut", "cut:", "x", .command), ("Copy", "copy:", "c", .command),
+            ("Paste", "paste:", "v", .command), ("Select All", "selectAll:", "a", .command),
         ] {
-            edit.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: key))
+            let item = NSMenuItem(title: title, action: Selector(action), keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            edit.addItem(item)
         }
         editItem.submenu = edit
         main.addItem(editItem)
@@ -230,8 +248,10 @@ private final class DictationPanel: NSPanel {
     private let presentation = DictationHUDPresentation()
     private var noticeSubscription: AnyCancellable?
     private var activitySubscription: AnyCancellable?
+    private var attentionSubscription: AnyCancellable?
     private var compactTask: Task<Void, Never>?
     private var activity: DictationActivity = .idle
+    private var showsAttention = false
     private var showsNotice = false
     private var compact = false
 
@@ -268,6 +288,10 @@ private final class DictationPanel: NSPanel {
             self?.activity = activity
             self?.updateCompactState()
         }
+        attentionSubscription = controller.$attentionPresented.removeDuplicates().sink { [weak self] presented in
+            self?.showsAttention = presented
+            self?.updateCompactState()
+        }
     }
 
     override var canBecomeKey: Bool { false }
@@ -288,7 +312,7 @@ private final class DictationPanel: NSPanel {
 
     private func updateCompactState() {
         compactTask?.cancel()
-        if activity.isCapturing {
+        if activity.isBusy || showsAttention {
             compact = false
             updateFrame()
         } else {
@@ -308,14 +332,30 @@ private final class DictationPanel: NSPanel {
 
     func dismiss() {
         compactTask?.cancel()
-        presentation.id = nil
-        orderOut(nil)
+        let dismissedID = presentation.id
+        guard dismissedID != nil else { return }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            presentation.id = nil
+            orderOut(nil)
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, presentation.id == dismissedID else { return }
+                presentation.id = nil
+                orderOut(nil)
+            }
+        }
     }
 
     func present() {
         compact = false
         updateFrame()
         presentation.id = UUID()
+        alphaValue = 1
         updateCompactState()
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main

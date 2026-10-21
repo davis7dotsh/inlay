@@ -22,25 +22,26 @@ enum InlayBrand {
     private static let restingStatusImage = makeStatusLogo()
     private static let recordingStatusImage = makeStatusSymbol("waveform", description: "\(InlayBuild.current.displayName) — listening")
     private static let processingStatusImage = makeStatusSymbol("ellipsis", description: "\(InlayBuild.current.displayName) — processing")
+    private static let attentionStatusImage = makeStatusSymbol("exclamationmark.circle", description: "\(InlayBuild.current.displayName) — dictation needs attention")
 
-    static func statusImage(for activity: DictationActivity = .idle) -> NSImage {
+    static func statusImage(for activity: DictationActivity = .idle, showsAttention: Bool = false) -> NSImage {
         switch activity {
         case .starting, .recording: recordingStatusImage
         case .transcribing, .delivering: processingStatusImage
-        case .idle, .success, .failed: restingStatusImage
+        case .idle, .success, .failed: showsAttention ? attentionStatusImage : restingStatusImage
         }
     }
 
     /// Status-bar templates must let AppKit choose their foreground. In
     /// particular, do not bridge the SwiftUI brand tint onto NSStatusBarButton.
     static func updateStatusButton(_ button: NSButton, activity: DictationActivity, shortcut: HoldKey,
-                                   activationMode: HotkeyActivationMode = .hold) {
+                                   activationMode: HotkeyActivationMode = .hold, showsAttention: Bool = false) {
         button.contentTintColor = nil
         button.imagePosition = .imageLeading
         button.title = InlayBuild.current.isDevelopment ? " Dev" : ""
         button.font = .systemFont(ofSize: 10, weight: .medium)
         button.imageScaling = .scaleProportionallyDown
-        button.image = statusImage(for: activity)
+        button.image = statusImage(for: activity, showsAttention: showsAttention)
         let description: String
         switch activity {
         case .starting: description = "\(InlayBuild.current.displayName) — starting microphone"
@@ -49,7 +50,7 @@ enum InlayBrand {
         case .delivering: description = "\(InlayBuild.current.displayName) — delivering your words"
         case .failed: description = "\(InlayBuild.current.displayName) — dictation needs attention"
         case .idle, .success:
-            let verb = activationMode == .doubleTapToggle ? "double tap" : "hold"
+            let verb = activationMode.actionVerb
             description = "\(InlayBuild.current.displayName) — \(verb) \(shortcut.title) to dictate"
         }
         button.toolTip = description

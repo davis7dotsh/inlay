@@ -1,7 +1,9 @@
+import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { open } from "node:fs/promises";
+import { mkdir, open, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { logWarn } from "./log.ts";
 import {
   createInferenceConfiguration,
   type InferenceConfiguration,
@@ -11,7 +13,10 @@ export interface ServerConfiguration {
   host: string;
   port: number;
   dataDirectory: string;
-  token?: string;
+  /** Admin/bootstrap token: enrolls and revokes devices; never a dictation credential. */
+  token: string;
+  adminTokenFile: string;
+  adminTokenCreated: boolean;
   development: boolean;
   inference: InferenceConfiguration;
 }
@@ -22,7 +27,7 @@ inlay-server --data-dir PATH --speech-helper PATH --speech-model PATH --vad-mode
 
 macOS uses Parakeet/Metal and Qwen/MLX. Linux uses Parakeet/CUDA or CPU and Qwen/llama.cpp.
 Models must already exist. The server never downloads or imports personal data automatically.
-Use persistent storage for --data-dir. Remote bindings require --token-file.
+Use persistent storage for --data-dir. Without --token-file, an admin token is created at <data-dir>/admin-token.
 `;
 
 const names = new Set([
@@ -78,15 +83,32 @@ export async function parseConfiguration(
   if (!/^\d+$/.test(rawPort) || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw new Error("Port must be between 1 and 65535.");
   }
+  const dataDirectory = path("data-dir", "INLAY_SERVER_DATA_DIR");
   let token: string | undefined;
-  const tokenFile = value("token-file", "INLAY_SERVER_TOKEN_FILE");
-  if (tokenFile) {
+  let tokenFile = value("token-file", "INLAY_SERVER_TOKEN_FILE");
+  let adminTokenCreated = false;
+  if (!tokenFile) {
+    tokenFile = join(dataDirectory, "admin-token");
+    await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
+    try {
+      await writeFile(tokenFile, randomBytes(32).toString("hex"), { flag: "wx", mode: 0o600 });
+      adminTokenCreated = true;
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    }
+  }
+  {
     const file = await open(
       expandPath(tokenFile),
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     );
     try {
       const stat = await file.stat();
+      if ((stat.mode & 0o077) !== 0)
+        logWarn("token_file_permissions", {
+          file: expandPath(tokenFile),
+          message: "Admin token file should have mode 0600.",
+        });
       if (!stat.isFile() || stat.size > 4096)
         throw new Error("The token file must contain at most 4096 bytes of UTF-8 text.");
       const bytes = await file.readFile();
@@ -100,17 +122,19 @@ export async function parseConfiguration(
       throw new Error("The server token must be nonempty and contain no whitespace.");
   }
   const host = value("host", "INLAY_SERVER_HOST") ?? "127.0.0.1";
-  if (!isLoopbackHost(host) && Buffer.byteLength(token ?? "") < 32) {
+  if (Buffer.byteLength(token ?? "") < 32) {
     throw new Error(
-      "Listening beyond localhost requires a token file containing at least 32 characters. Use HTTPS or a private encrypted network for remote connections.",
+      "The admin token must contain at least 32 characters. Use HTTPS or a private encrypted network (Tailscale) for remote connections.",
     );
   }
   return {
     host,
     port,
-    token,
+    token: token!,
+    adminTokenFile: expandPath(tokenFile),
+    adminTokenCreated,
     development,
-    dataDirectory: path("data-dir", "INLAY_SERVER_DATA_DIR"),
+    dataDirectory,
     inference: createInferenceConfiguration({
       speechHelper: path("speech-helper", "INLAY_ENGINE_PATH"),
       speechModel: path("speech-model", "INLAY_SPEECH_MODEL"),

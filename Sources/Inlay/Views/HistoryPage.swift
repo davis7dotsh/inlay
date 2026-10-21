@@ -6,6 +6,7 @@ struct HistoryPage: View {
     @ObservedObject var controller: InlayController
     @State private var selectedID: UUID?
     @State private var deviceID = "all"
+    @State private var confirmingDeleteAudio = false
     @State private var confirmingDelete = false
     @State private var copiedID: UUID?
     @State private var showingWisprFlowImport = false
@@ -14,10 +15,10 @@ struct HistoryPage: View {
         var seen = Set<String>()
         return controller.generations.map(\.device).filter { seen.insert($0.id).inserted }.sorted { $0.name < $1.name }
     }
-    private var filtered: [GenerationRecord] {
+    private var filtered: [GenerationSummary] {
         controller.generations.filter { deviceID == "all" || $0.device.id == deviceID }
     }
-    private var selected: GenerationRecord? {
+    private var selected: GenerationSummary? {
         filtered.first { $0.id == selectedID }
     }
 
@@ -66,7 +67,7 @@ struct HistoryPage: View {
                 Spacer()
                 Button("Import Wispr Flow history") {
                     showingWisprFlowImport = true
-                    controller.prepareWisprFlowImport()
+                    controller.wisprImport.prepareWisprFlowImport()
                 }
                 .disabled(controller.isBusy)
                 .accessibilityIdentifier("history.import-wispr-flow")
@@ -82,13 +83,15 @@ struct HistoryPage: View {
         }
         .padding(26)
         .onAppear { controller.refreshHistory() }
+        // Summary changes (status, updatedAt) after completion or reprocess refresh the detail too.
+        .onChange(of: selected) { _, summary in controller.loadGenerationDetail(summary?.id) }
         .onChange(of: controller.historySourceFilter) { _, _ in
             deviceID = "all"
             selectedID = nil
         }
         .sheet(isPresented: $showingWisprFlowImport) {
-            WisprFlowImportSheet(controller: controller)
-                .onDisappear { controller.closeWisprFlowImportSheet() }
+            WisprFlowImportSheet(controller: controller, driver: controller.wisprImport)
+                .onDisappear { controller.wisprImport.closeWisprFlowImportSheet() }
         }
         .confirmationDialog("Delete this dictation from the server?", isPresented: $confirmingDelete) {
             if let selected {
@@ -99,7 +102,18 @@ struct HistoryPage: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Its archived text and files will be removed from every device’s history.")
+            Text("Its archived text and files will be removed from every device’s history. Copies in your own backups are not removed.")
+        }
+        .confirmationDialog("Delete this recording's audio from the server?", isPresented: $confirmingDeleteAudio) {
+            if let selected {
+                Button("Delete audio", role: .destructive) {
+                    controller.errorMessage = nil
+                    controller.deleteGenerationAudio(selected.id)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The transcript stays in history. This cannot be undone.")
         }
     }
 
@@ -111,8 +125,12 @@ struct HistoryPage: View {
                         Text(generation.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
                             .font(.caption)
                         Spacer(minLength: 4)
-                        if generation.status != .completed {
-                            Image(systemName: generation.status == .failed ? "exclamationmark.circle" : "clock")
+                        if generation.status == .failed || generation.status == .cancelled {
+                            Text(statusLabel(generation.status))
+                                .font(.caption)
+                                .foregroundStyle(InlayPalette.warning)
+                        } else if generation.status != .completed {
+                            Image(systemName: "clock")
                                 .foregroundStyle(InlayPalette.warning)
                         }
                     }
@@ -128,7 +146,7 @@ struct HistoryPage: View {
                 }
                 .padding(.vertical, 8)
                 .tag(generation.id)
-                .accessibilityLabel("\(sourceLabel(generation)), \(summary(generation))")
+                .accessibilityLabel(accessibilityText(generation))
             }
         }
         .listStyle(.inset)
@@ -143,7 +161,9 @@ struct HistoryPage: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if let selected {
+        if let summary = selected {
+            if let selected = controller.generationDetail, selected.id == summary.id,
+               controller.generationDetailFailedID != summary.id {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text(selected.createdAt, format: .dateTime.month(.wide).day().hour().minute()).font(.headline)
@@ -176,6 +196,17 @@ struct HistoryPage: View {
                     VStack(alignment: .leading, spacing: 18) {
                         if let error = selected.error {
                             Text(error).foregroundStyle(InlayPalette.warning)
+                        }
+                        if selected.status == .cancelled || selected.status == .failed {
+                            if selected.inferenceAudio != nil || selected.originalAudio != nil {
+                                Text("This recording was \(selected.status == .cancelled ? "cancelled" : "failed"). Its audio is kept in shared history until the audio retention period ends or you delete it.")
+                                    .font(.caption)
+                                    .foregroundStyle(InlayPalette.muted)
+                            } else {
+                                Text("Audio was removed by the retention setting.")
+                                    .font(.caption)
+                                    .foregroundStyle(InlayPalette.muted)
+                            }
                         }
                         Text(selected.finalText.isEmpty ? "No transcript available." : selected.finalText)
                             .font(.body)
@@ -211,6 +242,15 @@ struct HistoryPage: View {
                                 }
                             }
                         }
+                        if let terms = selected.screenContextTerms, !terms.isEmpty {
+                            DisclosureGroup("Screen hints: \(terms.count) terms") {
+                                Text(terms.joined(separator: ", "))
+                                    .font(.caption)
+                                    .foregroundStyle(InlayPalette.muted)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
                         // Parakeet takes no vocabulary prompt; its takes report a zero budget.
                         if let hints = selected.recognitionHints, hints.tokenBudget != 0, !hints.omittedTerms.isEmpty {
                             hintDetails("Voice vocabulary", hints: hints)
@@ -223,6 +263,13 @@ struct HistoryPage: View {
                 .frame(maxHeight: .infinity)
                 Divider()
                 HStack {
+                    if selected.status == .failed || selected.status == .cancelled,
+                       selected.inferenceAudio != nil, selected.importedSource == nil {
+                        Button("Transcribe again") {
+                            controller.errorMessage = nil
+                            controller.transcribeAgain(selected.id)
+                        }
+                    }
                     if selected.inferenceAudio != nil {
                         Button("Open audio") {
                             controller.errorMessage = nil
@@ -234,6 +281,12 @@ struct HistoryPage: View {
                             controller.errorMessage = nil
                             controller.openGenerationAudio(selected, kind: .original)
                         }
+                    }
+                    if selected.originalAudio == nil, let reason = selected.originalAudioOmittedReason {
+                        Text(reason).font(.caption).foregroundStyle(InlayPalette.muted).lineLimit(1)
+                    }
+                    if selected.inferenceAudio != nil || selected.originalAudio != nil {
+                        Button("Delete audio") { confirmingDeleteAudio = true }
                     }
                     if let source = selected.importedSource {
                         if source.artifactNames.contains(.sourceWAV) {
@@ -265,10 +318,29 @@ struct HistoryPage: View {
             .padding(.leading, 20)
             .padding(.top, 8)
             .accessibilityIdentifier("history.detail")
+            } else if controller.generationDetailFailedID == summary.id {
+                VStack(spacing: 10) {
+                    Text("This dictation could not be loaded.").foregroundStyle(InlayPalette.muted)
+                    Button("Try again") {
+                        controller.errorMessage = nil
+                        controller.loadGenerationDetail(summary.id)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView("Loading dictation…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else {
             ContentUnavailableView("Select a dictation", systemImage: "text.alignleft")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func accessibilityText(_ generation: GenerationSummary) -> String {
+        let base = "\(sourceLabel(generation)), \(summary(generation))"
+        return generation.status == .failed || generation.status == .cancelled
+            ? "\(statusLabel(generation.status)), \(base)" : base
     }
 
     private func statusLabel(_ status: GenerationStatus) -> String {
@@ -287,8 +359,12 @@ struct HistoryPage: View {
         generation.importedSource == nil ? generation.device.name : "Imported from Wispr Flow"
     }
 
-    private func summary(_ generation: GenerationRecord) -> String {
-        if !generation.finalText.isEmpty { return generation.finalText }
+    private func sourceLabel(_ generation: GenerationSummary) -> String {
+        generation.importedSource == nil ? generation.device.name : "Imported from Wispr Flow"
+    }
+
+    private func summary(_ generation: GenerationSummary) -> String {
+        if !generation.previewText.isEmpty { return generation.previewText }
         return generation.importedSource == nil ? statusLabel(generation.status) : "No transcript recovered"
     }
 
@@ -318,6 +394,7 @@ struct HistoryPage: View {
 
 private struct WisprFlowImportSheet: View {
     @ObservedObject var controller: InlayController
+    @ObservedObject var driver: WisprFlowImportDriver
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -326,7 +403,7 @@ private struct WisprFlowImportSheet: View {
                 .font(.title2.weight(.semibold))
 
             Group {
-                switch controller.wisprFlowImportState {
+                switch driver.state {
                 case .idle, .preparing:
                     VStack(alignment: .leading, spacing: 12) {
                         ProgressView().controlSize(.small)
@@ -365,7 +442,7 @@ private struct WisprFlowImportSheet: View {
     }
 
     private var isImporting: Bool {
-        if case .running = controller.wisprFlowImportState { return true }
+        if case .running = driver.state { return true }
         return false
     }
 
@@ -468,22 +545,22 @@ private struct WisprFlowImportSheet: View {
     }
 
     @ViewBuilder private var actions: some View {
-        switch controller.wisprFlowImportState {
+        switch driver.state {
         case .idle, .preparing:
-            Button("Cancel") { controller.cancelWisprFlowImport(); dismiss() }
+            Button("Cancel") { driver.cancelWisprFlowImport(); dismiss() }
         case .preview(_, _, let destinationError):
             Button("Cancel") { dismiss() }
-            Button("Import") { controller.startWisprFlowImport() }
+            Button("Import") { driver.startWisprFlowImport() }
                 .buttonStyle(.borderedProminent)
                 .disabled(destinationError != nil || controller.serverHealth?.apiVersion != InlayAPI.version || controller.isBusy)
                 .accessibilityIdentifier("wispr-flow-import.start")
         case .running:
-            Button("Cancel import") { controller.cancelWisprFlowImport() }
+            Button("Cancel import") { driver.cancelWisprFlowImport() }
         case .finished:
             Button("Done") { dismiss() }
         case .failed:
             Button("Close") { dismiss() }
-            Button("Try again") { controller.prepareWisprFlowImport() }
+            Button("Try again") { driver.prepareWisprFlowImport() }
         }
     }
 }

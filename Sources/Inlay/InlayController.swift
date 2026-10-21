@@ -9,72 +9,14 @@ private enum DictationDestination: Equatable {
     case field(InsertionTarget)
 }
 
-struct WisprFlowImportCounts {
-    var processed = 0
-    var total = 0
-    var imported = 0
-    var enriched = 0
-    var skipped = 0
-    var partial = 0
-    var failed = 0
-    var dictionaryArchived = false
-    var warning: String?
-    var unarchivedWarning: String?
-}
-
-enum WisprFlowImportState {
-    case idle
-    case preparing
-    case preview(WisprFlowImportPreview, knownCount: Int?, destinationError: String?)
-    case running(WisprFlowImportPreview, WisprFlowImportCounts)
-    case finished(WisprFlowImportPreview, WisprFlowImportCounts, cancelled: Bool)
-    case failed(String)
-}
-
-/// The snapshot worker is independent of the main actor. This gate lets quit
-/// wait for it and close a reader that has not yet reached the controller.
-private final class WisprFlowPreparationGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private let work = DispatchGroup()
-    private var cancelled = false
-    private var reader: WisprFlowSourceReader?
-
-    init() { work.enter() }
-    func finish() { work.leave() }
-
-    func register(_ value: WisprFlowSourceReader) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !cancelled else { return false }
-        reader = value
-        return true
-    }
-
-    func transfer(_ value: WisprFlowSourceReader) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !cancelled, reader === value else { return false }
-        reader = nil
-        return true
-    }
-
-    func cancel(waitForWorker: Bool = false) {
-        lock.lock()
-        cancelled = true
-        let value = reader
-        reader = nil
-        lock.unlock()
-        if waitForWorker {
-            value?.close()
-            work.wait()
-        } else if let value {
-            Task.detached(priority: .utility) { value.close() }
-        }
-    }
-}
-
 /// The desktop never owns a durable generation or a model process. A take has
 /// one accepted server generation, one bounded upload, and at most one delivery.
+enum InsertionMode {
+    case insertion
+    case clipboardOnly
+    case unavailable
+}
+
 @MainActor
 final class InlayController: ObservableObject {
     @Published var activity: DictationActivity = .idle
@@ -86,6 +28,7 @@ final class InlayController: ObservableObject {
     @Published var lastAudioSeconds: Double?
     @Published var lastDelivery = ""
     @Published private(set) var lastDeliveryStatus: DictationDeliveryStatus = .none
+    @Published private(set) var attentionPresented = false
     @Published var errorMessage: String?
     @Published var permissions: PermissionSnapshot
     @Published var isHotkeyActive = false
@@ -96,6 +39,16 @@ final class InlayController: ObservableObject {
             if shortcut != oldValue { stopShortcutCheck() }
             if !applyingConfiguration { configuration.update { $0.holdKey = shortcut.rawValue } }
             hotkey.key = shortcut
+        }
+    }
+    @Published var customTriggerKeyCode: Int? {
+        didSet {
+            if customTriggerKeyCode != oldValue { stopShortcutCheck() }
+            if !applyingConfiguration {
+                let code = customTriggerKeyCode
+                configuration.update { $0.customTriggerKeyCode = code }
+            }
+            hotkey.customKeyCode = customTriggerKeyCode.map { CGKeyCode($0) }
         }
     }
     @Published var activationMode: HotkeyActivationMode = .hold {
@@ -118,43 +71,89 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.muteOutputWhileRecording = muteOutputWhileRecording } }
         }
     }
+    @Published var dictationSoundsEnabled = true {
+        didSet {
+            if !applyingConfiguration { configuration.update { $0.dictationSoundsEnabled = dictationSoundsEnabled } }
+        }
+    }
     @Published var preserveClipboard = false {
         didSet {
             if !applyingConfiguration { configuration.update { $0.preserveClipboard = preserveClipboard } }
         }
     }
+    @Published var useScreenContext = false {
+        didSet {
+            guard useScreenContext != oldValue else { return }
+            if !applyingConfiguration { configuration.update { $0.useScreenContext = useScreenContext } }
+            if useScreenContext, hasInitialized, !applyingConfiguration, !permissions.screenRecording { requestScreenRecording() }
+        }
+    }
     @Published var statusMessage = "Connecting to server…"
+    @Published private(set) var hudProgressText: String?
     @Published private(set) var serverHealth: ServerHealth?
     @Published private(set) var serverStatusMessage = "Connecting…"
     @Published private(set) var isCheckingServer = false
     @Published private(set) var isSavingPreferences = false
     @Published private(set) var sharedPreferences: PreferencesSnapshot?
-    @Published private(set) var generations: [GenerationRecord] = []
+    @Published private(set) var storageUsage: StorageUsage?
+    let modelDownloads = ModelDownloadManager()
+    let localServer = LocalServerManager()
+    @Published private(set) var generations: [GenerationSummary] = []
+    @Published private(set) var generationDetail: GenerationRecord?
+    @Published private(set) var generationDetailFailedID: UUID?
+    private var detailTask: Task<Void, Never>?
+    @Published private(set) var undeliveredResults: [GenerationRecord] = []
+    @Published private(set) var devices: [DeviceSummary] = []
+    @Published private(set) var legacyEnrollmentClosed = false
     @Published private(set) var isLoadingHistory = false
     @Published private(set) var hasMoreHistory = false
     @Published private(set) var historySourceFilter = "all"
-    @Published private(set) var wisprFlowImportState: WisprFlowImportState = .idle
     private var historyCursor: String?
-    private var wisprFlowReader: WisprFlowSourceReader?
-    private var wisprFlowPrepareTask: Task<Void, Never>?
-    private var wisprFlowPrepareGate: WisprFlowPreparationGate?
-    private var wisprFlowPrepareRevision = 0
-    private var wisprFlowImportTask: Task<Void, Never>?
-    private var wisprFlowMaterializationTask: Task<WisprFlowSourceSession, Error>?
-    private var wisprFlowImportRevision = 0
-    private var wisprFlowActiveReaders: [Int: WisprFlowSourceReader] = [:]
-    private var wisprFlowDestinationEndpoint: String?
+    private(set) lazy var wisprImport = WisprFlowImportDriver(
+        makeClient: { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try client()
+        },
+        isDictationBusy: { [weak self] in self?.isBusy ?? true },
+        endpoint: { [weak self] in self?.preferences.endpoint ?? "" },
+        onHistoryChanged: { [weak self] isCurrentRevision in
+            guard let self else { return }
+            if isCurrentRevision, historySourceFilter != "wispr-flow" {
+                setHistorySourceFilter("wispr-flow")
+            } else {
+                // A cancelled run can still have committed on the server.
+                // Refresh the user's current view without changing its filter.
+                refreshHistory()
+            }
+        }
+    )
     let configuration: ConfigurationStore
     let microphones: MicrophonePreferencesStore
     let preferences: ClientPreferencesStore
+    private let pendingStore: PendingGenerationsStore
+    private var pendingEntries: [PendingGenerationEntry]
+    private var isReconcilingPending = false
 
     var isRecording: Bool { activity == .recording }
     var isCapturing: Bool { activity.isCapturing }
     var recordingUsesClipboard: Bool { isCapturing && insertionDestination == .clipboard }
     var isBusy: Bool { activity.isBusy || !pendingDictations.isEmpty }
-    var canCancelWithEscape: Bool { !hotkey.isHoldingFn }
+    var pendingDictationCount: Int { pendingDictations.count }
+    var canCancelWithEscape: Bool { isCapturing && !hotkey.isHoldingFn }
+    var triggerKeyTitle: String {
+        if let customTriggerKeyCode, let title = HoldKey.customKeyTitle(CGKeyCode(customTriggerKeyCode)) {
+            return title
+        }
+        return shortcut.title
+    }
     var isServerReady: Bool { serverHealth?.ready == true && serverHealth?.apiVersion == InlayAPI.version }
     var canTest: Bool { isServerReady && permissions.microphone && microphones.resolution.device != nil && !isCapturing }
+    var insertionMode: InsertionMode { Self.insertionMode(for: permissions) }
+    static func insertionMode(for snapshot: PermissionSnapshot) -> InsertionMode {
+        if snapshot.accessibility { return .insertion }
+        if snapshot.inputMonitoring { return .clipboardOnly }
+        return .unavailable
+    }
     var selectedInputName: String { microphones.resolution.device?.name ?? "No microphone available" }
     var allPermissionsGranted: Bool { permissions.microphone && permissions.accessibility }
     var onHUDVisibility: ((Bool) -> Void)?
@@ -164,7 +163,7 @@ final class InlayController: ObservableObject {
     private let audioDevices: AudioDeviceStore
     private let serverClientFactory: (() throws -> ServerClient)?
     private let hotkey = HotkeyMonitor()
-    private let outputMuter = SystemOutputMuter()
+    private let outputMuter: SystemOutputMuter
     private var subscriptions: Set<AnyCancellable> = []
     private var applyingConfiguration = false
     private var recordingTimer: Timer?
@@ -175,7 +174,7 @@ final class InlayController: ObservableObject {
     private var insertionRebases = ConfirmedInsertionRebases<InsertionTarget>()
     /// Released takes in recording order. The newest may own the HUD via sessionID.
     @Published private var pendingDictations: [PendingDictation] = []
-    private var uploadTask: Task<FinishGenerationRequest, Error>?
+    private var uploadTask: Task<UploadOutcome, Error>?
     private var uploadPipe: AudioChunkPipe?
     private var refreshTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
@@ -192,26 +191,31 @@ final class InlayController: ObservableObject {
         let session: UUID
         let id: UUID
         let client: ServerClient
-        let upload: Task<FinishGenerationRequest, Error>
+        let upload: Task<UploadOutcome, Error>
         let pipe: AudioChunkPipe
         let destination: InsertionDestinationCapture?
+        let screenContext: ScreenContextCapture?
+        let salvaged: Bool
         var task: Task<Void, Never>?
         var sealed = false
+        var resolved = false
         /// Nil until the destination resolves; list continuation keys off its anchor.
         var target: (destination: InsertionDestination, anchor: DictationDestination?)?
 
-        init(session: UUID, id: UUID, client: ServerClient, upload: Task<FinishGenerationRequest, Error>,
-             pipe: AudioChunkPipe, destination: InsertionDestinationCapture?) {
+        init(session: UUID, id: UUID, client: ServerClient, upload: Task<UploadOutcome, Error>,
+             pipe: AudioChunkPipe, destination: InsertionDestinationCapture?, screenContext: ScreenContextCapture?,
+             salvaged: Bool = false) {
             self.session = session; self.id = id; self.client = client; self.upload = upload
-            self.pipe = pipe; self.destination = destination
+            self.pipe = pipe; self.destination = destination; self.screenContext = screenContext; self.salvaged = salvaged
         }
 
         func cancel() {
-            task?.cancel(); upload.cancel(); pipe.cancel(); destination?.cancel()
+            task?.cancel(); upload.cancel(); pipe.cancel(); destination?.cancel(); screenContext?.cancel()
         }
     }
     @Published private var insertionDestination: InsertionDestination?
     private var destinationTask: InsertionDestinationCapture?
+    private var screenContextTask: ScreenContextCapture?
     private var recordingClipboardChangeCount = 0
     private struct ContinuationAnchor {
         let destination: DictationDestination
@@ -221,6 +225,7 @@ final class InlayController: ObservableObject {
     }
     private var continuationAnchors: [ContinuationAnchor] = []
     private var isTestSession = false
+    private var sessionClipboardOnly = false
     private var updatingLogin = false
     private var hasInitialized = false
     private var isShuttingDown = false
@@ -232,10 +237,15 @@ final class InlayController: ObservableObject {
          recorder: AudioRecorder? = nil, audioDevices: AudioDeviceStore? = nil,
          serverClient: (() throws -> ServerClient)? = nil) {
         self.configuration = configuration
+        outputMuter = SystemOutputMuter(
+            recordURL: configuration.url.deletingLastPathComponent().appendingPathComponent("output-mute.json"))
         self.recorder = recorder ?? AudioRecorder()
         self.audioDevices = audioDevices ?? AudioDeviceStore()
         self.serverClientFactory = serverClient
         preferences = ClientPreferencesStore(root: configuration.url.deletingLastPathComponent())
+        let loadedPendingStore = PendingGenerationsStore(root: configuration.url.deletingLastPathComponent())
+        pendingStore = loadedPendingStore
+        pendingEntries = loadedPendingStore.load()
         microphones = MicrophonePreferencesStore(configuration: configuration)
         permissions = startServices ? PermissionSnapshot.capture()
             : PermissionSnapshot(microphone: false, accessibility: false, inputMonitoring: false)
@@ -245,13 +255,15 @@ final class InlayController: ObservableObject {
         preferences.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         configuration.$configuration.removeDuplicates().sink { [weak self] in self?.applyConfiguration($0) }.store(in: &subscriptions)
         guard startServices else { return }
+        outputMuter.restorePersistedMute()
+        Task { [weak self] in await self?.localServer.detect() }
         bindServices()
         self.audioDevices.start()
         installLifecycleObservers()
         refreshPermissions()
         // Capture files are temporary only; server history is never examined here.
         CapturedAudio.cleanupOrphans()
-        try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("Inlay-remote-preview"))
+        try? FileManager.default.removeItem(at: InlayTemporaryDirectory.url.appendingPathComponent("Inlay-remote-preview"))
         hasInitialized = true
         updateLoginItem()
         refreshServer()
@@ -273,7 +285,10 @@ final class InlayController: ObservableObject {
         if let mode = HotkeyActivationMode(rawValue: settings.activationMode), activationMode != mode { activationMode = mode }
         if launchAtLogin != settings.launchAtLogin { launchAtLogin = settings.launchAtLogin }
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
+        if dictationSoundsEnabled != settings.dictationSoundsEnabled { dictationSoundsEnabled = settings.dictationSoundsEnabled }
+        if customTriggerKeyCode != settings.customTriggerKeyCode { customTriggerKeyCode = settings.customTriggerKeyCode }
         if preserveClipboard != settings.preserveClipboard { preserveClipboard = settings.preserveClipboard }
+        if useScreenContext != settings.useScreenContext { useScreenContext = settings.useScreenContext }
         applyingConfiguration = false
     }
 
@@ -317,23 +332,35 @@ final class InlayController: ObservableObject {
                     hasMoreHistory = history.nextCursor != nil
                 }
             }
+            if refreshData { await refreshDevices() }
+            await reconcilePendingGenerations()
         } catch is CancellationError {
         } catch {
             guard endpoint == preferences.endpoint, !Task.isCancelled else { return }
+            if let clientError = error as? ServerClientError,
+               case .rejected(let status, _, let code) = clientError,
+               status == 403, code == "enrollment_required", !isBusy,
+               await enrollThisDevice() {
+                refreshServer()
+                return
+            }
             serverHealth = nil
             serverStatusMessage = Self.connectionMessage(error)
-            if isCapturing { failSession(serverStatusMessage, cancelServer: true) }
-            else if !isBusy, activity == .idle { statusMessage = serverStatusMessage }
+            if !isBusy, activity == .idle { statusMessage = serverStatusMessage }
         }
     }
 
     func saveConnection(endpoint: String, token: String, deviceName: String) {
-        guard !isBusy, wisprFlowImportTask == nil else { return }
+        guard !isBusy, !wisprImport.isImportRunning else { return }
         guard preferences.save(endpoint: endpoint, token: token, deviceName: deviceName) else {
             errorMessage = preferences.errorMessage
             return
         }
         continuationAnchors.removeAll()
+        // Renaming or re-entering a token for the same server keeps its pending results.
+        pendingEntries.removeAll { $0.endpoint != preferences.endpoint }
+        undeliveredResults.removeAll { result in !pendingEntries.contains { $0.id == result.id } }
+        pendingStore.save(pendingEntries)
         serverHealth = nil
         sharedPreferences = nil
         generations = []
@@ -386,271 +413,6 @@ final class InlayController: ObservableObject {
         refreshHistory()
     }
 
-    func prepareWisprFlowImport() {
-        guard wisprFlowImportTask == nil else { return }
-        wisprFlowPrepareRevision += 1
-        let revision = wisprFlowPrepareRevision
-        wisprFlowPrepareTask?.cancel()
-        wisprFlowPrepareGate?.cancel()
-        let gate = WisprFlowPreparationGate()
-        wisprFlowPrepareGate = gate
-        retireWisprFlowReader()
-        wisprFlowImportState = .preparing
-        wisprFlowDestinationEndpoint = preferences.endpoint
-        // Schedule the worker before the main-actor continuation. Quit may
-        // synchronously wait on the gate before that continuation starts.
-        let snapshotTask = Task.detached(priority: .utility) {
-            defer { gate.finish() }
-            let reader = try WisprFlowSourceReader()
-            guard gate.register(reader) else {
-                reader.close()
-                throw CancellationError()
-            }
-            return reader
-        }
-        wisprFlowPrepareTask = Task { [weak self] in
-            guard let self else { gate.cancel(); return }
-            defer {
-                if revision == wisprFlowPrepareRevision { wisprFlowPrepareTask = nil }
-            }
-            do {
-                let reader = try await snapshotTask.value
-                var transferred = false
-                defer {
-                    if !transferred {
-                        Task.detached(priority: .utility) { reader.close() }
-                    }
-                }
-                try Task.checkCancellation()
-                guard revision == wisprFlowPrepareRevision else { return }
-                guard gate.transfer(reader) else { return }
-                wisprFlowReader = reader
-                transferred = true
-                let knownCount: Int?
-                let destinationError: String?
-                do {
-                    knownCount = try await client().knownWisprFlowSourceIDs(reader.sourceIDs).count
-                    destinationError = nil
-                } catch {
-                    knownCount = nil
-                    if let clientError = error as? ServerClientError,
-                       case .rejected(let status, _) = clientError, status == 404 {
-                        destinationError = "This server does not support Wispr Flow imports. Connect the new Inlay Dev server."
-                    } else {
-                        destinationError = "Cannot check the destination server: \(error.localizedDescription)"
-                    }
-                }
-                try Task.checkCancellation()
-                guard revision == wisprFlowPrepareRevision else { return }
-                wisprFlowImportState = .preview(reader.preview, knownCount: knownCount,
-                                               destinationError: destinationError)
-            } catch is CancellationError {
-            } catch {
-                guard revision == wisprFlowPrepareRevision, !Task.isCancelled else { return }
-                wisprFlowImportState = .failed(error.localizedDescription)
-            }
-        }
-    }
-
-    func startWisprFlowImport() {
-        guard case .preview(let preview, _, let destinationError) = wisprFlowImportState,
-              destinationError == nil,
-              let reader = wisprFlowReader,
-              wisprFlowImportTask == nil, !isBusy else { return }
-        guard wisprFlowDestinationEndpoint == preferences.endpoint else {
-            wisprFlowImportState = .failed("The server connection changed. Preview the import again.")
-            return
-        }
-        let connection: ServerClient
-        do { connection = try client() }
-        catch { wisprFlowImportState = .failed(error.localizedDescription); return }
-        let counts = WisprFlowImportCounts(total: reader.sourceIDs.count)
-        wisprFlowImportRevision += 1
-        let revision = wisprFlowImportRevision
-        // The import task owns this reader until its detached work and artifact
-        // cleanup finish. A new preview may start immediately after cancellation.
-        wisprFlowActiveReaders[revision] = reader
-        wisprFlowReader = nil
-        wisprFlowImportState = .running(preview, counts)
-        wisprFlowImportTask = Task { [weak self] in
-            await self?.runWisprFlowImport(reader: reader, preview: preview, connection: connection,
-                                           counts: counts, revision: revision)
-        }
-    }
-
-    func cancelWisprFlowImport() {
-        if case .running(let preview, let counts) = wisprFlowImportState {
-            // Awaiting an unstructured reader task does not wake when its parent
-            // is cancelled. Release the sheet now; the old task retains and
-            // cleans its reader when materialization actually stops.
-            wisprFlowImportRevision += 1
-            wisprFlowMaterializationTask?.cancel()
-            wisprFlowMaterializationTask = nil
-            wisprFlowImportTask?.cancel()
-            wisprFlowImportTask = nil
-            wisprFlowDestinationEndpoint = nil
-            wisprFlowImportState = .finished(preview, counts, cancelled: true)
-        }
-        wisprFlowPrepareTask?.cancel()
-    }
-
-    func closeWisprFlowImportSheet() {
-        guard wisprFlowImportTask == nil else { return }
-        wisprFlowPrepareRevision += 1
-        wisprFlowPrepareTask?.cancel()
-        wisprFlowPrepareGate?.cancel()
-        retireWisprFlowReader()
-        wisprFlowDestinationEndpoint = nil
-        wisprFlowImportState = .idle
-    }
-
-    private func runWisprFlowImport(reader: WisprFlowSourceReader, preview: WisprFlowImportPreview,
-                                    connection: ServerClient, counts initialCounts: WisprFlowImportCounts,
-                                    revision: Int) async {
-        var counts = initialCounts
-        var cancelled = false
-        var stoppedEarly = false
-        var completionAttempted = false
-        for sourceID in reader.sourceIDs {
-            if Task.isCancelled { cancelled = true; break }
-            var materializedSession: WisprFlowSourceSession?
-            var activeTransferID: UUID?
-            do {
-                let session = try await materializeWisprFlowSession(reader: reader, sourceID: sourceID,
-                                                                     revision: revision)
-                materializedSession = session
-                try Task.checkCancellation()
-                let manifests = try await Task.detached(priority: .utility) {
-                    try session.artifacts.map {
-                        try ServerClient.wisprFlowArtifactManifest(filename: $0.filename, url: $0.url)
-                    }
-                }.value
-                try Task.checkCancellation()
-                let input = WisprFlowImportRequest(sourceID: session.sourceID, createdAt: session.createdAt,
-                                                   sourceStatus: session.sourceStatus, finalText: session.displayText,
-                                                   rawText: session.rawText, durationSeconds: session.durationSeconds,
-                                                   variantNames: session.availableVariants, artifacts: manifests,
-                                                   unarchivedArtifacts: session.unarchivedArtifacts.isEmpty
-                                                       ? nil : session.unarchivedArtifacts)
-                let transfer = try await connection.beginWisprFlowImport(input)
-                activeTransferID = transfer.id
-                for (artifact, manifest) in zip(session.artifacts, manifests) {
-                    try Task.checkCancellation()
-                    let receipt = try await connection.uploadWisprFlowArtifact(artifact.url, filename: artifact.filename,
-                                                                               contentType: artifact.contentType, to: transfer.id)
-                    guard receipt.filename == manifest.filename, receipt.byteCount == manifest.byteCount else {
-                        throw ServerClientError.invalidResponse
-                    }
-                }
-                try Task.checkCancellation()
-                // A cancelled/lost response can hide a durable server commit.
-                completionAttempted = true
-                let result = try await connection.completeWisprFlowImport(transfer.id)
-                activeTransferID = nil
-                switch result.outcome {
-                case .imported: counts.imported += 1
-                case .enriched: counts.enriched += 1
-                case .skipped: counts.skipped += 1
-                case .partial:
-                    counts.partial += 1
-                    if counts.unarchivedWarning == nil {
-                        let sourceReported = session.unarchivedArtifacts.map { omitted in
-                            "\(omitted.filename.rawValue) (\(ByteCountFormatter.string(fromByteCount: Int64(omitted.byteCount), countStyle: .file)), SHA-256 \(omitted.sha256))"
-                        }
-                        let mediaNames = sourceReported.isEmpty
-                            ? result.unarchivedArtifactNames.map(\.rawValue).joined(separator: ", ")
-                            : sourceReported.joined(separator: ", ")
-                        let mediaWarning = mediaNames.isEmpty ? nil
-                            : "Session \(sourceID.uuidString) has unarchived media: \(mediaNames). Source version details are in source.json."
-                        let warnings = [mediaWarning, session.provenanceWarning].compactMap { $0 }
-                        if !warnings.isEmpty { counts.unarchivedWarning = warnings.joined(separator: "\n") }
-                    }
-                }
-            } catch is CancellationError {
-                cancelled = true
-            } catch {
-                if Task.isCancelled {
-                    cancelled = true
-                } else {
-                    counts.failed += 1
-                    if counts.warning == nil {
-                        counts.warning = "Session \(sourceID.uuidString): \(error.localizedDescription)"
-                    }
-                    if error is URLError { stoppedEarly = true }
-                    if let clientError = error as? ServerClientError,
-                       case .rejected(let status, _) = clientError, [401, 403].contains(status) {
-                        stoppedEarly = true
-                    }
-                }
-            }
-            if let activeTransferID {
-                Task.detached(priority: .utility) {
-                    try? await connection.cancelWisprFlowImport(activeTransferID)
-                }
-            }
-            if let materializedSession {
-                Task.detached(priority: .utility) {
-                    reader.discardArtifacts(for: materializedSession)
-                }
-            }
-            if Task.isCancelled { cancelled = true }
-            if cancelled { break }
-            counts.processed += 1
-            if revision == wisprFlowImportRevision { wisprFlowImportState = .running(preview, counts) }
-            if stoppedEarly { break }
-        }
-        if !cancelled, !stoppedEarly, preview.dictionaryCount > 0 {
-            do {
-                let dictionary = try await Task.detached(priority: .utility) {
-                    try reader.dictionaryArtifactURL()
-                }.value
-                try Task.checkCancellation()
-                guard let dictionary else { throw ServerClientError.invalidResponse }
-                _ = try await connection.archiveWisprFlowDictionary(dictionary)
-                counts.dictionaryArchived = true
-            } catch is CancellationError {
-                cancelled = true
-            } catch {
-                let dictionaryWarning = "Dictionary archive failed: \(error.localizedDescription)"
-                counts.warning = [counts.warning, dictionaryWarning].compactMap { $0 }.joined(separator: "\n")
-            }
-        }
-        cancelled = cancelled || Task.isCancelled
-        await Task.detached(priority: .utility) { reader.close() }.value
-        wisprFlowActiveReaders.removeValue(forKey: revision)
-        if completionAttempted || counts.imported + counts.enriched + counts.skipped + counts.partial > 0 {
-            if revision == wisprFlowImportRevision, historySourceFilter != "wispr-flow" {
-                setHistorySourceFilter("wispr-flow")
-            } else {
-                // A cancelled run can still have committed on the server.
-                // Refresh the user's current view without changing its filter.
-                refreshHistory()
-            }
-        }
-        guard revision == wisprFlowImportRevision else { return }
-        wisprFlowImportTask = nil
-        wisprFlowDestinationEndpoint = nil
-        wisprFlowImportState = .finished(preview, counts, cancelled: cancelled)
-    }
-
-    private func materializeWisprFlowSession(reader: WisprFlowSourceReader, sourceID: UUID,
-                                              revision: Int) async throws -> WisprFlowSourceSession {
-        let task = Task.detached(priority: .utility) {
-            try reader.session(for: sourceID)
-        }
-        if revision == wisprFlowImportRevision { wisprFlowMaterializationTask = task }
-        defer {
-            if revision == wisprFlowImportRevision { wisprFlowMaterializationTask = nil }
-        }
-        return try await task.value
-    }
-
-    private func retireWisprFlowReader() {
-        guard let reader = wisprFlowReader else { return }
-        wisprFlowReader = nil
-        Task.detached(priority: .utility) { reader.close() }
-    }
-
     func updateSharedPreferences(_ value: ServerPreferences, expectedRevision: Int? = nil) {
         guard !isSavingPreferences, let snapshot = sharedPreferences else { return }
         isSavingPreferences = true
@@ -664,6 +426,125 @@ final class InlayController: ObservableObject {
                 sharedPreferences = saved
                 errorMessage = nil
             } catch { errorMessage = error.localizedDescription; refreshServer() }
+        }
+    }
+
+    private func enrollThisDevice() async -> Bool {
+        guard let connection = try? client() else { return false }
+        let endpoint = preferences.endpoint
+        do {
+            let response = try await connection.enroll(
+                device: DeviceIdentity(id: preferences.deviceID, name: preferences.deviceName))
+            // A connection change mid-enroll must not store the old server's token under the new one.
+            guard endpoint == preferences.endpoint else { return false }
+            return preferences.replaceToken(response.token)
+        } catch { return false }
+    }
+
+    func refreshDevices() async {
+        guard let connection = try? client(), let list = try? await connection.devices() else { return }
+        devices = list.devices
+        legacyEnrollmentClosed = list.legacyEnrollmentClosed
+    }
+
+    func revokeDevice(_ id: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await client().revokeDevice(id)
+                await refreshDevices()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func closeLegacyEnrollment() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let list = try await client().closeLegacyEnrollment()
+                devices = list.devices
+                legacyEnrollmentClosed = list.legacyEnrollmentClosed
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func transcribeAgain(_ id: UUID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await client().reprocess(id)
+                refreshServer()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func refreshStorageUsage() async {
+        guard let connection = try? client(), let usage = try? await connection.storageUsage() else { return }
+        storageUsage = usage
+    }
+
+    func purgeAudio(kind: AudioKind?) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await client().purgeAudio(PurgeAudioRequest(kind: kind))
+                // Purges leave summaries unchanged, so the open detail reloads here.
+                if let id = generationDetail?.id { loadGenerationDetail(id) }
+                await refreshStorageUsage()
+                refreshHistory()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func deleteGenerationAudio(_ id: UUID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await client().deleteAudio(id)
+                if generationDetail?.id == id { generationDetail = nil; loadGenerationDetail(id) }
+                refreshHistory()
+                await refreshStorageUsage()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    /// Connects this Mac to the app-managed local server after install:
+    /// saves the endpoint + admin token, then the normal health flow
+    /// auto-enrolls this Mac (stack 05) on the next refresh.
+    @discardableResult
+    func completeLocalSetup() -> Bool {
+        guard !isBusy, let token = localServer.adminToken() else { return false }
+        saveConnection(endpoint: ClientPreferencesStore.defaultEndpoint,
+                       token: token, deviceName: preferences.deviceName)
+        guard preferences.token == token else { return false }
+        refreshServer()
+        return true
+    }
+
+    func uninstallLocalServer() {
+        localServer.uninstall()
+        refreshServer()
+    }
+
+    /// Loads the full record for the history detail pane (summaries stay in the list).
+    /// Reloading the shown record keeps it on screen until the fresh copy arrives.
+    func loadGenerationDetail(_ id: UUID?) {
+        detailTask?.cancel()
+        if generationDetail?.id != id { generationDetail = nil }
+        generationDetailFailedID = nil
+        guard let id else { return }
+        detailTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let record = try await client().generation(id)
+                guard !Task.isCancelled else { return }
+                generationDetail = record
+            } catch is CancellationError {
+            } catch {
+                guard !Task.isCancelled else { return }
+                errorMessage = error.localizedDescription
+                generationDetailFailedID = id
+            }
         }
     }
 
@@ -696,7 +577,19 @@ final class InlayController: ObservableObject {
     }
 
     private static func connectionMessage(_ error: Error) -> String {
-        if error is URLError { return "Server offline · Recording unavailable" }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .cannotFindHost, .dnsLookupFailed:
+                return "Server not found at this address · Recording unavailable"
+            case .timedOut:
+                return "Server connection timed out · Recording unavailable"
+            case .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
+                 .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .clientCertificateRejected:
+                return "Secure connection to the server failed · Recording unavailable"
+            default:
+                return "Server offline · Recording unavailable"
+            }
+        }
         return error.localizedDescription
     }
 
@@ -704,6 +597,12 @@ final class InlayController: ObservableObject {
         guard !hotkey.isHoldingFn else { return }
         if isCapturing { finishDictation() }
         else { beginDictation(isTest: true) }
+    }
+
+    func toggleMenuDictation() {
+        guard !hotkey.isHoldingFn else { return }
+        if isCapturing { finishDictation() }
+        else { beginDictation(isTest: false) }
     }
 
     func cancelDictation() {
@@ -727,6 +626,7 @@ final class InlayController: ObservableObject {
         let remaining = pendingDictations.last?.session
         sessionID = remaining ?? UUID()
         activity = remaining == nil ? .idle : .transcribing
+        if remaining == nil { hudProgressText = nil }
         statusMessage = remaining == nil ? "Cancelled" : "Cancelled · Earlier dictation is still processing"
         errorMessage = nil
         onHUDVisibility?(remaining != nil)
@@ -748,6 +648,7 @@ final class InlayController: ObservableObject {
         uploadPipe?.cancel(); uploadPipe = nil
         uploadTask?.cancel(); uploadTask = nil
         destinationTask?.cancel(); destinationTask = nil
+        screenContextTask?.cancel(); screenContextTask = nil
         stopRecordingTimer()
         recorder.cancel()
         outputMuter.restore()
@@ -769,6 +670,96 @@ final class InlayController: ObservableObject {
         refreshHistory()
     }
 
+    private func addPendingEntry(id: UUID, finish: FinishGenerationRequest,
+                                 fallback: FinishGenerationRequest?, isTest: Bool) {
+        pendingEntries.removeAll { $0.id == id }
+        pendingEntries.append(PendingGenerationEntry(
+            id: id, endpoint: preferences.endpoint,
+            inferenceFrames: finish.inferenceFrames, originalFrames: finish.originalFrames,
+            fallbackInferenceFrames: fallback?.inferenceFrames, isTest: isTest, sealedAt: Date()))
+        pendingStore.save(pendingEntries)
+    }
+
+    /// A lost upload acknowledgement leaves the server one chunk ahead of this
+    /// Mac's count, which `finish` rejects as incomplete. Seal with the
+    /// unacknowledged count instead of cancelling speech the server holds.
+    private static func seal(_ connection: ServerClient, id: UUID, finish: FinishGenerationRequest,
+                             fallback: FinishGenerationRequest?) async throws -> GenerationRecord {
+        do { return try await connection.finish(id, value: finish) }
+        catch {
+            guard let fallback, let clientError = error as? ServerClientError,
+                  case .rejected(409, _, "incomplete_audio") = clientError else { throw error }
+            return try await connection.finish(id, value: fallback)
+        }
+    }
+
+    private func removePendingEntry(_ id: UUID) {
+        pendingEntries.removeAll { $0.id == id }
+        undeliveredResults.removeAll { $0.id == id }
+        pendingStore.save(pendingEntries)
+    }
+
+    /// Surfaces takes that finished on the server while this app was not
+    /// tracking them. Completed results are copy-only here: never inserted.
+    private func reconcilePendingGenerations() async {
+        guard !isReconcilingPending, !pendingEntries.isEmpty else { return }
+        isReconcilingPending = true
+        defer { isReconcilingPending = false }
+        let cutoff = Date().addingTimeInterval(-7 * 24 * 60 * 60)
+        let stale = pendingEntries.filter { $0.sealedAt < cutoff }
+        for entry in stale { removePendingEntry(entry.id) }
+        guard let connection = try? client() else { return }
+        // Takes this session still owns deliver themselves; never offer them for copy.
+        func isLive(_ id: UUID) -> Bool { pendingDictations.contains { $0.id == id } }
+        // A connection change during the read drops or re-scopes entries; skip those.
+        func isCurrent(_ entry: PendingGenerationEntry) -> Bool {
+            entry.endpoint == preferences.endpoint && pendingEntries.contains { $0.id == entry.id }
+        }
+        for entry in pendingEntries where isCurrent(entry) && !isLive(entry.id) {
+            guard let record = try? await connection.generation(entry.id),
+                  isCurrent(entry), !isLive(entry.id) else { continue }
+            switch record.status {
+            case .completed:
+                if record.delivery == nil {
+                    if !undeliveredResults.contains(where: { $0.id == record.id }) {
+                        undeliveredResults.append(record)
+                    }
+                } else { removePendingEntry(entry.id) }
+            case .failed, .cancelled:
+                removePendingEntry(entry.id)
+            case .receiving:
+                do {
+                    _ = try await Self.seal(connection, id: entry.id, finish: FinishGenerationRequest(
+                        inferenceFrames: entry.inferenceFrames, originalFrames: entry.originalFrames),
+                        fallback: entry.fallbackInferenceFrames.map { .init(inferenceFrames: $0, originalFrames: nil) })
+                } catch let ServerClientError.rejected(status, _, _) where (400..<500).contains(status) && ![401, 403, 408, 429].contains(status) {
+                    // Auth failures may come from a credential the user has just
+                    // replaced; they do not prove the speech is unrecoverable.
+                    if isCurrent(entry) { removePendingEntry(entry.id) }
+                } catch {}
+            case .queued, .transcribing, .proofreading:
+                break
+            }
+        }
+    }
+
+    func copyUndeliveredResult(_ record: GenerationRecord) {
+        switch DictationClipboard.copy(record.finalText, to: .general) {
+        case .success:
+            lastTranscript = record.finalText
+            lastDelivery = "Copied to clipboard"
+            lastDeliveryStatus = .copied
+            removePendingEntry(record.id)
+            Task { [weak self] in
+                guard let connection = try? self?.client() else { return }
+                try? await connection.delivery(record.id, receipt: DeliveryReceipt(
+                    status: "copied", message: "Copied after relaunch"))
+            }
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func copyLastTranscript() {
         guard !lastTranscript.isEmpty, !isBusy else { return }
         switch DictationClipboard.copy(lastTranscript, to: .general) {
@@ -781,29 +772,26 @@ final class InlayController: ObservableObject {
         guard !isBusy else { return }
         continuationAnchors.removeAll()
         lastTranscript = ""; lastTranscriptionSeconds = nil; lastAudioSeconds = nil
-        lastDelivery = ""; lastDeliveryStatus = .none; errorMessage = nil; activity = .idle
+        lastDelivery = ""; lastDeliveryStatus = .none; errorMessage = nil; activity = .idle; attentionPresented = false
         recordingFeedback.reset()
     }
 
     func dismissFeedback() {
         guard !isBusy else { return }
         hudTask?.cancel()
+        attentionPresented = false
         recordingFeedback.reset()
         onHUDVisibility?(false)
-        if activity == .success { activity = .idle }
+        if activity == .success || activity == .failed {
+            activity = .idle
+            statusMessage = isServerReady ? "Ready when you are" : serverStatusMessage
+        }
     }
 
     func shutdown() {
         guard !isShuttingDown else { return }
         isShuttingDown = true
-        wisprFlowPrepareTask?.cancel(); wisprFlowImportTask?.cancel()
-        wisprFlowMaterializationTask?.cancel()
-        wisprFlowPrepareGate?.cancel(waitForWorker: true)
-        wisprFlowPrepareGate = nil
-        for reader in wisprFlowActiveReaders.values { reader.close() }
-        wisprFlowActiveReaders.removeAll()
-        wisprFlowReader?.close()
-        wisprFlowReader = nil
+        wisprImport.shutdown()
         stopShortcutCheck()
         // Quitting the client cancels an incomplete recording. A sealed server
         // generation remains independently owned and may complete in history.
@@ -819,13 +807,13 @@ final class InlayController: ObservableObject {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         if let lockObserver { DistributedNotificationCenter.default().removeObserver(lockObserver) }
-        try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("Inlay-remote-preview"))
+        try? FileManager.default.removeItem(at: InlayTemporaryDirectory.url.appendingPathComponent("Inlay-remote-preview"))
     }
 
     private func bindServices() {
         audioDevices.onChange = { [weak self] devices, defaultUID in self?.microphones.update(devices: devices, systemDefaultUID: defaultUID) }
         recorder.onLevel = { [weak self] level in guard let self, isCapturing else { return }; recordingFeedback.append(level) }
-        recorder.onInterruption = { [weak self] message in self?.failSession(message, cancelServer: true) }
+        recorder.onInterruption = { [weak self] message in self?.salvageDictation(reason: message) }
         hotkey.onStatusChange = { [weak self] in self?.isHotkeyActive = $0 }
         hotkey.onPress = { [weak self] in
             guard let self else { return false }
@@ -844,8 +832,8 @@ final class InlayController: ObservableObject {
         hotkey.onCancel = { [weak self] in
             guard let self else { return }
             if isCheckingShortcut { appendShortcutCheck("Hold cancelled; microphone stayed off.") }
-            else if isBusy { cancelDictation() }
-            else { dismissFeedback() }
+            else if canCancelWithEscape { cancelDictation() }
+            else if !isBusy { dismissFeedback() }
         }
     }
 
@@ -854,18 +842,23 @@ final class InlayController: ObservableObject {
     @discardableResult
     private func beginDictation(isTest: Bool) -> Bool {
         guard !isCapturing, !isShuttingDown else { return false }
+        permissions = PermissionSnapshot.capture()
         stopShortcutCheck()
-        guard isServerReady else { showError(serverStatusMessage); refreshServer(); onShowWindow?(); return false }
-        guard permissions.microphone else { showError("Allow microphone access, then try again."); onShowWindow?(); return false }
+        guard isServerReady else { showError(serverStatusMessage); refreshServer(); return false }
+        guard permissions.microphone else { showError("Allow microphone access, then try again."); return false }
         guard let input = microphones.resolution.device, let deviceID = audioDevices.deviceID(for: input.uid) else {
-            showError("No microphone is available. Connect an input and try again."); onShowWindow?(); return false
+            showError("No microphone is available. Connect an input and try again."); return false
         }
-        hudTask?.cancel(); errorMessage = nil
+        guard isTest || Self.insertionMode(for: permissions) != .unavailable else {
+            showError("Allow Accessibility or Input Monitoring access, then try again."); return false
+        }
+        hudTask?.cancel(); errorMessage = nil; attentionPresented = false
         // Confirmed cursor moves matter only to takes that overlap them.
         if pendingDictations.isEmpty { insertionRebases.removeAll() }
         sessionID = UUID()
         let current = sessionID
         isTestSession = isTest
+        sessionClipboardOnly = !isTest && Self.insertionMode(for: permissions) == .clipboardOnly
         recordingClipboardChangeCount = NSPasteboard.general.changeCount
         insertionDestination = nil
         recordingInputName = input.name
@@ -874,7 +867,14 @@ final class InlayController: ObservableObject {
         statusMessage = "Connecting recording…"
         onHUDVisibility?(true)
         if muteOutputWhileRecording { outputMuter.mute() }
-        if !isTest {
+        // Screen terms only become Qwen hints, so skip capture when the last-known
+        // shared settings have proofreading off. The capture applies its own guards.
+        if !isTest, useScreenContext, permissions.screenRecording,
+           sharedPreferences?.preferences.textCorrectionEnabled != false {
+            screenContextTask = ScreenContextCapture(
+                spellingLanguage: ScreenContextCapture.spellingLanguage(for: sharedPreferences?.preferences.language))
+        }
+        if !isTest, !sessionClipboardOnly {
             let capture = TextInserter.beginDestinationCapture()
             destinationTask = capture
             Task { [weak self] in
@@ -898,18 +898,25 @@ final class InlayController: ObservableObject {
                 activeGenerationID = created.id
                 activeClient = connection
                 sharedPreferences = created.settings
+                // A backlog stops capture; the upload seals what reached the server.
                 let pipe = AudioChunkPipe { [weak self] error in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         if sessionID == current, isCapturing {
-                            failSession(error.localizedDescription, cancelServer: true)
+                            salvageDictation(reason: error.localizedDescription)
                         }
                     }
                 }
                 uploadPipe = pipe
                 recorder.onChunk = { pipe.append($0) }
                 uploadTask = Task { [weak self] in
-                    do { return try await connection.upload(pipe.stream, to: created.id, preserveOriginal: created.settings.preferences.keepOriginalAudio) }
+                    do {
+                        let outcome = try await connection.upload(pipe.stream, to: created.id, preserveOriginal: created.settings.preferences.keepOriginalAudio)
+                        if let self, !outcome.complete, sessionID == current, isCapturing, !Task.isCancelled {
+                            salvageDictation(reason: "The connection was interrupted.")
+                        }
+                        return outcome
+                    }
                     catch {
                         if let self, sessionID == current, isCapturing, !Task.isCancelled {
                             failSession(Self.connectionMessage(error), cancelServer: true)
@@ -927,6 +934,7 @@ final class InlayController: ObservableObject {
                 guard sessionID == current, activity == .starting, !Task.isCancelled else { return }
                 activity = .recording
                 statusMessage = "Listening"
+                announceOutcome("Listening", .start)
                 startRecordingTimer()
             } catch is CancellationError {
             } catch AudioRecordingError.cancelled {
@@ -941,7 +949,17 @@ final class InlayController: ObservableObject {
         return true
     }
 
-    private func finishDictation(atLimit: Bool = false) {
+    /// Interruption path: seal whatever the server already acknowledged and
+    /// deliver to the clipboard only. The captured insertion target cannot be
+    /// trusted after sleep, lock, or device loss, so this never auto-inserts.
+    private func salvageDictation(reason: String) {
+        guard isCapturing else { return }
+        guard activity == .recording else { cancelDictation(); return }
+        statusMessage = "Saving interrupted recording…"
+        finishDictation(salvaged: true)
+    }
+
+    private func finishDictation(atLimit: Bool = false, salvaged: Bool = false) {
         guard isCapturing else { return }
         // A take ended by the duration limit must not leave a double-tap
         // latch behind, matching the failure and cancel paths.
@@ -951,7 +969,7 @@ final class InlayController: ObservableObject {
         guard activity == .recording else { cancelDictation(); return }
         let releasedAt = ProcessInfo.processInfo.systemUptime
         destinationTask?.finish()
-        guard releasedAt - recordingStart >= 0.25 else { cancelDictation(); return }
+        guard releasedAt - recordingStart >= 0.25 else { cancelDictation(); showError("Too short — hold the key, speak, then release."); return }
         guard let id = activeGenerationID, let connection = activeClient, let uploadTask, let uploadPipe else {
             failSession("This recording has no server session.", cancelServer: true); return
         }
@@ -959,18 +977,20 @@ final class InlayController: ObservableObject {
         recordingFeedback.finish(atLimit: atLimit)
         activity = .transcribing
         statusMessage = "Finishing upload…"
+        hudProgressText = "Uploading"
         let current = sessionID
         let test = isTestSession
         let capturedDestination = insertionDestination
         let clipboardCount = recordingClipboardChangeCount
         let pending = PendingDictation(session: current, id: id, client: connection, upload: uploadTask,
-                                       pipe: uploadPipe, destination: destinationTask)
+                                       pipe: uploadPipe, destination: destinationTask, screenContext: screenContextTask,
+                                       salvaged: salvaged)
         // Usually known at release, so a later take can continue a list in another field.
-        let knownDestination: InsertionDestination? = test ? .clipboard : capturedDestination
+        let knownDestination: InsertionDestination? = test || salvaged || sessionClipboardOnly ? .clipboard : capturedDestination
         pending.target = knownDestination.map { Self.resolve($0, isTest: test, releasedAt: releasedAt) }
         pendingDictations.append(pending)
         activeGenerationID = nil; activeClient = nil; self.uploadTask = nil; self.uploadPipe = nil
-        destinationTask = nil; insertionDestination = nil; recordingListHint = nil; recordingInputName = nil
+        destinationTask = nil; screenContextTask = nil; insertionDestination = nil; recordingListHint = nil; recordingInputName = nil
         recorder.onChunk = nil
         let stopped = recorder.stopCapture()
         recorderStopTask = stopped
@@ -980,6 +1000,7 @@ final class InlayController: ObservableObject {
             var capturedAudio: CapturedAudio?
             defer {
                 capturedAudio?.cleanup()
+                if pending.resolved { removePendingEntry(pending.id) }
                 pendingDictations.removeAll { $0 === pending }
                 if pendingDictations.isEmpty {
                     deliveryTail = nil
@@ -987,13 +1008,31 @@ final class InlayController: ObservableObject {
                 }
             }
             do {
-                let audio = try await stopped.value
-                capturedAudio = audio
+                let stoppedAudio: CapturedAudio?
+                do { stoppedAudio = try await stopped.value }
+                catch {
+                    // A salvaged take lives in the streamed, server-acknowledged
+                    // audio; a dead local capture must not discard it.
+                    if salvaged { stoppedAudio = nil } else { throw error }
+                }
+                capturedAudio = stoppedAudio
                 try Task.checkCancellation()
                 pending.pipe.finish()
-                var finish = try await pending.upload.value
+                let uploadOutcome = try await pending.upload.value
+                var finish = uploadOutcome.finish
+                var fallback = uploadOutcome.fallback
+                let truncated = !uploadOutcome.complete && !test
+                if !uploadOutcome.complete, max(finish.inferenceFrames, fallback?.inferenceFrames ?? 0) < 4_000 {
+                    throw ServerClientError.rejected(422, "The interrupted recording was too short to save.", "")
+                }
+                if truncated {
+                    // Released, but the upload stopped early: only a prefix exists.
+                    // Like a salvaged take, it is copied and never auto-inserted.
+                    pending.target = (.clipboard, nil)
+                    if sessionID == current { statusMessage = "Saving interrupted recording…" }
+                }
                 try Task.checkCancellation()
-                audio.cleanup()
+                stoppedAudio?.cleanup()
                 capturedAudio = nil
                 let target: (destination: InsertionDestination, anchor: DictationDestination?)
                 if let known = pending.target { target = known }
@@ -1007,13 +1046,20 @@ final class InlayController: ObservableObject {
                 let sharesEarlierAnchor = pendingDictations.prefix { $0 !== pending }
                     .contains { earlier in earlier.target.map { $0.anchor == anchor } ?? true }
                 finish.continuationID = sharesEarlierAnchor ? nil : anchor.flatMap { self.continuation(for: $0)?.generationID }
+                fallback?.continuationID = finish.continuationID
+                // Usually ready by now; a capture still running sends no terms.
+                if let terms = await pending.screenContext?.value(waitingAtMost: .milliseconds(500)), !terms.isEmpty {
+                    finish.screenContextTerms = terms
+                    fallback?.screenContextTerms = terms
+                }
                 try Task.checkCancellation()
                 pending.sealed = true // The server may accept a seal whose response is interrupted.
+                addPendingEntry(id: id, finish: finish, fallback: fallback, isTest: test)
                 var result: GenerationRecord
-                do { result = try await connection.finish(id, value: finish) }
-                catch let ServerClientError.rejected(status, message) where (400..<500).contains(status) && ![408, 429].contains(status) {
+                do { result = try await Self.seal(connection, id: id, finish: finish, fallback: fallback) }
+                catch let ServerClientError.rejected(status, message, code) where (400..<500).contains(status) && ![408, 429].contains(status) {
                     pending.sealed = false // The server answered without sealing, so cancel promptly.
-                    throw ServerClientError.rejected(status, message)
+                    throw ServerClientError.rejected(status, message, code)
                 }
                 try Task.checkCancellation()
                 if !result.status.isTerminal {
@@ -1023,7 +1069,8 @@ final class InlayController: ObservableObject {
                 }
                 try Task.checkCancellation()
                 guard result.status == .completed else {
-                    throw ServerClientError.rejected(422, result.error ?? "The server could not process this recording.")
+                    pending.resolved = true // Terminal on the server; visible in History.
+                    throw ServerClientError.rejected(422, result.error ?? "The server could not process this recording.", "")
                 }
                 // Processing and uploads overlap. Clipboard/paste transactions
                 // remain ordered and each keeps its original destination.
@@ -1031,8 +1078,13 @@ final class InlayController: ObservableObject {
                 await waitForCaptureRelease()
                 try Task.checkCancellation()
                 let deliveryDestination = rebasedDestination(resolved)
-                let receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
+                var receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
                                             clipboardCount: clipboardCount, session: current)
+                if truncated, receipt.status == DictationDeliveryStatus.copied.rawValue {
+                    let message = "Recording was interrupted. The saved part was copied to the clipboard."
+                    receipt.message = message
+                    lastDelivery = message
+                }
                 try Task.checkCancellation()
                 do { try await connection.delivery(id, receipt: receipt) }
                 catch { continuationAnchors.removeAll { $0.generationID == id } }
@@ -1040,18 +1092,41 @@ final class InlayController: ObservableObject {
                 // Other takes can change the shared last-delivery state during the receipt request.
                 let delivered = DictationDeliveryStatus(rawValue: receipt.status) ?? .failed
                 if sessionID == current {
+                    hudProgressText = nil
                     activity = delivered == .failed ? .failed : .success
-                    dismissHUDAfter(seconds: delivered.needsAttention ? 4 : 1.7)
+                    if delivered.needsAttention {
+                        attentionPresented = true
+                        if delivered == .copied { dismissHUDAfter(seconds: 2, clearAttention: true) }
+                    } else { dismissHUDAfter(seconds: 1.7) }
+                    let outcomeSound: OutcomeFeedback.Sound =
+                        switch delivered {
+                        case .inserted, .tested, .listUpdated: .success
+                        case .copied, .unconfirmed: .attention
+                        case .failed, .none: .failure
+                        }
+                    announceOutcome(receipt.message ?? delivered.hudLabel, outcomeSound)
                 } else if delivered.needsAttention {
                     // A newer take owns the HUD and will replace this result.
                     errorMessage = "Earlier dictation: \(receipt.message ?? delivered.hudLabel)"
+                    if let errorMessage { announceOutcome(errorMessage, .attention) }
                 }
+                pending.resolved = true
                 refreshServer()
             } catch {
-                pending.upload.cancel(); pending.pipe.cancel(); pending.destination?.cancel()
-                if !pending.sealed { Task { try? await connection.cancel(id) } }
+                pending.upload.cancel(); pending.pipe.cancel(); pending.destination?.cancel(); pending.screenContext?.cancel()
+                if !pending.sealed {
+                    pending.resolved = true
+                    Task { try? await connection.cancel(id) }
+                }
                 guard !Task.isCancelled else { return }
-                if sessionID == current {
+                if let clientError = error as? ServerClientError, case .processingTimedOut = clientError {
+                    // Not a failure: stop blocking later deliveries and let the
+                    // persisted-pending reconciliation surface the result.
+                    if sessionID == current {
+                        activity = .idle
+                        statusMessage = "Still processing on the server"
+                    }
+                } else if sessionID == current {
                     if error is URLError { serverHealth = nil; serverStatusMessage = Self.connectionMessage(error) }
                     showError(Self.connectionMessage(error))
                 } else {
@@ -1061,7 +1136,7 @@ final class InlayController: ObservableObject {
                     lastDeliveryStatus = .failed
                     // An older job may fail while the microphone or a newer
                     // result owns the HUD. Keep that live activity intact.
-                    if !activity.isBusy { showError(message) }
+                    if !activity.isBusy { showError(message) } else { announceOutcome(message, .failure) }
                 }
                 refreshHistory()
             }
@@ -1087,12 +1162,18 @@ final class InlayController: ObservableObject {
     private func applyProgress(_ generation: GenerationRecord, session: UUID) {
         guard sessionID == session, !isCapturing else { return }
         switch generation.status {
-        case .receiving: statusMessage = "Finishing upload…"
-        case .queued: statusMessage = "Queued on server…"
-        case .transcribing: statusMessage = "Transcribing on server…"
-        case .proofreading: statusMessage = "Proofreading on server…"
-        case .completed: statusMessage = "Preparing result…"
-        case .failed, .cancelled: statusMessage = generation.error ?? "Processing stopped"
+        case .receiving: statusMessage = "Finishing upload…"; hudProgressText = "Uploading"
+        case .queued:
+            if let position = generation.queuePosition {
+                statusMessage = "Queued on server… (#\(position))"
+                hudProgressText = "Queued #\(position)"
+            } else {
+                statusMessage = "Queued on server…"; hudProgressText = "Queued"
+            }
+        case .transcribing: statusMessage = "Transcribing on server…"; hudProgressText = "Transcribing"
+        case .proofreading: statusMessage = "Proofreading on server…"; hudProgressText = "Proofreading"
+        case .completed: statusMessage = "Preparing result…"; hudProgressText = "Preparing"
+        case .failed, .cancelled: statusMessage = generation.error ?? "Processing stopped"; hudProgressText = nil
         }
     }
 
@@ -1120,7 +1201,7 @@ final class InlayController: ObservableObject {
             }
             status = message
         } else {
-            if sessionID == session { activity = .delivering; statusMessage = "Inserting at your cursor…" }
+            if sessionID == session { activity = .delivering; statusMessage = "Inserting at your cursor…"; hudProgressText = "Inserting" }
             let inserter = TextInserter()
             let outcome = await inserter.deliver(record.insertionText, copying: record.finalText,
                                                   to: destination, clipboardUnchangedSince: clipboardCount,
@@ -1172,7 +1253,10 @@ final class InlayController: ObservableObject {
     private func stopPendingDictations() {
         for pending in pendingDictations {
             pending.cancel()
-            if !pending.sealed { Task { try? await pending.client.cancel(pending.id) } }
+            if !pending.sealed {
+                removePendingEntry(pending.id)
+                Task { try? await pending.client.cancel(pending.id) }
+            }
         }
         pendingDictations.removeAll()
         deliveryTail = nil
@@ -1199,23 +1283,30 @@ final class InlayController: ObservableObject {
         continuationAnchors = Array(continuationAnchors.suffix(8))
     }
 
+    private func announceOutcome(_ message: String, _ sound: OutcomeFeedback.Sound?) {
+        OutcomeFeedback.announce(message, sound: sound, soundsEnabled: dictationSoundsEnabled)
+    }
+
     private func showError(_ message: String) {
+        hudProgressText = nil
         recordingFeedback.reset()
         activity = .failed; errorMessage = message; statusMessage = message
+        announceOutcome(message, .failure)
         onHUDVisibility?(true)
         dismissHUDAfter(seconds: 4)
     }
 
-    private func dismissHUDAfter(seconds: Double) {
+    private func dismissHUDAfter(seconds: Double, clearAttention: Bool = false) {
         hudTask?.cancel()
         hudTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
             guard let self, !activity.isBusy else { return }
+            if clearAttention { attentionPresented = false }
             // A newer take's result was shown; return the HUD to earlier work.
             if let earlier = pendingDictations.last { showEarlierDictation(earlier); return }
             onHUDVisibility?(false)
             recordingFeedback.reset()
-            if activity == .success { activity = .idle; statusMessage = isServerReady ? "Ready when you are" : serverStatusMessage }
+            if (activity == .success || activity == .failed), !attentionPresented { activity = .idle; statusMessage = isServerReady ? "Ready when you are" : serverStatusMessage }
         }
     }
 
@@ -1235,14 +1326,9 @@ final class InlayController: ObservableObject {
 
     private func restForSystem() {
         stopShortcutCheck()
-        let interrupted = isBusy
-        if isCapturing {
-            failSession("Recording interrupted while your Mac was away. Check shared history for completed results.", cancelServer: true)
-        }
-        stopPendingDictations()
-        if interrupted {
-            showError("Recording interrupted while your Mac was away. Check shared history for completed results.")
-        }
+        // Salvage a live take (best effort before suspend) and leave sealed
+        // pendings running: their recovery continues after wake.
+        if isCapturing { salvageDictation(reason: "Recording interrupted while your Mac was away.") }
         continuationAnchors.removeAll()
     }
     func refreshPermissions() {
@@ -1266,6 +1352,12 @@ final class InlayController: ObservableObject {
             _ = await PermissionManager.requestMicrophone()
             refreshPermissions()
         }
+    }
+
+    func requestScreenRecording() {
+        if permissions.screenRecording { PermissionManager.openScreenRecordingSettings() }
+        else { PermissionManager.requestScreenRecording() }
+        retryPermissions()
     }
 
     func requestAccessibility() {
@@ -1326,7 +1418,7 @@ final class InlayController: ObservableObject {
                 guard let self, self.isCapturing else { return }
                 let elapsed = ProcessInfo.processInfo.systemUptime - self.recordingStart
                 self.recordingFeedback.updateElapsed(elapsed)
-                if elapsed >= LifecyclePolicy.maximumRecordingSeconds { self.finishDictation(atLimit: true) }
+                if elapsed >= Double(InlayAPI.maximumRecordingSeconds) { self.finishDictation(atLimit: true) }
             }
         }
         timer.tolerance = 0.025

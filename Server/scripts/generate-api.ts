@@ -1,4 +1,5 @@
 import { copyFile, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import openapiTS, { astToString } from "openapi-typescript";
@@ -116,6 +117,168 @@ try {
       for (const name of generatedFiles) await compare(join(swiftOutput, name), join(output, name));
     }
   }
+  {
+    // Shared values: generated in every mode so --typescript-only CI keeps them fresh.
+    const document = parse(await readFile(schemaPath, "utf8")) as Record<string, unknown>;
+    const intValue = (key: string) => {
+      const value = document[key];
+      if (typeof value !== "number" || !Number.isInteger(value)) {
+        throw new Error(`openapi.yaml must define an integer ${key}.`);
+      }
+      return value;
+    };
+    const apiVersion = intValue("x-inlay-apiVersion");
+    const defaultPort = intValue("x-inlay-defaultPort");
+    const maximumRecordingSeconds = intValue("x-inlay-maximumRecordingSeconds");
+    const maximumChunkBytes = intValue("x-inlay-maximumChunkBytes");
+    const maximumArtifactBytes = intValue("x-inlay-maximumArtifactBytes");
+    const maximumDictionaryBytes = intValue("x-inlay-maximumDictionaryBytes");
+    const maximumMetadataBytes = intValue("x-inlay-maximumMetadataBytes");
+    const maximumPreferencesBytes = intValue("x-inlay-maximumPreferencesBytes");
+    const languages = document["x-inlay-supportedLanguages"];
+    if (!Array.isArray(languages) || !languages.every((code) => typeof code === "string")) {
+      throw new Error("openapi.yaml must define a string array x-inlay-supportedLanguages.");
+    }
+    const prompt = await readFile(
+      join(serverDirectory, "api/default-proofreading-prompt.txt"),
+      "utf8",
+    );
+    const ts = `/** Generated from Server/api (openapi.yaml + default-proofreading-prompt.txt) by generate-api.ts; edit the sources, never this file. */
+export const API_VERSION = ${apiVersion};
+export const DEFAULT_PORT = ${defaultPort};
+export const MAXIMUM_RECORDING_SECONDS = ${maximumRecordingSeconds};
+export const MAXIMUM_CHUNK_BYTES = ${maximumChunkBytes};
+export const MAXIMUM_ARTIFACT_BYTES = ${maximumArtifactBytes};
+export const MAXIMUM_DICTIONARY_BYTES = ${maximumDictionaryBytes};
+export const MAXIMUM_METADATA_BYTES = ${maximumMetadataBytes};
+export const MAXIMUM_PREFERENCES_BYTES = ${maximumPreferencesBytes};
+export const SUPPORTED_LANGUAGES: readonly string[] = ${JSON.stringify(languages)};
+export const DEFAULT_PROOFREADING_PROMPT = ${JSON.stringify(prompt)};
+`;
+    const indented = prompt
+      .split("\n")
+      .map((line) => (line === "" ? "" : "        " + line))
+      .join("\n");
+    const swiftShared = `// Generated from Server/api (openapi.yaml + default-proofreading-prompt.txt) by generate-api.ts; edit the sources, never this file.
+
+enum GeneratedShared {
+    static let apiVersion = ${apiVersion}
+    static let defaultPort = ${defaultPort}
+    static let maximumRecordingSeconds = ${maximumRecordingSeconds}
+    static let maximumChunkBytes = ${maximumChunkBytes}
+    static let maximumArtifactBytes = ${maximumArtifactBytes}
+    static let maximumDictionaryBytes = ${maximumDictionaryBytes}
+    static let maximumMetadataBytes = ${maximumMetadataBytes}
+    static let maximumPreferencesBytes = ${maximumPreferencesBytes}
+    static let supportedLanguages = [${languages.map((code: string) => JSON.stringify(code)).join(", ")}]
+    static let defaultProofreadingPrompt = """
+${indented}
+        """
+}
+`;
+    interface PinFile {
+      filename: string;
+      bytes: number;
+      sha256: string;
+      url: string;
+    }
+    interface Pins {
+      speech: {
+        id: string;
+        name: string;
+        filename: string;
+        bytes: number;
+        sha256: string;
+        url: string;
+      };
+      text: { id: string; name: string; directory: string; files: PinFile[] };
+      linuxProof: { bytes: number; sha256: string };
+    }
+    const pins = JSON.parse(
+      await readFile(join(serverDirectory, "api/model-pins.json"), "utf8"),
+    ) as Pins;
+    const manifest = [...pins.text.files]
+      .sort((a, b) => (a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0))
+      .map((file) => `${file.filename}\t${file.bytes}\t${file.sha256}\n`)
+      .join("");
+    const manifestHash = createHash("sha256").update(manifest, "utf8").digest("hex");
+    const tsPins = `/** Generated from Server/api/model-pins.json by generate-api.ts; edit the source, never this file. */
+export const speechModelPin = {
+  bytes: ${pins.speech.bytes},
+  sha256: "${pins.speech.sha256}",
+};
+
+export const linuxProofModelPin = {
+  bytes: ${pins.linuxProof.bytes},
+  sha256: "${pins.linuxProof.sha256}",
+};
+
+// The MLX helper verifies its six-file artifact before emitting \`ready\`.
+export const macProofManifestSHA256 = "${manifestHash}";
+`;
+    const filesSwift = pins.text.files
+      .map(
+        (file) =>
+          `        Pin(filename: "${file.filename}", byteCount: ${file.bytes}, sha256: "${file.sha256}", url: "${file.url}"),`,
+      )
+      .join("\n");
+    const swiftPins = `// Generated from Server/api/model-pins.json by generate-api.ts; edit the source, never this file.
+
+public enum GeneratedModelPins {
+    public struct Pin: Sendable {
+        public let filename: String
+        public let byteCount: Int64
+        public let sha256: String
+        public let url: String
+    }
+
+    public static let speechID = "${pins.speech.id}"
+    public static let speechName = "${pins.speech.name}"
+    public static let speechFilename = "${pins.speech.filename}"
+    public static let speechByteCount: Int64 = ${pins.speech.bytes}
+    public static let speechSHA256 = "${pins.speech.sha256}"
+    public static let speechURL = "${pins.speech.url}"
+
+    public static let textID = "${pins.text.id}"
+    public static let textName = "${pins.text.name}"
+    public static let textDirectory = "${pins.text.directory}"
+    public static let textFiles: [Pin] = [
+${filesSwift}
+    ]
+}
+`;
+    const formatTS = async (source: string, filepath: string) =>
+      format(source, { ...(await resolveConfig(filepath)), filepath });
+    const outputs: [string, string, string][] = [
+      [
+        join(serverDirectory, "src/generated/shared.ts"),
+        await formatTS(ts, join(serverDirectory, "src/generated/shared.ts")),
+        "shared.ts",
+      ],
+      [
+        join(repositoryDirectory, "Sources/InlayAPI/GeneratedShared.swift"),
+        swiftShared,
+        "GeneratedShared.swift",
+      ],
+      [
+        join(serverDirectory, "src/generated/model-pins.ts"),
+        await formatTS(tsPins, join(serverDirectory, "src/generated/model-pins.ts")),
+        "model-pins.ts",
+      ],
+      [
+        join(repositoryDirectory, "Sources/InlayCore/GeneratedModelPins.swift"),
+        swiftPins,
+        "GeneratedModelPins.swift",
+      ],
+    ];
+    for (const [target, content, stagedName] of outputs) {
+      const destination = staging ? join(staging, stagedName) : target;
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, content);
+      if (check) await compare(target, destination);
+    }
+  }
+
   console.log(check ? "API bindings match the contract." : "Generated API bindings.");
 } finally {
   if (staging) await rm(staging, { recursive: true, force: true });

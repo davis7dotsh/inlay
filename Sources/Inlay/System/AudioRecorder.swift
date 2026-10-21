@@ -30,9 +30,8 @@ struct CapturedAudio: Sendable {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// Only this development client's generated capture names qualify.
-    /// Other Inlay builds and server archives are untouched.
-    static func cleanupOrphans(in temporaryDirectory: URL = FileManager.default.temporaryDirectory) {
+    /// Only matching capture names in the selected temporary directory qualify.
+    static func cleanupOrphans(in temporaryDirectory: URL = InlayTemporaryDirectory.url) {
         let files = FileManager.default
         guard let entries = try? files.contentsOfDirectory(at: temporaryDirectory, includingPropertiesForKeys: nil) else { return }
         for entry in entries {
@@ -189,7 +188,8 @@ final class AudioRecorder {
 
     private func interrupt(id: UUID, message: String) {
         guard request?.id == id else { return }
-        cancel()
+        // Do not cancel here: the controller salvages the take through the
+        // normal stop path so already-streamed audio can still be sealed.
         onInterruption?(message)
     }
 
@@ -317,6 +317,16 @@ private final class QueuedAudioHardware: AudioCaptureHardware, @unchecked Sendab
 
 /// Only the admission gate is shared between the audio callback and the caller.
 /// Converter, file, counters, and errors are confined to the serial writer queue.
+/// Whether a negotiated input format's original copy can be archived.
+/// Mirrors the server caps (192 kHz format ceiling, 256 MiB per stream over
+/// the 180 s limit) in Server/src/generation-service.ts appendAudio.
+enum OriginalAudioPolicy {
+    static func isArchivable(sampleRate: Double, channels: Int) -> Bool {
+        sampleRate > 0 && sampleRate <= 192_000
+            && sampleRate * Double(channels) * 4 * 180 <= 268_435_456
+    }
+}
+
 final class RecordingWriter: @unchecked Sendable {
     private let queue = DispatchQueue(label: "local.inlay.audio-writer", qos: .userInitiated)
     private let admissionLock = NSLock()
@@ -374,9 +384,12 @@ final class RecordingWriter: @unchecked Sendable {
         converter.downmix = true
         converter.sampleRateConverterQuality = AVAudioQuality.high.rawValue
 
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("Inlay-Dev-recording-\(UUID().uuidString)", isDirectory: true)
+        directory = InlayTemporaryDirectory.url.appendingPathComponent("Inlay-Dev-recording-\(UUID().uuidString)", isDirectory: true)
         url = directory.appendingPathComponent("microphone.wav")
-        originalURL = preserveOriginalAudio ? directory.appendingPathComponent("original.wav") : nil
+        originalURL = preserveOriginalAudio
+            && OriginalAudioPolicy.isArchivable(sampleRate: inputFormat.sampleRate,
+                                                channels: Int(inputFormat.channelCount))
+            ? directory.appendingPathComponent("original.wav") : nil
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         do {
             try queue.sync {

@@ -4,8 +4,9 @@ import CoreGraphics
 import InlayCore
 import ScreenCaptureKit
 
-/// Dormant capture support for a future hint-capable speech backend. The current
-/// Parakeet dictation flow never constructs this helper or requests its permissions.
+/// Reads unusual words from the focused window when a take starts, so Qwen
+/// cleanup can spell names and identifiers that are on screen. The window image
+/// and its recognized text stay in this process; only ranked terms reach the server.
 @MainActor
 final class ScreenContextCapture {
     private var terms: [String]?
@@ -54,16 +55,19 @@ final class ScreenContextCapture {
     private static func read(spellingLanguage: String?) async -> [String] {
         // Secure input means a password field has focus; never capture around it.
         guard CGPreflightScreenCaptureAccess(), !IsSecureEventInputEnabled(),
-              let app = NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-              let image = await windowImage(of: app.processIdentifier), !Task.isCancelled,
-              // Focus can move into a password field while the window is captured.
-              !IsSecureEventInputEnabled() else { return [] }
+              let window = await offMain({ focusedWindow() }), !Task.isCancelled,
+              let image = await windowImage(window.windowID), !Task.isCancelled,
+              // Focus can move into a password field or another window while capturing.
+              !IsSecureEventInputEnabled(),
+              await offMain({ focusedWindow()?.isSameWindow(as: window) ?? false }), !Task.isCancelled
+        else { return [] }
         let recognition = Task.detached(priority: .userInitiated) {
             (try? await ScreenContext.recognizeLines(in: image)) ?? []
         }
         let lines = await withTaskCancellationHandler { await recognition.value } onCancel: { recognition.cancel() }
         guard !Task.isCancelled else { return [] }
+        // NSSpellChecker is not documented as thread-safe, so ranking stays on the main
+        // actor; the per-word cache bounds it to one check per distinct word.
         let checker = NSSpellChecker.shared
         return ScreenContext.terms(fromLines: lines) { word in
             var count = 0
@@ -72,43 +76,83 @@ final class ScreenContextCapture {
         }
     }
 
-    /// The window with keyboard focus, matched by frame; panels and floating editors
-    /// can sit above other layers. A take with no matched focus gets no screen hints.
-    private nonisolated static func focusedWindowID(of processID: pid_t) -> CGWindowID? {
-        guard let frame = focusedWindowFrame(of: processID),
+    private static func offMain<Value: Sendable>(_ operation: @escaping @Sendable () -> Value) async -> Value {
+        let task = Task.detached(priority: .userInitiated, operation: operation)
+        return await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+    }
+
+    /// AX handles and the matched window number only; compared off the main actor.
+    private struct FocusedWindow: @unchecked Sendable {
+        let applicationPID: pid_t
+        let window: AXUIElement
+        let windowID: CGWindowID
+
+        func isSameWindow(as other: Self) -> Bool {
+            applicationPID == other.applicationPID && windowID == other.windowID && CFEqual(window, other.window)
+        }
+    }
+
+    /// The window holding the system's keyboard focus, read the way insertion reads its
+    /// target: the system-wide focused application and element rather than the
+    /// frontmost app, so a nonactivating panel that owns focus is the window read.
+    /// Panels and floating editors can sit above other layers, so the window is matched
+    /// by frame among the focused application's windows. Unresolved focus, or focus in
+    /// Inlay itself, gets no screen hints. Runs off the main actor with short timeouts,
+    /// so an unresponsive app cannot stall dictation.
+    private nonisolated static func focusedWindow() -> FocusedWindow? {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.25)
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        var applicationPID: pid_t = 0, elementPID: pid_t = 0
+        guard !Task.isCancelled,
+              let application = element(kAXFocusedApplicationAttribute, of: system),
+              let focused = element(kAXFocusedUIElementAttribute, of: system),
+              AXUIElementGetPid(application, &applicationPID) == .success, applicationPID > 0,
+              AXUIElementGetPid(focused, &elementPID) == .success, elementPID > 0,
+              applicationPID != ownPID, elementPID != ownPID else { return nil }
+        AXUIElementSetMessagingTimeout(focused, 0.25)
+        guard let window = element(kAXWindowAttribute, of: focused)
+            ?? element(kAXTopLevelUIElementAttribute, of: focused) else { return nil }
+        AXUIElementSetMessagingTimeout(window, 0.25)
+        // Reject a mixed snapshot if focus moved between the root queries.
+        guard let frame = frame(of: window), let latest = element(kAXFocusedApplicationAttribute, of: system),
+              CFEqual(application, latest),
               let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]] else { return nil }
-        return windows.first(where: { info in
-            (info[kCGWindowOwnerPID as String] as? pid_t) == processID
+        // Fail closed when another same-app window shares the frame: the pairing would be a guess.
+        let matches = windows.filter { info in
+            (info[kCGWindowOwnerPID as String] as? pid_t) == applicationPID
                 && ((info[kCGWindowBounds as String] as? NSDictionary)
                     .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
                     .map { abs($0.minX - frame.minX) < 2 && abs($0.minY - frame.minY) < 2
                         && abs($0.width - frame.width) < 2 && abs($0.height - frame.height) < 2 } ?? false)
-        })?[kCGWindowNumber as String] as? CGWindowID
+        }
+        guard matches.count == 1, let windowID = matches[0][kCGWindowNumber as String] as? CGWindowID else { return nil }
+        return FocusedWindow(applicationPID: applicationPID, window: window, windowID: windowID)
+    }
+
+    private nonisolated static func element(_ attribute: String, of parent: AXUIElement) -> AXUIElement? {
+        guard !Task.isCancelled else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(parent, attribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
     }
 
     /// Accessibility and window-list frames share top-left global coordinates.
-    /// Runs off the main actor with short timeouts, so an unresponsive app cannot stall dictation.
-    private nonisolated static func focusedWindowFrame(of processID: pid_t) -> CGRect? {
-        let app = AXUIElementCreateApplication(processID)
-        AXUIElementSetMessagingTimeout(app, 0.25)
-        var window: CFTypeRef?, position: CFTypeRef?, size: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success,
-              let window, CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
-        let element = window as! AXUIElement
-        AXUIElementSetMessagingTimeout(element, 0.25)
+    private nonisolated static func frame(of window: AXUIElement) -> CGRect? {
+        var position: CFTypeRef?, size: CFTypeRef?
         var origin = CGPoint.zero, extent = CGSize.zero
-        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &position) == .success,
+              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size) == .success,
               let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID(),
               AXValueGetValue(position as! AXValue, .cgPoint, &origin),
               AXValueGetValue(size as! AXValue, .cgSize, &extent) else { return nil }
         return CGRect(origin: origin, size: extent)
     }
 
-    private static func windowImage(of processID: pid_t) async -> CGImage? {
-        guard let windowID = await Task.detached(priority: .userInitiated, operation: { focusedWindowID(of: processID) }).value,
-              let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true),
+    private static func windowImage(_ windowID: CGWindowID) async -> CGImage? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true),
               let window = content.windows.first(where: { $0.windowID == windowID }) else { return nil }
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let configuration = SCStreamConfiguration()

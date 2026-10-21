@@ -52,7 +52,7 @@ USER inlay
 WORKDIR /opt/inlay
 EXPOSE 8391
 HEALTHCHECK --interval=30s --timeout=3s --start-period=120s \
-    CMD curl --fail --silent http://127.0.0.1:8391/v1/health > /dev/null || exit 1
+    CMD curl --fail --silent http://127.0.0.1:8391/v1/liveness > /dev/null || exit 1
 # Native helpers do not start when the server runs as PID 1.
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/inlay/inlay-server"]
 

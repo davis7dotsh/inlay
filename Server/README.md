@@ -9,7 +9,7 @@ The server is an independent TypeScript/Fastify HTTP process that owns models, s
 
 ## Linux
 
-The `Server release packages` workflow builds `inlay-server-linux-x64-cuda.tar.gz` as a workflow artifact on `server-v*` tags and manual dispatch. Download the `inlay-server-linux-x64-cuda` artifact from the Actions run and unzip it to get the tarball and its checksum. The package targets SM 80, 86, 89, 90, 120, and 121; Tesla T4 and RTX 20-series (SM 75) will not run it. The helpers link the CUDA runtime statically and load `libcuda.so.1` from the host driver, which must be 580.95.05 or newer for CUDA 13.0.2. Keep model weights outside the package.
+The `Server release packages` workflow builds `inlay-server-linux-x64-cuda.tar.gz` as a workflow artifact on `server-v*` tags and manual dispatch. Download the matching `server-v*` package from [GitHub Releases](https://github.com/davis7dotsh/inlay/releases) and verify it against the published `.sha256` before extracting. The package targets SM 80, 86, 89, 90, 120, and 121; Tesla T4 and RTX 20-series (SM 75) will not run it. The helpers link the CUDA runtime statically and load `libcuda.so.1` from the host driver, which must be 580.95.05 or newer for CUDA 13.0.2. Keep model weights outside the package.
 
 The unit runs as the `inlay` user and listens on `127.0.0.1:8391`. For remote clients, put it behind an HTTPS reverse proxy or bind it to the host's Tailscale IP with a `sudo systemctl edit inlay-server` override (`Environment=INLAY_SERVER_HOST=100.x.y.z`); see [remote access](#remote-access). The `inlay` user must be able to open the host NVIDIA device nodes; if they are group-accessible only, add `inlay` to that group (usually `render` or `video`).
 
@@ -24,7 +24,7 @@ sudo tar -xzf inlay-server-linux-x64-cuda.tar.gz -C /opt/inlay --strip-component
 Place the pinned files at `/var/lib/inlay/models/ggml-parakeet-tdt-0.6b-v3-f16.bin` and `/var/lib/inlay/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf` so `inlay` can read them. Install a token of at least 32 characters, with no whitespace, at `/etc/inlay/token`, owned by `inlay`, with mode `0600`:
 
 ```sh
-printf '%s' 'replace-with-a-token-of-at-least-32-characters' | sudo install -o inlay -g inlay -m 600 /dev/stdin /etc/inlay/token
+openssl rand -hex 32 | sudo install -o inlay -g inlay -m 600 /dev/stdin /etc/inlay/token
 ```
 
 Linux packages (CPU and CUDA) include `inlay-server.service`. Install it outside the package:
@@ -56,31 +56,24 @@ Parakeet automatically recognizes 25 European languages. The language preference
 The MLX directory must contain exactly the six files listed below. Download the pinned revision:
 
 ```sh
-(
-  set -e
-  inlay_qwen_dir="$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
-  inlay_qwen_url="https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b"
-  mkdir -p "$inlay_qwen_dir"
-  for file in model.safetensors config.json tokenizer.json tokenizer_config.json generation_config.json chat_template.jinja; do
-    curl --fail --location --retry 3 --output "$inlay_qwen_dir/$file" "$inlay_qwen_url/$file"
-  done
-)
+INLAY_MODEL_DIR="$PWD/.local/models" ./scripts/download-text-model.sh
 ```
+
+The script verifies every file's size and SHA-256 and fails if the directory holds anything beyond the six pinned files.
 
 `Sources/InlayCore/TextModel.swift` defines the six-file size/hash manifest; the MLX helper verifies it before becoming ready. Use regular files, with no extra files or symlinks in the model directory.
 
 ### Qwen on Linux
 
 ```sh
-mkdir -p .local/models
-curl --fail --location --retry 3 \
-  --output .local/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
-  https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+INLAY_MODEL_DIR="$PWD/.local/models" ./scripts/download-text-model.sh --linux
 ```
 
 Expected size: 2,497,281,120 bytes. SHA-256: `3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597`. The server verifies both before loading.
 
 ## Build
+
+Or run `./scripts/setup.sh` from the repository root to check prerequisites and perform the whole first build (submodules, dependencies, both models, server package).
 
 Install Bun 1.4.2 and initialize submodules with `git submodule update --init --recursive`. macOS requires Apple Silicon and full Xcode with its Metal compiler for the MLX helper; the complete client/helper build uses Xcode 26+ and Swift 6.2+. If Metal is missing, run `xcodebuild -downloadComponent MetalToolchain`.
 
@@ -111,6 +104,8 @@ The archive lock uses Bun FFI to call libc `flock`, matching the reference Swift
 
 ## Run
 
+On macOS, `./scripts/install-service.sh` installs the packaged server as a per-user LaunchAgent (`Server/dev.davis.inlay.server-agent.plist`), creates `~/Library/Application Support/Inlay/ServerData` (mode 700) and the admin token file inside it, and verifies `http://127.0.0.1:8391/v1/liveness`. Remove it with `./scripts/install-service.sh --uninstall`; data and models are kept, and existing data directories are reused, never moved. `./scripts/migrate.sh` prints the checklist for moving from a dev checkout to the Release service.
+
 From the repository root, with the models installed above:
 
 ```sh
@@ -126,7 +121,7 @@ From the repository root, with the models installed above:
 
 On Linux, replace the last path with the GGUF file. Add `--dev` for a development label in health responses. If using the packaged distribution elsewhere, point helper/resource paths at that package and choose durable model/data paths.
 
-Check `curl http://localhost:8391/v1/health`; HTTP reachability alone does not mean inference is available. The `ready` field means the server can accept a recording, including while other recordings are uploading or processing. Finished uploads queue for serial inference; model runtime fields separately report whether helpers are loaded. Quitting a client does not stop this process. Use launchd, systemd, or container supervision for boot/restart behavior; the scripts do not install a service.
+Check `curl http://localhost:8391/v1/liveness` for reachability; for readiness detail use the app, or `curl -H "Authorization: Bearer <token>" http://localhost:8391/v1/health`. HTTP reachability alone does not mean inference is available. The `ready` field means the server can accept a recording, including while other recordings are uploading or processing. Finished uploads queue for inference: each helper stage (speech, proofreading) runs one job at a time, but different jobs overlap across stages, so one take can be proofread while the next is transcribed. Model runtime fields separately report whether helpers are loaded. Quitting a client does not stop this process. On macOS, `./scripts/install-service.sh` installs a LaunchAgent (see above); elsewhere, use systemd or container supervision for boot/restart behavior.
 
 For server-only development alongside an installed Inlay instance, use `--port 8392 --data-dir "$PWD/.local/typescript-server" --dev` with your helper/model arguments. Start the executable directly or use `bun run dev:server` with those arguments. The client dev runner starts the app and defaults to port 8391; avoid it when preserving a running installation.
 
@@ -139,11 +134,16 @@ For server-only development alongside an installed Inlay instance, use `--port 8
 | `--proof-helper`, `--proof-model`   | `INLAY_TEXT_ENGINE_PATH`, `INLAY_TEXT_MODEL`       |
 | `--dev`                             | `INLAY_DEV=1`                                      |
 
-The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` when using the paths above. Without those overrides, macOS searches `~/Library/Application Support/Inlay/Models/ggml-parakeet-tdt-0.6b-v3-f16.bin` and `~/.inlay/models/Qwen3-4B-Instruct-2507-MLX-4bit`. Existing installations can retain their archive, token file, and Qwen model location with the arguments or overrides above, but must install the Parakeet weights; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
+The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` (or `INLAY_MODEL_DIR`) when using the paths above. Without those overrides, the dev runner and `bun run dev` use the `./scripts/setup.sh` download directory: `~/Library/Application Support/Inlay/Models` with `ggml-parakeet-tdt-0.6b-v3-f16.bin` and `Qwen3-4B-Instruct-2507-MLX-4bit` on macOS, or `.local/models` with `ggml-parakeet-tdt-0.6b-v3-f16.bin` and `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` on Linux. On macOS, Qwen falls back to `~/.inlay/models` when only that copy has all six pinned files. Existing installations can retain their archive, token file, and Qwen model location with the arguments or overrides above, but must install the Parakeet weights; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
 
 ## Remote access
 
-Bind to a reachable address and pass `--token-file /absolute/path/to/token`. Nonloopback listeners require a token of at least 32 characters with no internal whitespace. In the Mac app, enter the endpoint and token under **This Mac**; tokens are stored in Keychain.
+The token file holds the **admin token** (at least 32 characters, no internal whitespace). Without `--token-file`, the server creates one at `<data-dir>/admin-token` on first start and logs its path. In the Mac app, enter the endpoint and admin token once under **This Mac**; the Mac immediately enrolls itself and keeps its own revocable per-device credential in Keychain. The admin token itself only enrolls, lists, and revokes devices — it cannot dictate or read history.
+
+- Revoke a Mac from **This Mac** in the app, or with the admin token (`DELETE /v1/devices/<id>`). Once every Mac has enrolled, use **Stop accepting it** so the admin token can no longer enroll or rotate any device credential. A revoked device ID stays revoked.
+- Lost Mac: revoke its device; if it may still hold the old shared/admin token, also rotate the admin token file on the server host (stop server, replace file contents, start). Device credentials are unaffected.
+- Lost admin token: with server filesystem access, replace the token file contents and restart; enrolled devices keep working. If `devices.json` in the data directory is lost or corrupt, delete it and restart — every Mac re-enrolls with the admin token and history is untouched.
+- Backups of the data directory include `devices.json` (hashes only) and, when auto-created, the admin token itself. Downgrading to a pre-v3 server reverts this auth model.
 
 - Use an HTTPS reverse proxy for hosted servers and hostnames, including Tailscale MagicDNS names. The runner itself serves HTTP.
 - HTTP is accepted for localhost and literal Tailscale IPs in `100.64.0.0/10` or `fd7a:115c:a1e0::/48` on your connected tailnet. Inlay checks the address range, not routing; use HTTPS if that private route cannot be assured.
@@ -184,7 +184,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-The source server hot reloads, listens on `0.0.0.0:8392`, and keeps data and its automatically created private token under `.local/dev-server`. On the same Mac, open [server health](http://localhost:8392/v1/health). Build helpers once with `./scripts/build-server.sh` and set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` to enable dictation. Missing assets leave the server running with `ready: false`; HTTP reachability does not establish working inference. CLI arguments and the environment variables above override development defaults, except that inherited `INLAY_SERVER_DATA_DIR` is ignored. Use `--data-dir` to explicitly select another development archive.
+Set `INLAY_DEV_DISPLAY_HOST` to change the printed development URL host. The source server hot reloads, listens on `127.0.0.1:8392` (override with `--host`/`INLAY_SERVER_HOST` for deliberate LAN/Tailscale dev), and keeps data and its automatically created private token under `.local/dev-server`. On the same Mac, open [server liveness](http://localhost:8392/v1/liveness). Build helpers once with `./scripts/build-server.sh` and install the models at the defaults above, or set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL`, to enable dictation. Missing assets leave the server running with `ready: false`; HTTP reachability does not establish working inference. CLI arguments and the environment variables above override development defaults, except that inherited `INLAY_SERVER_DATA_DIR` is ignored. Use `--data-dir` to explicitly select another development archive.
 
 ```sh
 bun run fmt

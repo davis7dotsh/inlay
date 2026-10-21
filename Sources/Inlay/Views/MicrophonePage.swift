@@ -58,7 +58,7 @@ private struct MicrophoneSettingsView: View {
             .padding(.horizontal, 28)
             .padding(.top, 30)
             .padding(.bottom, 24)
-            .frame(maxWidth: 700)
+            .frame(maxWidth: InlayPageMetrics.contentWidth)
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -259,7 +259,7 @@ private struct MicrophoneSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.caption)
-        .foregroundStyle(store.storageError == nil ? .secondary : Color.orange)
+        .foregroundStyle(store.storageError == nil ? .secondary : InlayPalette.warning)
         .frame(height: 32, alignment: .topLeading)
         .help(store.storageError ?? "In Automatic mode, the first connected microphone in the selected list is used.")
     }
@@ -347,6 +347,14 @@ private struct MicrophoneSettingsView: View {
             Button("Remove from priority list") { store.removeFromPriority(uid: device.uid) }
         }
         .accessibilityIdentifier("microphone.priority.\(device.uid)")
+        .focusable()
+        .onMoveCommand { direction in
+            switch direction {
+            case .up: if position > 0 { store.movePriority(uid: device.uid, by: -1) }
+            case .down: if position < count - 1 { store.movePriority(uid: device.uid, by: 1) }
+            default: break
+            }
+        }
     }
 
     private func priorityRowContent(_ device: AudioInputDevice, position: Int,
@@ -521,7 +529,7 @@ private struct ProfileNameSheet: View {
                 .onChange(of: name) { _, _ in error = nil }
             Text(error ?? "Each list remembers its own microphone order.")
                 .font(.caption)
-                .foregroundStyle(error == nil ? .secondary : Color.orange)
+                .foregroundStyle(error == nil ? .secondary : InlayPalette.warning)
                 .frame(height: 30, alignment: .topLeading)
             HStack {
                 Spacer()

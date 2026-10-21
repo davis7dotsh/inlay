@@ -6,7 +6,11 @@ import type { ModelHintUsage } from "../api";
 import { HelperProcess, type HelperResponse } from "./helper-process";
 import { checkCancellation, InferenceError } from "./inference-error";
 import { ModelVerifier, type ModelPin } from "./model-verification";
-import { linuxProofModelPin, macProofManifestSHA256, speechModelPin } from "./model-pins";
+import {
+  linuxProofModelPin,
+  macProofManifestSHA256,
+  speechModelPin,
+} from "../generated/model-pins.ts";
 
 export { InferenceError } from "./inference-error";
 
@@ -38,6 +42,12 @@ function deadline(value: number | undefined, fallback: number) {
   return value !== undefined && Number.isFinite(value) && value > 0 && value <= 3600
     ? value
     : fallback;
+}
+
+function speechDeadline(base: number, audioSeconds?: number) {
+  if (audioSeconds === undefined || !Number.isFinite(audioSeconds) || audioSeconds <= 0)
+    return base;
+  return Math.min(900, Math.max(base, Math.ceil(60 + 2 * audioSeconds)));
 }
 
 export function createInferenceConfiguration(input: ConfigurationInput): InferenceConfiguration {
@@ -85,6 +95,7 @@ export interface InferenceBackend {
     vocabularyTerms: string[],
     onProgress?: (value: number) => void,
     signal?: AbortSignal,
+    audioSeconds?: number,
   ): Promise<SpeechInferenceResult>;
   correct(
     text: string,
@@ -229,26 +240,32 @@ export class NativeInference implements InferenceBackend {
   }
 
   async warmUp(proofreadingEnabled = true, signal?: AbortSignal) {
-    try {
-      await this.verifier.verify(this.configuration.speechModel, this.speechPin, signal);
-    } catch (error) {
-      // A readable file that fails the pin is usually an earlier install's Whisper weights.
-      const readable = await access(this.configuration.speechModel, constants.R_OK).then(
-        () => true,
-        () => false,
-      );
-      if (error instanceof InferenceError && error.code === "unavailable" && readable)
-        throw new InferenceError(
-          "unavailable",
-          "The speech model must be Parakeet v3. Run scripts/download-model.sh.",
+    const loadSpeech = async () => {
+      try {
+        await this.verifier.verify(this.configuration.speechModel, this.speechPin, signal);
+      } catch (error) {
+        // A readable file that fails the pin is usually an earlier install's Whisper weights.
+        const readable = await access(this.configuration.speechModel, constants.R_OK).then(
+          () => true,
+          () => false,
         );
-      throw error;
-    }
-    await this.speech.ensureLoaded(signal);
-    if (proofreadingEnabled) {
+        if (error instanceof InferenceError && error.code === "unavailable" && readable)
+          throw new InferenceError(
+            "unavailable",
+            "The speech model must be Parakeet v3. Run scripts/download-model.sh.",
+          );
+        throw error;
+      }
+      await this.speech.ensureLoaded(signal);
+    };
+    const loadProof = async () => {
+      if (!proofreadingEnabled) return;
       await this.verifier.verify(this.configuration.proofModel, this.proofPin, signal);
       await this.proof.ensureLoaded(signal);
-    }
+    };
+    const [speech, proof] = await Promise.allSettled([loadSpeech(), loadProof()]);
+    if (speech.status === "rejected") throw speech.reason;
+    if (proof.status === "rejected") throw proof.reason;
   }
 
   async transcribe(
@@ -257,6 +274,7 @@ export class NativeInference implements InferenceBackend {
     vocabularyTerms: string[],
     onProgress?: (value: number) => void,
     signal?: AbortSignal,
+    audioSeconds?: number,
   ): Promise<SpeechInferenceResult> {
     checkCancellation(signal);
     let readable = true;
@@ -299,7 +317,7 @@ export class NativeInference implements InferenceBackend {
     const response = await this.speech.request(
       request,
       request.id,
-      this.configuration.speechTimeout,
+      speechDeadline(this.configuration.speechTimeout, audioSeconds),
       onProgress,
       signal,
     );
@@ -317,14 +335,18 @@ export class NativeInference implements InferenceBackend {
       !response.language.length ||
       bytes(response.language) > 32
     ) {
-      await this.speech.shutdown();
+      this.speech.discard(
+        new InferenceError("invalidResponse", "Parakeet returned an invalid transcript."),
+      );
       throw new InferenceError("invalidResponse", "Parakeet returned an invalid transcript.");
     }
     let hints: ModelHintUsage | undefined;
     try {
       hints = vocabularyDiagnostics(response, vocabularyTerms);
     } catch (error) {
-      await this.speech.shutdown();
+      this.speech.discard(
+        new InferenceError("invalidResponse", "Parakeet returned invalid vocabulary diagnostics."),
+      );
       throw error;
     }
     const state = this.speech.snapshot();
@@ -384,7 +406,9 @@ export class NativeInference implements InferenceBackend {
       !Number.isFinite(response.elapsed) ||
       response.elapsed < 0
     ) {
-      await this.proof.shutdown();
+      this.proof.discard(
+        new InferenceError("invalidResponse", "Qwen returned an invalid correction."),
+      );
       throw new InferenceError("invalidResponse", "Qwen returned an invalid correction.");
     }
     const state = this.proof.snapshot();

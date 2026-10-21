@@ -6,12 +6,7 @@ struct InlayMenuView: View {
     @ObservedObject var controller: InlayController
     var openWindow: () -> Void
     var quit: () -> Void
-
-    private var idleDictationHint: String {
-        let key = controller.shortcut == .fn ? "fn" : controller.shortcut.title
-        let verb = controller.activationMode == .doubleTapToggle ? "Double tap" : "Press"
-        return "\(verb) \(key) to dictate"
-    }
+    var closeMenu: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -21,11 +16,13 @@ struct InlayMenuView: View {
                 DevBadge()
                 Spacer(minLength: 8)
                 HStack(spacing: 6) {
-                    StatusDot(color: controller.isServerReady ? InlayPalette.success : InlayPalette.warning)
-                    Text(controller.serverStatusMessage)
-                        .font(.caption)
-                        .foregroundStyle(InlayPalette.muted)
-                        .lineLimit(1)
+                    StatusDot(isReady: controller.isServerReady)
+                    if !controller.isServerReady {
+                        Text(controller.serverStatusMessage)
+                            .font(.caption)
+                            .foregroundStyle(InlayPalette.muted)
+                            .lineLimit(1)
+                    }
                 }
                 .frame(width: 112, alignment: .trailing)
                 .help(controller.serverStatusMessage)
@@ -33,8 +30,29 @@ struct InlayMenuView: View {
             }
             .frame(height: 28)
 
-            InlayMicrophoneTestButton(controller: controller, identifier: "menu.test",
-                idleTitle: idleDictationHint)
+            Button {
+                if !controller.isCapturing { closeMenu() }
+                controller.toggleMenuDictation()
+            } label: {
+                Label(controller.isCapturing ? "Stop dictation" : "Start dictation",
+                      systemImage: controller.isCapturing ? "stop.fill" : "mic")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: 26)
+            }
+            .disabled(!controller.canTest && !controller.isCapturing)
+            .help("Dictate at your cursor. Without a placed cursor, the text is copied.")
+            .accessibilityLabel(controller.isCapturing ? "Stop dictation" : "Start dictation")
+            .accessibilityIdentifier("menu.dictate")
+
+            InlayMicrophoneTestButton(controller: controller, identifier: "menu.test")
+            ForEach(controller.undeliveredResults, id: \.id) { record in
+                Button { controller.copyUndeliveredResult(record) } label: {
+                    Label("Copy finished dictation", systemImage: "doc.badge.plus")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(height: 26)
+                }
+                .accessibilityIdentifier("menu.copy-undelivered")
+            }
             Button { controller.copyLastTranscript() } label: {
                 Label("Copy last message", systemImage: "doc.on.doc")
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -90,11 +108,11 @@ extension DictationDeliveryStatus {
         }
     }
 
-    var needsAttention: Bool { self == .failed || self == .unconfirmed }
+    var needsAttention: Bool { self == .copied || self == .failed || self == .unconfirmed }
 }
 
 struct DictationHUD: View {
-    static let width: CGFloat = InlayBuild.current.isDevelopment ? 200 : 160
+    static let width: CGFloat = 200 + (InlayBuild.current.isDevelopment ? 32 : 0)
     static let height: CGFloat = 44
     static let noticeHeight: CGFloat = 30
     static let morphDuration = 0.18
@@ -113,8 +131,12 @@ struct DictationHUD: View {
         }
         .task(id: presentation.id) { await enter() }
         .onChange(of: controller.activity) { _, activity in
-            guard presentation.id != nil, !activity.isCapturing else { return }
+            guard presentation.id != nil, !activity.isBusy, !controller.attentionPresented else { return }
             withAnimation(morphAnimation) { expanded = false }
+        }
+        .onChange(of: controller.attentionPresented) { _, presented in
+            guard presentation.id != nil, presented else { return }
+            withAnimation(morphAnimation) { expanded = true }
         }
     }
 
@@ -132,7 +154,7 @@ struct DictationHUD: View {
         guard presentation.id != nil else { return }
         if reduceMotion {
             entered = true
-            expanded = controller.activity.isCapturing
+            expanded = controller.activity.isBusy || controller.attentionPresented
             return
         }
         await Task.yield()
@@ -141,7 +163,7 @@ struct DictationHUD: View {
         // This only stages the visual; microphone startup never waits for it.
         do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
         guard !Task.isCancelled, presentation.id != nil else { return }
-        withAnimation(morphAnimation) { expanded = controller.activity.isCapturing }
+        withAnimation(morphAnimation) { expanded = controller.activity.isBusy || controller.attentionPresented }
     }
 
     private var capsule: some View {
@@ -160,8 +182,8 @@ struct DictationHUD: View {
             .opacity(expanded ? 0 : 1)
             .allowsHitTesting(!expanded)
             .accessibilityHidden(expanded)
-            .accessibilityLabel(controller.isBusy ? "Cancel dictation" : hudLabel)
-            .accessibilityHint(controller.isBusy ? "Cancel this dictation" : result.needsAttention ? "Open Inlay for details" : "Dismiss status")
+            .accessibilityLabel(controller.isBusy ? stageText : hudLabel)
+            .accessibilityHint(controller.isBusy ? "" : result.needsAttention ? "Open Inlay for details" : "Dismiss status")
             .accessibilityIdentifier("hud.circle")
         }
         .frame(width: expanded ? Self.width : Self.height, height: Self.height)
@@ -188,16 +210,22 @@ struct DictationHUD: View {
     private var expandedContent: some View {
         HStack(spacing: 10) {
             DevBadge()
+            if controller.attentionPresented, !controller.isBusy {
+                attentionContent
+            } else {
             HStack(spacing: 8) {
                 if controller.isRecording {
                     RecordingWaveform(feedback: controller.recordingFeedback, height: 23)
                     RecordingElapsedTime(feedback: controller.recordingFeedback)
-                } else {
+                } else if controller.activity == .starting {
                     InlayMark(size: 18)
                     Text("Starting").lineLimit(1)
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text(stageText).lineLimit(1).minimumScaleFactor(0.8)
                 }
             }
-            .font(.system(size: 11, weight: .medium))
+            .font(.caption.weight(.medium))
             .foregroundStyle(InlayPalette.muted)
             Button { controller.cancelDictation() } label: {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
@@ -208,8 +236,47 @@ struct DictationHUD: View {
             .help("Cancel dictation")
             .accessibilityLabel("Cancel dictation")
             .accessibilityIdentifier("hud.cancel")
+            }
         }
         .padding(.horizontal, 12)
+    }
+
+    private var attentionContent: some View {
+        HStack(spacing: 8) {
+            Image(systemName: result.hudSymbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(InlayPalette.warning)
+            Text(result.hudLabel)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(InlayPalette.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            if result != .copied, !controller.lastTranscript.isEmpty {
+                Button {
+                    controller.copyLastTranscript()
+                    if controller.lastDeliveryStatus == .copied { controller.dismissFeedback() }
+                } label: {
+                    Image(systemName: "doc.on.doc").font(.system(size: 11, weight: .semibold))
+                        .frame(width: 22, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Copy again")
+                .accessibilityLabel("Copy again")
+                .accessibilityIdentifier("hud.copy-again")
+            }
+            if result != .copied {
+                Button { controller.dismissFeedback() } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                        .frame(width: 22, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss")
+                .accessibilityLabel("Dismiss")
+                .accessibilityIdentifier("hud.dismiss")
+            }
+        }
     }
 
     @ViewBuilder private var compactIcon: some View {
@@ -241,8 +308,14 @@ struct DictationHUD: View {
         }
     }
 
+    private var stageText: String {
+        let stage = controller.hudProgressText ?? hudLabel
+        return controller.pendingDictationCount > 1
+            ? "\(stage) · \(controller.pendingDictationCount - 1) more" : stage
+    }
+
     private func activateCircle() {
-        if controller.isBusy { controller.cancelDictation() }
+        if controller.isBusy { /* Processing is shown expanded; the ✕ button cancels. */ }
         else {
             if result.needsAttention { controller.onShowWindow?() }
             controller.dismissFeedback()
@@ -257,7 +330,7 @@ struct RecordingLimitNote: View {
 
     var body: some View {
         Text(notice?.text ?? "Recording limit in 0:30")
-            .font(.system(size: 11, weight: .medium))
+            .font(.caption.weight(.medium))
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.8)

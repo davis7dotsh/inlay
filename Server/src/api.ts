@@ -1,3 +1,24 @@
+import {
+  API_VERSION,
+  DEFAULT_PORT,
+  MAXIMUM_ARTIFACT_BYTES,
+  MAXIMUM_CHUNK_BYTES,
+  MAXIMUM_DICTIONARY_BYTES,
+  MAXIMUM_METADATA_BYTES,
+  MAXIMUM_PREFERENCES_BYTES,
+  MAXIMUM_RECORDING_SECONDS,
+} from "./generated/shared.ts";
+
+export {
+  API_VERSION,
+  DEFAULT_PORT,
+  MAXIMUM_ARTIFACT_BYTES,
+  MAXIMUM_CHUNK_BYTES,
+  MAXIMUM_DICTIONARY_BYTES,
+  MAXIMUM_METADATA_BYTES,
+  MAXIMUM_PREFERENCES_BYTES,
+  MAXIMUM_RECORDING_SECONDS,
+};
 import type { components } from "./generated/api";
 
 type Schemas = components["schemas"];
@@ -23,16 +44,24 @@ export type PersonalDictionary = Omit<Schemas["PersonalDictionary"], "lists"> & 
 };
 export type ServerPreferences = Omit<
   Schemas["ServerPreferences"],
-  "dictionary" | "proofreadingPrompt"
+  "dictionary" | "proofreadingPrompt" | "audioRetentionDays"
 > & {
   dictionary: PersonalDictionary;
   proofreadingPrompt: string;
+  audioRetentionDays: number;
 };
 export type PreferencesSnapshot = Omit<Schemas["PreferencesSnapshot"], "preferences"> & {
   preferences: ServerPreferences;
 };
 
 export type DeviceIdentity = Schemas["DeviceIdentity"];
+export type DeviceSummary = Schemas["DeviceSummary"];
+export type DeviceList = Schemas["DeviceList"];
+export type EnrollDeviceRequest = Schemas["EnrollDeviceRequest"];
+export type EnrollDeviceResponse = Schemas["EnrollDeviceResponse"];
+export type StorageUsage = Schemas["StorageUsage"];
+export type PurgeAudioRequest = Schemas["PurgeAudioRequest"];
+export type PurgeAudioResult = Schemas["PurgeAudioResult"];
 export type ModelRuntimeInfo = Schemas["ModelRuntimeInfo"];
 export type ServerHealth = Schemas["ServerHealth"];
 export type CreateGenerationRequest = Schemas["CreateGenerationRequest"];
@@ -60,20 +89,15 @@ export type ImportedSource = Schemas["ImportedSource"];
 export type GenerationRecord = Omit<Schemas["GenerationRecord"], "settings"> & {
   settings: PreferencesSnapshot;
 };
+export type GenerationSummary = Schemas["GenerationSummary"];
 export type GenerationPage = Omit<Schemas["GenerationPage"], "items"> & {
-  items: GenerationRecord[];
+  items: GenerationSummary[];
 };
 export type WisprFlowImportResult = Omit<Schemas["WisprFlowImportResult"], "record"> & {
   record: GenerationRecord;
 };
 export type APIErrorResponse = Schemas["APIErrorResponse"];
 
-export const API_VERSION = 3;
-export const DEFAULT_PORT = 8391;
-export const MAXIMUM_RECORDING_SECONDS = 180;
-export const MAXIMUM_CHUNK_BYTES = 1_048_576;
-export const MAXIMUM_ARTIFACT_BYTES = 8_388_608;
-export const MAXIMUM_DICTIONARY_BYTES = 8_388_608;
 export const InlayAPI = {
   version: API_VERSION,
   defaultPort: DEFAULT_PORT,

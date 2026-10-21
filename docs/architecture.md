@@ -12,8 +12,7 @@ Inlay's native Swift macOS client handles microphone capture, shortcuts, and cur
 | `Sources/InlayAPIWire`    | Generated Swift transport types used through the API facade.                                |
 | `Server/api/openapi.yaml` | Language-neutral HTTP and wire-model contract.                                              |
 | `Server/src`              | Packaged TypeScript HTTP server, durable coordinator, text pipeline, and helper management. |
-| `Sources/InlayDomain`     | Dictionary, list formatting, rewrite validation, and composition.                           |
-| `Sources/InlayServerKit`  | Reference Swift server retained for source comparison.                                      |
+| `Sources/InlayDomain`     | Dictionary and record-embedded wire types shared with the client.                           |
 | `Sources/InlayServer`     | Reference Swift server command-line entry point.                                            |
 | `Engine`                  | Persistent Parakeet speech helper (vendored whisper.cpp); Metal on Mac, CPU/CUDA on Linux.  |
 | `TextEngine`              | Persistent Qwen helper; Swift MLX on Mac, llama.cpp on Linux.                               |
@@ -27,10 +26,10 @@ Bun manages all JavaScript dependencies and compiles the coordinator plus its co
 1. The client asks the server to create a generation with its device identity. The server freezes shared settings and accepts independent uploads from any connected client. Offline or unavailable speech recognition prevents capture; other recordings do not.
 2. The client pins its microphone and uploads acknowledged, sequenced PCM chunks while recording. Inference audio is mono 16 kHz float32; optional original audio keeps the microphone rate/channels as float32.
 3. Release stops capture, drains uploads, and sends final frame counts. The microphone is available for the next take while earlier uploads finish. The server checks the complete intervals and seals WAV files. Recordings must be 0.25–180 seconds.
-4. Sealed recordings enter a FIFO processing queue. One job at a time runs Parakeet, mechanical cleanup, dictionary rules, and list formatting. Optional Qwen output passes through dictionary rules and deterministic rewrite checks. Rejection or proofreading failure retains the pre-proofreading text. Cancelling one upload or queued job does not interrupt another.
+4. Sealed recordings enter a FIFO processing queue. Jobs run concurrently, but each helper stage is serialized: one job at a time runs Parakeet, mechanical cleanup, dictionary rules, and list formatting, and one job at a time proofreads, so speech for one take can overlap proofreading for another. Optional Qwen output passes through dictionary rules and deterministic rewrite checks. Rejection or proofreading failure retains the pre-proofreading text. Cancelling one upload or queued job does not interrupt another.
 5. NDJSON events carry progress and the saved final result for each generation. Each pending client take retains its original server connection and destination. The client serializes delivery attempts, verifies focus/caret safety, and reports each outcome separately from inference completion.
 
-Interrupted partial uploads expire; a complete upload can finish after the client disconnects. Pending takes recover interrupted event streams by checking their saved generation and reconnecting. Opening history never pastes an old result. Restarting the server marks unfinished generations failed and retains completed history. There is no offline capture queue or automatic audio-upload retry.
+Interrupted partial uploads expire; a complete upload can finish after the client disconnects. Pending takes recover interrupted event streams by checking their saved generation and reconnecting. Opening history never pastes an old result. Restarting the server requeues unfinished generations whose sealed inference audio is present and marks the rest failed; completed history is retained. The client retries each chunk upload within a nominal 60-second window, and pending generations persist across relaunch. There is no offline capture queue.
 
 ## Text delivery
 
@@ -46,13 +45,13 @@ With **Mute system audio while recording** enabled under **This Mac**, the defau
 
 ## Settings
 
-| Scope          | Where to edit                    | What it owns                                                                                                                                  |
-| -------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, clipboard preservation, microphone priority/selection. |
-| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                              |
-| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                  |
+| Scope          | Where to edit                    | What it owns                                                                                                                                                |
+| -------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, clipboard preservation, screen hints, microphone priority/selection. |
+| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                                            |
+| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                                |
 
-Screen-context hints are inactive because Parakeet has no vocabulary prompt. The disabled preference explains this limitation. Saved `useScreenContext` values are preserved for compatibility without activating screen capture or requesting screen permissions; optional API screen terms are ignored and are not added to new take records or text-correction requests.
+With **Use on-screen words as vocabulary hints** enabled under **This Mac** (off by default), the client reads the focused window when a take starts, never Inlay's own window or a non-focused fallback, and skips capture while secure input is active before or after the screenshot. It needs Screen Recording, and Accessibility to find the focused window. Vision OCR and term ranking run on the Mac; the screenshot and recognized text are never sent or saved. Emails, URLs, domains, paths, and long numbers are filtered out, and at most 40 ranked terms are sent with the finish request. The client waits at most 500 ms for them, so a slow capture sends none. The server stores the terms on the take and appends them after dictionary names as Qwen proofreading hints. Parakeet receives no hints, and takes without text correction keep no screen terms. **Test microphone** never captures the screen.
 
 Shared saves use revisions to reject stale concurrent edits. Settings are snapshotted when the server accepts a take; changes affect future recordings. Update shared settings through the UI/API rather than editing files while the server runs.
 
@@ -64,6 +63,8 @@ The server's `--data-dir` (normally `.local/server` in development) contains:
 
 ```text
 preferences.json
+devices.json
+admin-token (only when auto-created)
 generations/<UUID>/
   metadata.json
   transcript.txt
@@ -71,9 +72,9 @@ generations/<UUID>/
   original.wav
 ```
 
-Metadata includes device identity, settings snapshot, raw/final text, insertion/preview text, model and processing details, and any delivery receipt. `transcript.txt` contains the current take's final text. Inference audio is always retained for completed takes; original audio is optional and defaults on. The retention toggle does not remove existing files, and there is no automatic history expiry.
+Metadata includes device identity, settings snapshot, raw/final text, insertion/preview text, model and processing details, and any delivery receipt. `transcript.txt` contains the current take's final text. Text and metadata are kept forever. Recording audio auto-deletes after the shared `audioRetentionDays` cap (default 90 days; 0 keeps it forever) via a boot/daily sweep, and can be purged on demand from Server preferences; original audio is optional and defaults on for future takes. Cancelled and failed takes keep their audio under the same cap, labeled in History, until it expires or is deleted per record.
 
-All clients read shared, paginated history. Deleting an inactive generation deletes its server artifacts. Failed takes can retain metadata and sealed audio; partial upload files are internal and cannot be downloaded. Client audio copies are temporary.
+All clients read shared, paginated history. Deleting an inactive generation deletes its server artifacts. Failed and cancelled takes retain metadata and sealed audio (labeled, deletable per record); partial upload files are internal and cannot be downloaded. Client audio copies are temporary.
 
 Only one server may own a data directory. Back up preferences and generation directories together. Inlay does not add filesystem encryption; protect this directory as you would the recordings it contains. Authentication and remote transport are described in the [server guide](../Server/README.md#remote-access).
 

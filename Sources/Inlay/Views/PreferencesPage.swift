@@ -6,26 +6,53 @@ struct DevicePreferencesPage: View {
     @ObservedObject var controller: InlayController
 
     var body: some View {
-        DevicePreferencesForm(controller: controller, preferences: controller.preferences)
+        InlayPageScaffold(title: "This Mac") {
+            DevicePreferencesForm(controller: controller, preferences: controller.preferences,
+                                  configuration: controller.configuration)
+        }
     }
 }
 
 private struct DevicePreferencesForm: View {
     @ObservedObject var controller: InlayController
     @ObservedObject var preferences: ClientPreferencesStore
+    @ObservedObject var configuration: ConfigurationStore
     @State private var endpoint = ""
     @State private var token = ""
     @State private var deviceName = ""
     @State private var showingDiagnostics = false
+    @State private var deviceToRevoke: DeviceSummary?
+    @StateObject private var triggerRecorder = TriggerKeyRecorder()
+
+    private var usesPlainHTTP: Bool { (try? ServerEndpoint(endpoint))?.usesPlainHTTP ?? false }
+
+    /// Screen hints need Screen Recording to capture and Accessibility to find the focused window.
+    private var screenContextWarning: String? {
+        guard controller.useScreenContext else { return nil }
+        if !controller.permissions.screenRecording {
+            return "Allow Screen Recording below, then reopen \(InlayBuild.current.displayName)."
+        }
+        return controller.permissions.accessibility ? nil
+            : "Allow Accessibility below so screen hints can find the window you are dictating into."
+    }
 
     var body: some View {
         Form {
             Section {
+                if !InlayBuild.current.isDevelopment {
+                    LocalServerSetupSection(controller: controller)
+                    Divider()
+                }
                 TextField("Server address", text: $endpoint, prompt: Text("http://localhost:8391"))
                     .autocorrectionDisabled()
                     .accessibilityIdentifier("preferences.endpoint")
-                SecureField("Access token", text: $token)
+                SecureField("Server token", text: $token)
                     .accessibilityIdentifier("preferences.token")
+                Text(InlayBuild.current.isDevelopment
+                    ? "Paste the admin token (.local/dev-server/token) once; this Mac then keeps its own revocable credential."
+                    : "Paste the server's admin token once (admin-token in its data folder, or its --token-file); this Mac then keeps its own revocable credential.")
+                    .font(.caption)
+                    .foregroundStyle(InlayPalette.muted)
                 TextField("Device name", text: $deviceName)
                     .accessibilityIdentifier("preferences.device-name")
                 HStack {
@@ -38,17 +65,88 @@ private struct DevicePreferencesForm: View {
                         .accessibilityIdentifier("preferences.connect")
                 }
                 InlayActionMessage(message: preferences.errorMessage ?? controller.errorMessage)
+                if usesPlainHTTP {
+                    Text("This connection is unencrypted unless Tailscale carries it.")
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.warning)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    if controller.serverHealth != nil {
+                        ForEach(controller.devices, id: \.id) { device in
+                            HStack {
+                                Text(device.name)
+                                if device.id == preferences.deviceID {
+                                    Text("This Mac").font(.caption).foregroundStyle(InlayPalette.muted)
+                                }
+                                Spacer()
+                                if let revoked = device.revokedAt {
+                                    Text("Revoked \(revoked.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption).foregroundStyle(InlayPalette.muted)
+                                } else {
+                                    if let seen = device.lastSeenAt {
+                                        Text(seen.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.caption).foregroundStyle(InlayPalette.muted)
+                                    }
+                                    if device.id != preferences.deviceID {
+                                        Button("Revoke") { deviceToRevoke = device }
+                                    }
+                                }
+                            }
+                        }
+                        if !controller.legacyEnrollmentClosed {
+                            HStack {
+                                Text("The old shared token can still enroll new Macs.").font(.caption)
+                                Spacer()
+                                Button("Stop accepting it") { controller.closeLegacyEnrollment() }
+                            }
+                        }
+                    }
+                }
+                .frame(minHeight: 52, alignment: .topLeading)
             } header: { Text("Connection").textCase(nil) }
 
             Section {
-                Picker("Dictation key", selection: $controller.shortcut) {
-                    ForEach(HoldKey.allCases) { key in Text(key.title).tag(key) }
+                Picker("Dictation key", selection: Binding<HoldKey?>(
+                    get: { controller.customTriggerKeyCode == nil ? controller.shortcut : nil },
+                    set: { if let key = $0 { controller.customTriggerKeyCode = nil; controller.shortcut = key } }
+                )) {
+                    ForEach(HoldKey.allCases) { key in
+                        if key == .fn { Text(key.title).tag(Optional(key)) }
+                        else { Text(key.title).tag(Optional(key)) }
+                    }
                 }
                 .accessibilityIdentifier("preferences.shortcut")
+                LabeledContent {
+                    HStack {
+                        if triggerRecorder.isRecording {
+                            Button("Cancel") { triggerRecorder.stop() }
+                        } else {
+                            Button("Record key") {
+                                triggerRecorder.start { code in controller.customTriggerKeyCode = code }
+                            }
+                            if controller.customTriggerKeyCode != nil {
+                                Button("Clear") { controller.customTriggerKeyCode = nil }
+                            }
+                        }
+                    }
+                } label: {
+                    Text(triggerRecorder.isRecording
+                        ? "Press a function key (Esc cancels)"
+                        : "Custom key: \(controller.customTriggerKeyCode.flatMap { HoldKey.customKeyTitle(CGKeyCode($0)) } ?? "None")")
+                }
+                .disabled(controller.isBusy)
+                if let rejection = triggerRecorder.rejection {
+                    Text(rejection).font(.caption).foregroundStyle(InlayPalette.warning)
+                }
                 Picker("Trigger", selection: $controller.activationMode) {
                     ForEach(HotkeyActivationMode.allCases) { mode in Text(mode.title).tag(mode) }
                 }
                 .accessibilityIdentifier("preferences.activation")
+                if controller.activationMode == .tapToggle {
+                    Text("Recording continues until you tap again, press the stop button, or reach 3 minutes.")
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.muted)
+                }
                 LabeledContent {
                     Button(controller.isCheckingShortcut ? "Stop checking" : "Check shortcut") {
                         if controller.isCheckingShortcut { controller.stopShortcutCheck() }
@@ -70,13 +168,18 @@ private struct DevicePreferencesForm: View {
                 }
                 Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
                     .accessibilityIdentifier("preferences.mute-output")
+                Text("Muting also silences VoiceOver and dictation sounds while recording.")
+                    .font(.caption)
+                    .foregroundStyle(InlayPalette.muted)
+                Toggle("Play dictation sounds", isOn: $controller.dictationSoundsEnabled)
+                    .accessibilityIdentifier("preferences.dictation-sounds")
                 VStack(alignment: .leading, spacing: 4) {
-                    Toggle("Use on-screen words as vocabulary hints", isOn: .constant(false))
-                        .disabled(true)
+                    Toggle("Use on-screen words as vocabulary hints", isOn: $controller.useScreenContext)
                         .accessibilityIdentifier("preferences.screen-context")
-                    Text("Unavailable with the current Parakeet speech backend, which does not support vocabulary hints. No screen content is collected.")
+                    Text(screenContextWarning
+                         ?? "Reads the focused window on this Mac when a take starts. Only unusual names and terms are sent to the server as proofreading hints; screenshots and screen text are not.")
                         .font(.caption)
-                        .foregroundStyle(InlayPalette.muted)
+                        .foregroundStyle(screenContextWarning == nil ? InlayPalette.muted : InlayPalette.warning)
                 }
                 Toggle("Never leave transcripts on the clipboard", isOn: $controller.preserveClipboard)
                     .accessibilityIdentifier("preferences.preserve-clipboard")
@@ -84,14 +187,36 @@ private struct DevicePreferencesForm: View {
                 if let error = controller.loginItemError {
                     Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
                 }
+                if let error = configuration.errorMessage {
+                    HStack {
+                        Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
+                        Button("Reveal config file") { configuration.revealFile() }
+                    }
+                }
             } header: { Text("This Mac").textCase(nil) }
             .disabled(controller.isBusy)
 
             Section {
                 PermissionRow(title: "Microphone", detail: "Capture audio while dictating.", granted: controller.permissions.microphone,
                               reviewGranted: true, action: controller.requestMicrophone)
-                PermissionRow(title: "Accessibility", detail: "Recognize your dictation key and insert text.", granted: controller.permissions.accessibility,
+                PermissionRow(title: "Accessibility", detail: "Insert text at your cursor and recognize your dictation key anywhere.", granted: controller.permissions.accessibility,
                               reviewGranted: true, action: controller.requestAccessibility)
+                PermissionRow(title: "Input Monitoring", detail: "Recognize your dictation key. With only this permission, dictations are copied, not inserted.", granted: controller.permissions.inputMonitoring,
+                              reviewGranted: true, action: controller.requestInputMonitoring)
+                if controller.useScreenContext {
+                    PermissionRow(title: "Screen Recording", detail: "Read on-screen words for proofreading hints.",
+                                  granted: controller.permissions.screenRecording, reviewGranted: true,
+                                  action: controller.requestScreenRecording)
+                }
+                if !controller.permissions.accessibility && controller.permissions.inputMonitoring {
+                    Text("Shortcut is on. Dictations will be copied, not inserted; paste with Command-V.")
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.muted)
+                } else if !controller.permissions.accessibility && !controller.permissions.inputMonitoring {
+                    Text("Shortcut is off. Allow Accessibility (insert anywhere) or Input Monitoring (copy mode).")
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.warning)
+                }
                 HStack {
                     PermissionHelpButton()
                     Spacer()
@@ -118,13 +243,24 @@ private struct DevicePreferencesForm: View {
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .toggleStyle(.switch)
-        .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
         .onAppear {
             endpoint = preferences.endpoint
             token = preferences.token
             deviceName = preferences.deviceName
             controller.refreshPermissions()
+            Task { await controller.refreshDevices() }
+        }
+        .onChange(of: preferences.token) { _, newToken in token = newToken }
+        .confirmationDialog("Revoke this device?", isPresented: Binding(
+            get: { deviceToRevoke != nil }, set: { if !$0 { deviceToRevoke = nil } })) {
+            Button("Revoke", role: .destructive) {
+                if let device = deviceToRevoke { controller.revokeDevice(device.id) }
+                deviceToRevoke = nil
+            }
+            Button("Cancel", role: .cancel) { deviceToRevoke = nil }
+        } message: {
+            Text("It will lose access to this server immediately.")
         }
     }
 }
@@ -134,6 +270,8 @@ struct ServerPreferencesPage: View {
     @State private var draft = ServerPreferences()
     @State private var base: PreferencesSnapshot?
     @State private var expandedLists = Set<String>()
+    @State private var confirmingPurgeOriginal = false
+    @State private var confirmingPurgeAll = false
 
     private var dirty: Bool { base.map { draft != $0.preferences } ?? false }
     private var changedRemotely: Bool {
@@ -173,9 +311,11 @@ struct ServerPreferencesPage: View {
             .padding(.bottom, 10)
 
             HStack {
-                InlayActionMessage(message: changedRemotely
-                    ? "Shared preferences changed on another device. Reload to continue."
-                    : (draft.validationError ?? controller.errorMessage))
+                InlayActionMessage(message: !available
+                    ? "Cannot load shared preferences while the server is unavailable."
+                    : changedRemotely
+                        ? "Shared preferences changed on another device. Reload to continue."
+                        : (draft.validationError ?? controller.errorMessage))
                 Button("Reload") { loadLatest() }
                     .opacity(changedRemotely ? 1 : 0)
                     .disabled(!changedRemotely)
@@ -187,6 +327,9 @@ struct ServerPreferencesPage: View {
                     Section {
                         runtimeRow("Voice", runtime: health.speech)
                         runtimeRow("Proofreading", runtime: health.proofreading)
+                    if let serverVersion = controller.serverHealth?.serverVersion {
+                        LabeledContent("Server version", value: serverVersion)
+                    }
                     } header: { Text("Server models").textCase(nil) }
                 }
                 Section {
@@ -222,11 +365,41 @@ struct ServerPreferencesPage: View {
                 Section {
                     Toggle("Keep original microphone audio", isOn: $draft.keepOriginalAudio)
                         .accessibilityIdentifier("preferences.keep-original")
-                    Text("Transcription audio is always kept. This also saves the original microphone audio for future dictations.")
+                    Picker("Keep audio", selection: $draft.audioRetentionDays) {
+                        Text("7 days").tag(7)
+                        Text("30 days").tag(30)
+                        Text("90 days").tag(90)
+                        Text("1 year").tag(365)
+                        Text("Forever").tag(0)
+                    }
+                    .accessibilityIdentifier("preferences.audio-retention")
+                    Text("Transcription and original audio are removed after this period; text is always kept. Keeping originals also saves the original microphone audio for future dictations.")
                         .font(.caption)
                         .foregroundStyle(InlayPalette.muted)
+                    if let usage = controller.storageUsage {
+                        LabeledContent("Recording audio", value: ByteCountFormatter.string(fromByteCount: usage.audioByteCount, countStyle: .file))
+                        LabeledContent("Transcription audio", value: ByteCountFormatter.string(fromByteCount: usage.inferenceByteCount, countStyle: .file))
+                        LabeledContent("Original audio", value: ByteCountFormatter.string(fromByteCount: usage.originalByteCount, countStyle: .file))
+                        LabeledContent("Recordings", value: "\(usage.generationCount)")
+                        if let oldest = usage.oldestAudioAt {
+                            LabeledContent("Oldest audio", value: oldest.formatted(date: .abbreviated, time: .omitted))
+                        }
+                        LabeledContent("Free on server", value: ByteCountFormatter.string(fromByteCount: usage.freeByteCount, countStyle: .file))
+                        HStack {
+                            Button("Delete original audio") { confirmingPurgeOriginal = true }
+                            Button("Delete all audio") { confirmingPurgeAll = true }
+                        }
+                    }
                 } header: { Text("Shared history").textCase(nil) }
                 .disabled(!available)
+                .confirmationDialog("Delete all original audio?", isPresented: $confirmingPurgeOriginal) {
+                    Button("Delete original audio", role: .destructive) { controller.purgeAudio(kind: .original) }
+                    Button("Cancel", role: .cancel) {}
+                } message: { Text("Transcripts and transcription audio stay. This cannot be undone.") }
+                .confirmationDialog("Delete all recording audio?", isPresented: $confirmingPurgeAll) {
+                    Button("Delete all audio", role: .destructive) { controller.purgeAudio(kind: nil) }
+                    Button("Cancel", role: .cancel) {}
+                } message: { Text("Transcripts stay in history. This cannot be undone.") }
 
                 Section {
                     dictionaryEditor
@@ -237,11 +410,12 @@ struct ServerPreferencesPage: View {
             .scrollContentBackground(.hidden)
             .toggleStyle(.switch)
         }
-        .frame(maxWidth: 800)
+        .frame(maxWidth: InlayPageMetrics.contentWidth)
         .frame(maxWidth: .infinity)
         .onAppear {
             loadLatest()
             controller.refreshServer()
+            Task { await controller.refreshStorageUsage() }
         }
         .onChange(of: controller.sharedPreferences) { old, latest in
             if base == nil || !dirty || latest?.preferences == draft {
@@ -322,7 +496,7 @@ struct ServerPreferencesPage: View {
                         .foregroundStyle(InlayPalette.muted)
                         .lineLimit(2)
                 }
-                StatusDot(color: runtime.ready ? InlayPalette.success : InlayPalette.warning)
+                StatusDot(isReady: runtime.ready)
             }
         }
     }
@@ -331,5 +505,120 @@ struct ServerPreferencesPage: View {
         guard let snapshot = controller.sharedPreferences else { return }
         base = snapshot
         draft = snapshot.preferences
+    }
+}
+
+
+/// Captures one function-key press for the custom trigger. Text-typing keys
+/// are rejected (with a message) instead of recorded, so an Escape press
+/// always cancels.
+@MainActor
+final class TriggerKeyRecorder: ObservableObject {
+    @Published var isRecording = false
+    @Published var rejection: String?
+    private var monitor: Any?
+
+    func start(onCapture: @escaping (Int) -> Void) {
+        stop()
+        isRecording = true
+        rejection = nil
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self else { return event }
+                if event.keyCode == 53 {
+                    self.stop()
+                    return nil
+                }
+                if HoldKey.recordableKeyTitles[event.keyCode] != nil {
+                    let code = Int(event.keyCode)
+                    self.stop()
+                    onCapture(code)
+                    return nil
+                }
+                self.rejection = "That key types or is a modifier. Choose a function key (F1-F20), or Esc to cancel."
+                return nil
+            }
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        isRecording = false
+    }
+}
+
+
+private struct LocalServerSetupSection: View {
+    @ObservedObject var controller: InlayController
+    @ObservedObject var downloads: ModelDownloadManager
+    @ObservedObject var server: LocalServerManager
+
+    init(controller: InlayController) {
+        self.controller = controller
+        downloads = controller.modelDownloads
+        server = controller.localServer
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            statusRow("Speech model", installed: downloads.speechStatus == .installed) {
+                downloads.downloadSpeechModel()
+            }
+            statusRow("Text model", installed: downloads.textStatus == .installed) {
+                downloads.downloadTextModel()
+            }
+            HStack {
+                Text("Local server")
+                Spacer()
+                switch server.state {
+                case .installed:
+                    Text("Installed").foregroundStyle(InlayPalette.success)
+                    Button("Use this server") { controller.completeLocalSetup() }
+                    Button("Uninstall") { controller.uninstallLocalServer() }
+                case .installing(let step):
+                    ProgressView().controlSize(.small)
+                    Text(step).foregroundStyle(InlayPalette.muted)
+                case .failed(let message):
+                    Text(message).foregroundStyle(InlayPalette.warning).lineLimit(2)
+                    Button("Try again") { Task { await server.install() } }
+                case .notInstalled:
+                    if server.portOccupiedByOther {
+                        Text("A server you set up yourself is already running. Connect to it below.")
+                            .font(.caption).foregroundStyle(InlayPalette.muted)
+                    } else {
+                        Button("Set up on this Mac") { Task { await server.install() } }
+                            .disabled(downloads.speechStatus != .installed || downloads.textStatus != .installed)
+                    }
+                }
+            }
+            if server.state == .installed, controller.serverHealth == nil {
+                Text("Installed but not reachable yet. It may still be starting; use Connect below, or check ~/Library/Logs/Inlay/server.log.")
+                    .font(.caption)
+                    .foregroundStyle(InlayPalette.warning)
+            }
+            if let error = downloads.errorMessage {
+                Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
+            }
+        }
+        .onAppear {
+            downloads.refreshStatus()
+            Task { await server.detect() }
+        }
+    }
+
+    private func statusRow(_ title: String, installed: Bool, download: @escaping () -> Void) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            if installed {
+                Text("Installed").foregroundStyle(InlayPalette.success)
+            } else if downloads.isDownloading {
+                ProgressView().controlSize(.small)
+                Button("Cancel") { downloads.cancelDownloads() }
+            } else {
+                Button("Download") { download() }
+            }
+        }
     }
 }

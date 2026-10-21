@@ -44,7 +44,7 @@ Keep Wispr Flow dictionary state as an import artifact. Any change to Inlay's ac
 
 ## Phase 3 — server import path and safe reruns
 
-Add authenticated import routes in [`InlayHTTPServer.swift`](../Sources/InlayServerKit/InlayHTTPServer.swift) and archival writes in [`GenerationService.swift`](../Sources/InlayServerKit/GenerationService.swift). The existing `POST /v1/generations` and audio/finish routes require a live recording and model readiness, so they must not be reused for historical rows. The server cannot open a client-side Wispr Flow path, especially when it runs on another machine.
+The Wispr import routes live in the TypeScript server (`Server/src/http-server.ts`, `Server/src/imports.ts`); the Swift reference server was deleted in Batch 8.
 
 Use a bounded per-session protocol: send a small manifest and display text, upload allowlisted files with byte counts/checksums, then commit. Validate source ID, dates, text sizes, file signatures, attachment limits, and checksums on the server. Place files in a private staging directory, write metadata last, atomically move the complete directory under `generations/<UUID>/`, then publish it in memory. Extend the artifact endpoint's allowlist for typed imported files; never accept arbitrary filesystem paths from the client.
 
