@@ -8,6 +8,8 @@ struct PermissionSnapshot: Equatable, Sendable {
     let microphone: Bool
     let accessibility: Bool
     let inputMonitoring: Bool
+    /// Optional: only screen-context hints use it.
+    var screenRecording = false
 
     // Accessibility already grants event listening as well as insertion. A
     // separate Input Monitoring grant is only needed without Accessibility.
@@ -17,7 +19,8 @@ struct PermissionSnapshot: Equatable, Sendable {
         Self(
             microphone: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
             accessibility: AXIsProcessTrusted(),
-            inputMonitoring: CGPreflightListenEventAccess()
+            inputMonitoring: CGPreflightListenEventAccess(),
+            screenRecording: CGPreflightScreenCaptureAccess()
         )
     }
 }
@@ -45,6 +48,15 @@ enum PermissionManager {
         if !IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) {
             openInputMonitoringSettings()
         }
+    }
+
+    static func requestScreenRecording() {
+        // The system prompts only once; afterwards the setting must be changed in System Settings.
+        if !CGRequestScreenCaptureAccess() { openScreenRecordingSettings() }
+    }
+
+    static func openScreenRecordingSettings() {
+        openPrivacyPane("Privacy_ScreenCapture")
     }
 
     static func openMicrophoneSettings() {

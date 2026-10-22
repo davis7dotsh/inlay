@@ -11,6 +11,8 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public var dictationSoundsEnabled: Bool
     public var customTriggerKeyCode: Int?
     public var preserveClipboard: Bool
+    /// Read unusual words from the focused window as Qwen proofreading hints.
+    public var useScreenContext: Bool
     public var microphones: MicrophonePreferences
 
     public static var defaultHoldKey: String { InlayBuild.current.isDevelopment ? "rightOption" : "fn" }
@@ -18,7 +20,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
 
     public init(holdKey: String = InlayConfiguration.defaultHoldKey, activationMode: String = "hold", launchAtLogin: Bool = false,
                 muteOutputWhileRecording: Bool = false, dictationSoundsEnabled: Bool = true,
-                customTriggerKeyCode: Int? = nil, preserveClipboard: Bool = false,
+                customTriggerKeyCode: Int? = nil, preserveClipboard: Bool = false, useScreenContext: Bool = false,
                 microphones: MicrophonePreferences = MicrophonePreferences()) {
         schemaVersion = 1
         self.holdKey = holdKey
@@ -28,12 +30,13 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
         self.dictationSoundsEnabled = dictationSoundsEnabled
         self.customTriggerKeyCode = customTriggerKeyCode
         self.preserveClipboard = preserveClipboard
+        self.useScreenContext = useScreenContext
         self.microphones = microphones
     }
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording
-        case dictationSoundsEnabled, customTriggerKeyCode, preserveClipboard, microphones
+        case dictationSoundsEnabled, customTriggerKeyCode, preserveClipboard, useScreenContext, microphones
     }
 
     public init(from decoder: Decoder) throws {
@@ -63,6 +66,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
                   dictationSoundsEnabled: try values.value(Bool.self, for: .dictationSoundsEnabled, default: true),
                   customTriggerKeyCode: customTriggerKeyCode,
                   preserveClipboard: try values.value(Bool.self, for: .preserveClipboard, default: false),
+                  useScreenContext: try values.value(Bool.self, for: .useScreenContext, default: false),
                   microphones: values.contains(.microphones)
                     ? try values.decode(StrictMicrophones.self, forKey: .microphones).preferences
                     : MicrophonePreferences())

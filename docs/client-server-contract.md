@@ -1,8 +1,8 @@
 # HTTP API
 
-API version 4, default port **8391**. [`Server/api/openapi.yaml`](../Server/api/openapi.yaml) defines the transport contract and generates TypeScript and Swift types. [`Sources/InlayAPI/API.swift`](../Sources/InlayAPI/API.swift) preserves the Swift client-facing facade and defaults. JSON uses whole-second ISO-8601 UTC dates. macOS and Linux expose the same API. See [server setup](../Server/README.md#remote-access) for authentication and endpoint configuration.
+API version 5, default port **8391**. [`Server/api/openapi.yaml`](../Server/api/openapi.yaml) defines the transport contract and generates TypeScript and Swift types. [`Sources/InlayAPI/API.swift`](../Sources/InlayAPI/API.swift) preserves the Swift client-facing facade and defaults. JSON uses whole-second ISO-8601 UTC dates. macOS and Linux expose the same API. See [server setup](../Server/README.md#remote-access) for authentication and endpoint configuration.
 
-Inlay's native-history filter is `source=inlay`. Update client and server together: the client checks the health response's `apiVersion` and requires version 4 before dictation. The `/v1` route paths stay unchanged; the health field is the compatibility gate.
+Inlay's native-history filter is `source=inlay`. Version 5 adds optional `screenContextTerms` to finish requests and generation records: up to 40 unique terms the Mac read from the focused window, which the server appends after dictionary names as Qwen proofreading hints. Older servers reject the unknown finish field. Update client and server together: the client checks the health response's `apiVersion` and requires version 5 before dictation. The `/v1` route paths stay unchanged; the health field is the compatibility gate.
 
 ## Routes
 
