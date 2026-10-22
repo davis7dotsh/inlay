@@ -243,7 +243,7 @@ struct HistoryPage: View {
                             }
                         }
                         if let terms = selected.screenContextTerms, !terms.isEmpty {
-                            DisclosureGroup("Screen hints: \(terms.count) terms") {
+                            DisclosureGroup("Screen hints: \(terms.count) \(terms.count == 1 ? "term" : "terms")") {
                                 Text(terms.joined(separator: ", "))
                                     .font(.caption)
                                     .foregroundStyle(InlayPalette.muted)
