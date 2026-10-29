@@ -2,9 +2,20 @@
 
 Hold a key, speak, and release to insert your dictation. Inlay is a native Swift macOS app backed by a Bun-compiled TypeScript/Fastify model server running on the same Mac, another Mac, or Linux. Audio uploads while you speak; the server returns progress and one finished transcript. You can start another take immediately: finished recordings queue on the server, and each result returns to its originating client for delivery.
 
-The dev runner builds **Inlay Dev**, with separate settings and visible Dev labels. For the regular app, run `./scripts/build-app.sh` and install `build/Inlay.app` in Applications. Both connect to an independently running server.
+Most people should [download the release](#download). From source, the dev runner builds **Inlay Dev**, with separate settings and visible Dev labels. For the regular app, run `./scripts/build-app.sh` and install `build/Inlay.app` in Applications. Both connect to an independently running server.
 
-## Get started on one Mac
+## Download
+
+Grab the latest release from [GitHub Releases](https://github.com/davis7dotsh/inlay/releases/latest). It requires Apple Silicon and macOS 14 or later.
+
+1. Download [`Inlay.dmg`](https://github.com/davis7dotsh/inlay/releases/latest/download/Inlay.dmg) and, optionally, its [`.sha256`](https://github.com/davis7dotsh/inlay/releases/latest/download/Inlay.dmg.sha256); check it with `shasum -a 256 -c Inlay.dmg.sha256`.
+2. Open the DMG and drag **Inlay** to **Applications**. The app is Developer ID signed and notarized.
+3. Open Inlay. Under **This Mac**, download the pinned models (about 4 GB) and install the bundled local server.
+4. Grant Microphone and Accessibility as described below, focus a text field, hold **Fn/Globe**, speak, and release.
+
+To run the server on another Mac or on Linux, download the matching `inlay-server-<platform>.tar.gz` from the same release and follow the [server guide](Server/README.md). Release notes live in [`docs/releases`](docs/releases).
+
+## Build from source on one Mac
 
 The app runs on Apple Silicon and macOS 14 or later. `Package.swift` and `LSMinimumSystemVersion` both set that floor to 14.0. Building requires a Mac: `scripts/build-app.sh` exits on Linux and other systems. The build needs full Xcode 26 or later, including the Metal compiler, because the client and the MLX helper require Swift 6.2+. You also need Bun 1.4.2, CMake, and Git. Xcode provides Swift. Bun manages JavaScript dependencies and builds standalone server executables. Linux can build and run the server; it cannot build `Inlay.app`.
 
@@ -98,7 +109,7 @@ All connected Macs share history, tagged by device. Both original and inference 
 
 ## Releases
 
-GitHub Releases come from tags: a `client-v*` tag publishes the notarized `Inlay.dmg` from the `Client release package` workflow, and a `server-v*` tag publishes the server tarballs from `Server release packages`. Manual workflow runs upload Actions artifacts instead of publishing a release. You can also build the Mac app locally with `./scripts/build-app.sh` and copy `build/Inlay.app` where you want it. Pull-request CI builds the Mac app bundle to verify it, but not the MLX helper or the CUDA package, and publishes nothing. Details, artifact names, and checksums are in [how releases are produced](Server/README.md#releases).
+Pushing a `v*` tag that matches the `package.json` version runs the `Release` workflow, which publishes the notarized `Inlay.dmg`, the macOS and Linux server tarballs, and their `.sha256` files to one GitHub Release with notes from `docs/releases/<tag>.md`. Running it manually from a tag creates a draft release; from a branch it uploads Actions artifacts only. To cut a release, bump `package.json` and `CFBundleShortVersionString`/`CFBundleVersion` in `Resources/Info.plist` and `Resources/Info-Dev.plist` (`bun run check` fails if the versions differ), add the notes file, merge, and push the tag. You can also build the Mac app locally with `./scripts/build-app.sh` and copy `build/Inlay.app` where you want it. Pull-request CI builds the Mac app bundle to verify it, but not the MLX helper or the CUDA package, and publishes nothing. Details, assets, and the signing secrets are in [how releases are produced](Server/README.md#releases).
 
 ## Reference
 

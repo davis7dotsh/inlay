@@ -1,5 +1,6 @@
 {
   "name": "inlay",
+  "version": "1.0.0",
   "private": true,
   "packageManager": "bun@1.4.2",
   "workspaces": [

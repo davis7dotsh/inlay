@@ -9,7 +9,7 @@ The server is an independent TypeScript/Fastify HTTP process that owns models, s
 
 ## Linux
 
-The [Server release packages](#releases) workflow builds tarballs on `server-v*` tags and manual dispatch. Tag runs publish them to a GitHub Release; manual runs upload them as Actions artifacts only. CPU packages are `inlay-server-linux-x64-cpu.tar.gz` and `inlay-server-linux-arm64-cpu.tar.gz`. The CUDA package is `inlay-server-linux-x64-cuda.tar.gz`. There is no ARM CUDA package. Download the matching `server-v*` package from [GitHub Releases](https://github.com/davis7dotsh/inlay/releases) and verify it against the published `.sha256` before extracting. CPU and CUDA packages install the same way; the commands below use the CUDA filename.
+Each `v*` [release](#releases) on [GitHub Releases](https://github.com/davis7dotsh/inlay/releases) includes Linux server tarballs. CPU packages are `inlay-server-linux-x64-cpu.tar.gz` and `inlay-server-linux-arm64-cpu.tar.gz`. The CUDA package is `inlay-server-linux-x64-cuda.tar.gz`. There is no ARM CUDA package. Download the matching package and verify it against the published `.sha256` (`shasum -a 256 -c <package>.sha256`) before extracting. CPU and CUDA packages install the same way; the commands below use the CUDA filename.
 
 The CUDA package targets SM 80, 86, 89, 90, 120, and 121. Tesla T4 and RTX 20-series (SM 75) will not run it. The helpers link the CUDA runtime statically and load `libcuda.so.1` from the host driver, which must be 580.95.05 or newer for CUDA 13.0.2. Keep model weights outside the package. The CPU packages do not use the GPU.
 
@@ -98,28 +98,39 @@ bun run build:server --all               # Mac arm64, Linux x64 and Linux arm64
 
 Cross builds live under `build/server-coordinators`. Bun cross-compiles the coordinator; complete installation archives combine it with helpers built on each matching platform. Installed packages need neither Bun nor Node. Full Linux packages target Ubuntu 24.04 or a compatible glibc/libstdc++ environment. Mac server packages require Apple Silicon and macOS 14+. Linux x64 coordinators use Bun's baseline CPU target. Native helper CPU/CUDA compatibility remains determined by its CMake build flags.
 
-Server [releases](#releases) do not include `Inlay.app`; the client ships from its own release workflow. Extract a package, keep its `server` directory together, install the pinned model weights separately, then use the arguments below.
+Server tarballs do not include `Inlay.app`; the same [release](#releases) ships it as `Inlay.dmg`. Extract a package, keep its `server` directory together, install the pinned model weights separately, then use the arguments below.
 
 ## Releases
 
-Two tag-triggered workflows publish GitHub Releases. A `server-v*` tag releases the server tarballs below; a `client-v*` tag releases the notarized `Inlay.dmg` built by [`.github/workflows/client-release.yml`](../.github/workflows/client-release.yml) (`Client release package`, `./scripts/build-app.sh --with-server --dist` on `macos-26`). Running either workflow manually uploads the same builds as Actions artifacts and publishes nothing. You can also copy `build/Inlay.app` from a local `./scripts/build-app.sh` run.
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) (`Release`) builds every release asset. Pushing a `v*` tag publishes them to one GitHub Release, using `docs/releases/<tag>.md` as the notes; the tag must match the `package.json` version, which `bun run check` keeps equal to the app's `CFBundleShortVersionString`. Running it manually from a `v*` tag creates a draft release by default; running it from a branch only uploads Actions artifacts. Runs for the same ref queue rather than overlap.
 
-[`.github/workflows/server-release.yml`](../.github/workflows/server-release.yml) (`Server release packages`) runs when a tag matching `server-v*` is pushed, or when someone starts it with `workflow_dispatch`. The build jobs run with `contents: read` and upload artifacts; on tag runs, a separate publish job with `contents: write` creates or updates the GitHub Release with every tarball and checksum. Each artifact is a zip of one tarball plus a `shasum -a 256` checksum file. Retention is the repository default. The tarball's top directory is `server`: the executable, native helpers, Silero VAD, notices, and on Linux `inlay-server.service`.
+Every build job waits for `bun run fmt:check`, `bun run lint`, and `bun run check`. Each server job then starts its packaged `inlay-server` without models, checks that `/v1/health` reports the release version, and writes a `shasum -a 256` checksum. The publish job verifies every checksum before uploading. Only that job has `contents: write`. Asset names do not include the version, so `https://github.com/davis7dotsh/inlay/releases/latest/download/<asset>` always points at the newest release.
 
-| Artifact                       | Build                                                     |
-| ------------------------------ | --------------------------------------------------------- |
-| `inlay-server-darwin-arm64`    | `./scripts/build-server.sh` on the `macos-26` runner      |
-| `inlay-server-linux-x64-cpu`   | `./scripts/build-server.sh` on `ubuntu-24.04`             |
-| `inlay-server-linux-arm64-cpu` | `./scripts/build-server.sh` on `ubuntu-24.04-arm`         |
-| `inlay-server-linux-x64-cuda`  | `docker build -f Server/Dockerfile --target cuda-package` |
+| Asset                                 | Build                                                                                                           |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `Inlay.dmg`                           | `./scripts/build-app.sh --with-server --dist` on `macos-26`: Developer ID, hardened runtime, notarized, stapled |
+| `inlay-server-darwin-arm64.tar.gz`    | The notarized server bundled in that `Inlay.app`                                                                |
+| `inlay-server-linux-x64-cpu.tar.gz`   | `./scripts/build-server.sh` on `ubuntu-24.04`                                                                   |
+| `inlay-server-linux-arm64-cpu.tar.gz` | `./scripts/build-server.sh` on `ubuntu-24.04-arm`                                                               |
+| `inlay-server-linux-x64-cuda.tar.gz`  | `docker build -f Server/Dockerfile --target cuda-package`                                                       |
 
-The three `build-server.sh` jobs set `INLAY_NATIVE=OFF`, `INLAY_CUDA=OFF`, and `INLAY_BUILD_JOBS=4`. Linux jobs install CMake, a C/C++ toolchain, pkg-config, and libcurl headers first. The Mac job downloads the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`) and then ad-hoc signs the helpers and `inlay-server`. The server binary is signed with `Server/entitlements.plist` so Bun can JIT. That is not Developer ID signing, not notarization, and not `Inlay.app`. `Inlay.app` uses `Resources/Inlay.entitlements` (microphone) and is signed by `scripts/build-app.sh`; only its `--with-server --dist` mode performs Developer ID signing and notarization, as in the client release workflow.
+Each asset has a matching `.sha256`. The tarball's top directory is `server`: the executable, native helpers, Silero VAD, notices, and on Linux `inlay-server.service`. The `build-server.sh` jobs set `INLAY_NATIVE=OFF` and `INLAY_BUILD_JOBS=4`; Linux CPU jobs also set `INLAY_CUDA=OFF`. CUDA architectures come from the Dockerfile default `80;86;89;90;120;121`. The server version comes from `package.json` unless `INLAY_SERVER_VERSION` is set.
 
-The CUDA job does not run `bun run check`, `bun run lint`, or `bun run fmt:check` before the image build. The other three jobs do. CUDA architectures come from the Dockerfile default `80;86;89;90;120;121`.
+The Mac job imports the Developer ID certificate into a temporary keychain, builds the server, and runs the `--dist` build. That signs every bundled Mach-O with the hardened runtime (`inlay-server` keeps `Server/entitlements.plist` so Bun can JIT), signs the app with `Resources/Inlay.entitlements`, notarizes and staples the app, then signs, notarizes, and staples the DMG. The repository secrets it needs are:
+
+| Secret                               | Value                                                                        |
+| ------------------------------------ | ---------------------------------------------------------------------------- |
+| `APPLE_DEVELOPER_ID_CERT_P12_BASE64` | Base64 of the exported Developer ID Application certificate and key (`.p12`) |
+| `APPLE_DEVELOPER_ID_CERT_PASSWORD`   | The `.p12` export password                                                   |
+| `APPLE_NOTARY_API_KEY_P8_BASE64`     | Base64 of an App Store Connect API key (`AuthKey_<id>.p8`)                   |
+| `APPLE_NOTARY_API_KEY_ID`            | That key's ID                                                                |
+| `APPLE_NOTARY_API_ISSUER_ID`         | The App Store Connect issuer ID                                              |
+
+A local `./scripts/build-server.sh` ad-hoc signs the Mac helpers unless `INLAY_CODESIGN_IDENTITY` is set. A plain `./scripts/build-app.sh` is neither Developer ID signed nor notarized.
 
 Pull-request CI is [`.github/workflows/server.yml`](../.github/workflows/server.yml). On every pull request and on pushes to `main` it runs formatting, lint, and TypeScript checks; compiles the Swift packages on `macos-26` without launching the app; cross-compiles Bun coordinators; builds complete Linux CPU packages; and builds `Inlay.app` with `./scripts/build-app.sh`, verifying the bundle's signature and metadata. `swift build` does not compile the MLX Metal helper. This workflow does not build the Mac server package or the CUDA package, and it does not publish anything.
 
-For a tagged release, download the tarball from the GitHub Release; for a manual run, download the artifact from the workflow run and unzip it. Either way, check the `.sha256` file, then extract the tarball as in [Linux](#linux). Model weights stay outside the package.
+For a release, download the tarball from [GitHub Releases](https://github.com/davis7dotsh/inlay/releases); for a branch run, download the artifact from the workflow run and unzip it. Either way, check the `.sha256` file, then extract the tarball as in [Linux](#linux). Model weights stay outside the package.
 
 The archive lock uses Bun FFI to call libc `flock`, matching the reference Swift server. The lock is held for the server process lifetime. A running Swift server and Bun server must never share a data directory.
 
