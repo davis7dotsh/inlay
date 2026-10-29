@@ -1,6 +1,7 @@
 /**
  * Cross-file text parity checks (owner-approved, Batch 8): generated Swift and
- * TypeScript constants agree, dev/production ports stay distinct, and every
+ * TypeScript constants agree, dev/production ports stay distinct, app and
+ * package.json release versions match, and every
  * INLAY_* variable named in the READMEs exists in code. This reads text only;
  * it asserts no runtime behaviour. See docs/development.md.
  */
@@ -54,6 +55,19 @@ if (!sharedTS.includes("export const DEFAULT_PORT = 8391")) {
 const devScript = await read("Server/scripts/dev.ts");
 if (!devScript.includes('INLAY_SERVER_PORT: "8392"')) {
   failures.push("dev server does not use port 8392");
+}
+
+// --- Release version ---------------------------------------------------------
+const releaseVersion = (JSON.parse(await read("package.json")) as { version?: string }).version;
+for (const plist of ["Resources/Info.plist", "Resources/Info-Dev.plist"]) {
+  const version = /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(
+    await read(plist),
+  )?.[1];
+  if (!releaseVersion || version !== releaseVersion) {
+    failures.push(
+      `${plist} version ${version ?? "?"} differs from package.json ${releaseVersion ?? "?"}`,
+    );
+  }
 }
 
 // --- Documented environment variables ----------------------------------------

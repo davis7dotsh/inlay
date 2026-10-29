@@ -31,7 +31,7 @@ enum LocalServerPaths {
     }
     static let label = "dev.davis.inlay.server-agent"
     static var bundledServerDirectory: URL? {
-        Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/Server", isDirectory: true)
+        Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Server", isDirectory: true)
             .nilIfMissing
     }
     static var installedMarkerExists: Bool { installedMarker() != nil }
