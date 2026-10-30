@@ -41,15 +41,15 @@ Pasting stages the transcript on the clipboard temporarily and restores the prev
 
 Microphone capture uses input-only Core Audio without changing system routing or playback volume. Route changes apply to the next take. Release, cancellation, sleep/lock, or device loss ends capture.
 
-With **Mute system audio while recording** enabled under **This Mac**, the default output device is muted when a take starts and restored when capture ends. Only mute controls Inlay changed are restored, so output that was already muted stays muted. A client crash during a take can leave output muted.
+**System audio while recording** under **This Mac** chooses **None**, **Mute**, or **Duck**. **Mute** mutes the default output device once microphone audio arrives and unmutes it when capture ends. Only mute controls Inlay changed are restored, so output that was already muted stays muted. **Duck** lowers the default output to a quarter of its volume for the same span, then returns it to the earlier level. Waiting for microphone audio matters for Bluetooth headsets, which switch to a call profile with its own volume and mute while their microphone records. Devices without a settable volume, such as some HDMI outputs, are not ducked. If the client crashes during a take, the next launch restores output that is still muted or ducked.
 
 ## Settings
 
-| Scope          | Where to edit                    | What it owns                                                                                                                                  |
-| -------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, clipboard preservation, microphone priority/selection. |
-| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                              |
-| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                  |
+| Scope          | Where to edit                    | What it owns                                                                                                                                             |
+| -------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting or ducking while recording, clipboard preservation, microphone priority/selection. |
+| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                                         |
+| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                             |
 
 Shared saves use revisions to reject stale concurrent edits. Settings are snapshotted when the server accepts a take; changes affect future recordings. Update shared settings through the UI/API rather than editing files while the server runs.
 

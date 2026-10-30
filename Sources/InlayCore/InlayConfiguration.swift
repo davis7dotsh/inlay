@@ -7,7 +7,8 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public var holdKey: String
     public var activationMode: String
     public var launchAtLogin: Bool
-    public var muteOutputWhileRecording: Bool
+    /// What happens to system output while recording: none, mute, or duck.
+    public var recordingOutputAudio: String
     public var dictationSoundsEnabled: Bool
     public var customTriggerKeyCode: Int?
     public var preserveClipboard: Bool
@@ -17,14 +18,14 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public static let `default` = InlayConfiguration()
 
     public init(holdKey: String = InlayConfiguration.defaultHoldKey, activationMode: String = "hold", launchAtLogin: Bool = false,
-                muteOutputWhileRecording: Bool = false, dictationSoundsEnabled: Bool = true,
+                recordingOutputAudio: String = "none", dictationSoundsEnabled: Bool = true,
                 customTriggerKeyCode: Int? = nil, preserveClipboard: Bool = false,
                 microphones: MicrophonePreferences = MicrophonePreferences()) {
         schemaVersion = 1
         self.holdKey = holdKey
         self.activationMode = activationMode
         self.launchAtLogin = launchAtLogin
-        self.muteOutputWhileRecording = muteOutputWhileRecording
+        self.recordingOutputAudio = recordingOutputAudio
         self.dictationSoundsEnabled = dictationSoundsEnabled
         self.customTriggerKeyCode = customTriggerKeyCode
         self.preserveClipboard = preserveClipboard
@@ -32,9 +33,12 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording
+        case schemaVersion, holdKey, activationMode, launchAtLogin, recordingOutputAudio
         case dictationSoundsEnabled, customTriggerKeyCode, preserveClipboard, microphones
     }
+
+    /// Read-only keys from earlier configurations.
+    private enum LegacyKeys: String, CodingKey { case muteOutputWhileRecording }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -50,6 +54,13 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
         guard ["hold", "doubleTap", "tapToggle"].contains(activationMode) else {
             throw values.invalid(.activationMode, "Use hold, doubleTap, or tapToggle.")
         }
+        // The earlier on/off mute setting carries over until the new key is written.
+        let legacyMute = try decoder.container(keyedBy: LegacyKeys.self)
+            .value(Bool.self, for: .muteOutputWhileRecording, default: false)
+        let recordingOutputAudio = try values.value(String.self, for: .recordingOutputAudio, default: legacyMute ? "mute" : "none")
+        guard ["none", "mute", "duck"].contains(recordingOutputAudio) else {
+            throw values.invalid(.recordingOutputAudio, "Use none, mute, or duck.")
+        }
         let customTriggerKeyCode = try values.decodeIfPresent(Int.self, forKey: .customTriggerKeyCode)
         // F1-F20 virtual key codes; keep in sync with HoldKey.recordableKeyTitles.
         let recordableKeyCodes: Set<Int> = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90]
@@ -59,7 +70,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
         self.init(holdKey: holdKey,
                   activationMode: activationMode,
                   launchAtLogin: try values.value(Bool.self, for: .launchAtLogin, default: false),
-                  muteOutputWhileRecording: try values.value(Bool.self, for: .muteOutputWhileRecording, default: false),
+                  recordingOutputAudio: recordingOutputAudio,
                   dictationSoundsEnabled: try values.value(Bool.self, for: .dictationSoundsEnabled, default: true),
                   customTriggerKeyCode: customTriggerKeyCode,
                   preserveClipboard: try values.value(Bool.self, for: .preserveClipboard, default: false),

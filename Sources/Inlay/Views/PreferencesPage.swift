@@ -156,11 +156,17 @@ private struct DevicePreferencesForm: View {
                     }
                     .frame(height: 90)
                 }
-                Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
-                    .accessibilityIdentifier("preferences.mute-output")
-                Text("Muting also silences VoiceOver and dictation sounds while recording.")
-                    .font(.caption)
-                    .foregroundStyle(InlayPalette.muted)
+                Picker("System audio while recording", selection: $controller.recordingOutputAudio) {
+                    ForEach(RecordingOutputAudio.allCases) { mode in Text(mode.title).tag(mode) }
+                }
+                .accessibilityIdentifier("preferences.mute-output")
+                if controller.recordingOutputAudio != .none {
+                    Text(controller.recordingOutputAudio == .mute
+                        ? "Muting also silences VoiceOver and dictation sounds while recording."
+                        : "Ducking lowers system audio, VoiceOver, and dictation sounds to a quarter of their volume while recording.")
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.muted)
+                }
                 Toggle("Play dictation sounds", isOn: $controller.dictationSoundsEnabled)
                     .accessibilityIdentifier("preferences.dictation-sounds")
                 Toggle("Never leave transcripts on the clipboard", isOn: $controller.preserveClipboard)
