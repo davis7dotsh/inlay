@@ -20,6 +20,7 @@ enum RecordingOutputAudio: String, CaseIterable, Identifiable {
 /// Small injection boundary between mute/duck bookkeeping and Core Audio.
 struct SystemOutputClient {
     let defaultOutputDevice: () -> AudioDeviceID?
+    let isBluetooth: (AudioDeviceID) -> Bool
     /// Elements whose mute can be set: the main element, or each channel when a
     /// device only exposes per-channel mute.
     let muteElements: (AudioDeviceID) -> [AudioObjectPropertyElement]
@@ -65,10 +66,24 @@ final class SystemOutputMuter {
     private var systemObservers: [AudioDeviceObservation] = []
     private var deviceObservers: [String: (id: AudioDeviceID, observations: [AudioDeviceObservation])] = [:]
     private var recoveryTask: Task<Void, Never>?
+    private struct PendingOutputChange {
+        let id: UUID
+        let mode: RecordingOutputAudio
+        let uid: String
+        let deadline: ContinuousClock.Instant
+        var quietUntil: ContinuousClock.Instant
+    }
+    private let clock = ContinuousClock()
+    private var pendingOutput: PendingOutputChange?
+    private var settlingTask: Task<Void, Never>?
     private var monitoring = false
     private static let logger = Logger(subsystem: "dev.davis.inlay", category: "output-audio")
     /// Ducked output plays at this fraction of its starting volume.
     private static let duckFactor: Float32 = 0.25
+    // Conservative bounded defaults, not a guarantee about a specific headset.
+    // Only Bluetooth output waits; microphone capture itself is never delayed.
+    private static let outputQuietPeriod: Duration = .milliseconds(250)
+    private static let outputSettlingLimit: Duration = .milliseconds(1_500)
 
     init(client: SystemOutputClient = .live, recordURL: URL? = nil) {
         self.client = client
@@ -76,11 +91,76 @@ final class SystemOutputMuter {
     }
 
     func mute() {
+        requestOutputChange(.mute)
+    }
+
+    func duck() {
+        requestOutputChange(.duck)
+    }
+
+    private func requestOutputChange(_ mode: RecordingOutputAudio) {
+        cancelPendingOutputChange()
         startObserving()
         retryPending()
         guard recordLoaded, let device = client.defaultOutputDevice(),
               let uid = client.deviceUID(device), !hasChange(for: uid) else { return }
+        guard client.isBluetooth(device) else { apply(mode, to: device, uid: uid); return }
+        let now = clock.now
+        let pending = PendingOutputChange(id: UUID(), mode: mode, uid: uid,
+                                          deadline: now + Self.outputSettlingLimit,
+                                          quietUntil: now + Self.outputQuietPeriod)
+        pendingOutput = pending
+        // Profile notifications must be watched before a journal entry exists.
+        updateDeviceObservers()
+        settlingTask = Task { [weak self] in
+            guard let self else { return }
+            while let current = pendingOutput, current.id == pending.id {
+                do { try await clock.sleep(until: min(current.quietUntil, current.deadline)) }
+                catch { return }
+                guard !Task.isCancelled, let latest = pendingOutput, latest.id == pending.id else { return }
+                let now = clock.now
+                if now < latest.quietUntil, now < latest.deadline {
+                    // Another hardware event extended the quiet deadline; this
+                    // is not a periodic read or a retry of an applied change.
+                    continue
+                }
+                pendingOutput = nil
+                settlingTask = nil
+                defer { updateDeviceObservers() }
+                guard latest.quietUntil <= latest.deadline, now >= latest.quietUntil, now <= latest.deadline else {
+                    Self.logger.notice("Skipped Bluetooth output adjustment because the profile did not settle.")
+                    return
+                }
+                // A numeric ID/control layout can change while switching
+                // profiles. Resolve everything anew, never retarget another UID.
+                guard let device = client.defaultOutputDevice(), client.deviceUID(device) == latest.uid,
+                      client.isBluetooth(device), !hasChange(for: latest.uid) else {
+                    Self.logger.notice("Skipped Bluetooth output adjustment because the output changed.")
+                    return
+                }
+                apply(latest.mode, to: device, uid: latest.uid)
+                return
+            }
+        }
+    }
+
+    private func cancelPendingOutputChange() {
+        pendingOutput = nil
+        settlingTask?.cancel()
+        settlingTask = nil
+        updateDeviceObservers()
+    }
+
+    private func apply(_ mode: RecordingOutputAudio, to device: AudioDeviceID, uid: String) {
         defer { updateDeviceObservers() }
+        switch mode {
+        case .none: break
+        case .mute: applyMute(to: device, uid: uid)
+        case .duck: applyDuck(to: device, uid: uid)
+        }
+    }
+
+    private func applyMute(to device: AudioDeviceID, uid: String) {
         // Only controls Inlay changed are restored; a pre-existing mute stays.
         for element in client.muteElements(device) where client.isMuted(device, element) == false {
             let entry = OutputMuteRecord.Entry(uid: uid, element: element)
@@ -96,12 +176,7 @@ final class SystemOutputMuter {
         }
     }
 
-    func duck() {
-        startObserving()
-        retryPending()
-        guard recordLoaded, let device = client.defaultOutputDevice(),
-              let uid = client.deviceUID(device), !hasChange(for: uid) else { return }
-        defer { updateDeviceObservers() }
+    private func applyDuck(to device: AudioDeviceID, uid: String) {
         for element in client.volumeElements(device) {
             guard let original = client.volume(device, element), original.isFinite,
                   original > 0, original <= 1 else { continue }
@@ -129,6 +204,7 @@ final class SystemOutputMuter {
     }
 
     func restore() {
+        cancelPendingOutputChange()
         activeMutes.removeAll()
         activeVolumes.removeAll()
         retryPending()
@@ -137,6 +213,7 @@ final class SystemOutputMuter {
     /// Also accepts the old mute-only file. Missing devices and failed reads or
     /// writes remain journaled and are retried when hardware changes.
     func restorePersistedMute() {
+        cancelPendingOutputChange()
         startObserving()
         retryPending()
     }
@@ -243,9 +320,22 @@ final class SystemOutputMuter {
     }
 
     private func observe(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
-                         _ scope: AudioObjectPropertyScope) -> AudioDeviceObservation? {
+                         _ scope: AudioObjectPropertyScope, uid: String? = nil) -> AudioDeviceObservation? {
         AudioDeviceObservation.observe(object, selector, scope, element: kAudioObjectPropertyElementWildcard) { [weak self] in
-            self?.scheduleRecovery()
+            guard let self else { return }
+            if var pending = pendingOutput, uid == nil || uid == pending.uid {
+                // Before the single mutation, a profile/layout/volume event
+                // restarts the quiet period, but never extends the hard cap.
+                if let device = client.defaultOutputDevice(), client.deviceUID(device) == pending.uid {
+                    pending.quietUntil = clock.now + Self.outputQuietPeriod
+                    pendingOutput = pending
+                    updateDeviceObservers()
+                } else {
+                    cancelPendingOutputChange()
+                    Self.logger.notice("Skipped Bluetooth output adjustment because the output changed.")
+                }
+            }
+            scheduleRecovery()
         }
     }
 
@@ -263,7 +353,8 @@ final class SystemOutputMuter {
 
     private func updateDeviceObservers() {
         guard monitoring else { return }
-        let uids = Set(record.entries.map(\.uid) + (record.volumes ?? []).map(\.uid))
+        var uids = Set(record.entries.map(\.uid) + (record.volumes ?? []).map(\.uid))
+        if let pendingOutput { uids.insert(pendingOutput.uid) }
         var connected: [String: AudioDeviceID] = [:]
         for uid in uids { connected[uid] = client.deviceID(uid) }
         // Resolve the UID again on every event. Reconnects can reuse or replace
@@ -273,12 +364,12 @@ final class SystemOutputMuter {
         }
         for (uid, id) in connected where deviceObservers[uid] == nil {
             let observations = [
-                observe(id, kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal),
-                observe(id, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal),
-                observe(id, kAudioObjectPropertyControlList, kAudioObjectPropertyScopeGlobal),
-                observe(id, kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeOutput),
-                observe(id, kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput),
-                observe(id, kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput),
+                observe(id, kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal, uid: uid),
+                observe(id, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, uid: uid),
+                observe(id, kAudioObjectPropertyControlList, kAudioObjectPropertyScopeGlobal, uid: uid),
+                observe(id, kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeOutput, uid: uid),
+                observe(id, kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput, uid: uid),
+                observe(id, kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, uid: uid),
             ].compactMap { $0 }
             deviceObservers[uid] = (id, observations)
         }
@@ -287,7 +378,8 @@ final class SystemOutputMuter {
 
 extension SystemOutputClient {
     static var live: Self {
-        Self(defaultOutputDevice: SystemOutputHardware.defaultOutputID, muteElements: SystemOutputHardware.muteElements,
+        Self(defaultOutputDevice: SystemOutputHardware.defaultOutputID, isBluetooth: SystemOutputHardware.isBluetooth,
+             muteElements: SystemOutputHardware.muteElements,
              isMuted: SystemOutputHardware.isMuted, setMuted: SystemOutputHardware.setMuted,
              volumeElements: SystemOutputHardware.volumeElements,
              volume: SystemOutputHardware.volume, setVolume: SystemOutputHardware.setVolume,
@@ -298,6 +390,16 @@ extension SystemOutputClient {
 /// Uses the same mute and volume controls as the menu bar and keyboard, on the
 /// default output device.
 enum SystemOutputHardware {
+    static func isBluetooth(_ device: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType,
+                                                 mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport) == noErr,
+              size == MemoryLayout<UInt32>.size else { return false }
+        return transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
+    }
+
     static func defaultOutputID() -> AudioDeviceID? {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
                                                  mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
