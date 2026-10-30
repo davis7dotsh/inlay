@@ -162,8 +162,8 @@ private struct DevicePreferencesForm: View {
                 .accessibilityIdentifier("preferences.mute-output")
                 if controller.recordingOutputAudio != .none {
                     Text(controller.recordingOutputAudio == .mute
-                        ? "Muting also silences VoiceOver and dictation sounds while recording."
-                        : "Ducking lowers system audio, VoiceOver, and dictation sounds to a quarter of their volume while recording.")
+                        ? "Muting also silences VoiceOver and dictation sounds. Outputs without a mute control stay unchanged."
+                        : "Ducking lowers system audio, VoiceOver, and dictation sounds to 25%. Outputs without a volume control stay unchanged.")
                         .font(.caption)
                         .foregroundStyle(InlayPalette.muted)
                 }

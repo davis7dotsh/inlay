@@ -795,6 +795,7 @@ final class InlayController: ObservableObject {
         monitorTask?.cancel(); refreshTask?.cancel(); hudTask?.cancel(); permissionTask?.cancel()
         configuration.stopWatching()
         subscriptions.removeAll()
+        outputMuter.stop()
         audioDevices.stop(); hotkey.stop(); continuationAnchors.removeAll()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
@@ -847,6 +848,7 @@ final class InlayController: ObservableObject {
     @discardableResult
     private func beginDictation(isTest: Bool) -> Bool {
         guard !isCapturing, !isShuttingDown else { return false }
+        outputMuter.restore()
         permissions = PermissionSnapshot.capture()
         stopShortcutCheck()
         guard isServerReady else { showError(serverStatusMessage); refreshServer(); return false }
