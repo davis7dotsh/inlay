@@ -26,6 +26,14 @@ private struct DevicePreferencesForm: View {
 
     private var usesPlainHTTP: Bool { (try? ServerEndpoint(endpoint))?.usesPlainHTTP ?? false }
 
+    private var recordingOutputAudioCaption: String {
+        switch controller.recordingOutputAudio {
+        case .none: "Leaves system audio unchanged while recording."
+        case .mute: "Silences system audio, VoiceOver and dictation sounds. Unsupported outputs stay unchanged."
+        case .duck: "Lowers system audio, including VoiceOver, to a quarter of its starting volume. Unsupported outputs stay unchanged."
+        }
+    }
+
     var body: some View {
         Form {
             Section {
@@ -156,11 +164,14 @@ private struct DevicePreferencesForm: View {
                     }
                     .frame(height: 90)
                 }
-                Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
-                    .accessibilityIdentifier("preferences.mute-output")
-                Text("Muting also silences VoiceOver and dictation sounds while recording.")
-                    .font(.caption)
-                    .foregroundStyle(InlayPalette.muted)
+                Picker("System audio while recording", selection: $controller.recordingOutputAudio) {
+                    ForEach(RecordingOutputAudio.allCases) { mode in Text(mode.title).tag(mode) }
+                }
+                .accessibilityIdentifier("preferences.mute-output")
+                Text(recordingOutputAudioCaption)
+                .font(.caption)
+                .foregroundStyle(InlayPalette.muted)
+                .lineLimit(2, reservesSpace: true)
                 Toggle("Play dictation sounds", isOn: $controller.dictationSoundsEnabled)
                     .accessibilityIdentifier("preferences.dictation-sounds")
                 Toggle("Never leave transcripts on the clipboard", isOn: $controller.preserveClipboard)
