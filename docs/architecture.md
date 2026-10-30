@@ -45,11 +45,13 @@ With **Mute system audio while recording** enabled under **This Mac**, the defau
 
 ## Settings
 
-| Scope          | Where to edit                    | What it owns                                                                                                                                  |
-| -------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, clipboard preservation, microphone priority/selection. |
-| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                              |
-| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                  |
+| Scope          | Where to edit                    | What it owns                                                                                                                                                |
+| -------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, clipboard preservation, screen hints, microphone priority/selection. |
+| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                                            |
+| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                                |
+
+With **Use on-screen words as vocabulary hints** enabled under **This Mac** (off by default), the client reads the focused window when a take starts, never Inlay's own window or a non-focused fallback, and skips capture while secure input is active before or after the screenshot. It needs Screen Recording, and Accessibility to find the focused window. Vision OCR and term ranking run on the Mac; the screenshot and recognized text are never sent or saved. Emails, URLs, domains, paths, and long numbers are filtered out, and at most 40 ranked terms are sent with the finish request. The client waits at most 500 ms for them, so a slow capture sends none. The server stores the terms on the take and appends them after dictionary names as Qwen proofreading hints. Parakeet receives no hints, and takes without text correction keep no screen terms. **Test microphone** never captures the screen.
 
 Shared saves use revisions to reject stale concurrent edits. Settings are snapshotted when the server accepts a take; changes affect future recordings. Update shared settings through the UI/API rather than editing files while the server runs.
 

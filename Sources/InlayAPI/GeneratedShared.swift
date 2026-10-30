@@ -1,7 +1,7 @@
 // Generated from Server/api (openapi.yaml + default-proofreading-prompt.txt) by generate-api.ts; edit the sources, never this file.
 
 enum GeneratedShared {
-    static let apiVersion = 4
+    static let apiVersion = 5
     static let defaultPort = 8391
     static let maximumRecordingSeconds = 180
     static let maximumChunkBytes = 1048576
@@ -12,7 +12,7 @@ enum GeneratedShared {
     static let supportedLanguages = ["en", "auto", "es", "fr", "de", "it", "pt", "nl", "ja", "zh", "ko", "hi", "ar", "pl", "ru", "uk", "sv"]
     static let defaultProofreadingPrompt = """
         Cleanup
-        Fix punctuation, capitalization, and obvious spelling errors. Use dictionary names only when they match what was said.
+        Fix punctuation, capitalization, and obvious spelling errors. When a word sounds like or closely resembles a preferred term (dictionary or on-screen names), use the preferred term's exact spelling; unusual names are often misheard as common words. Otherwise keep what was said.
 
         Spoken corrections
         Resolve explicit corrections before removing hesitation sounds. In "old phrase, er/err/erm/I mean/sorry/correction, new phrase", keep the new phrase.
