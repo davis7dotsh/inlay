@@ -77,7 +77,9 @@ final class SystemOutputMuter {
     func duck() {
         guard let device = client.defaultOutputDevice() else { return }
         for element in client.volumeElements(device) {
-            guard let original = client.volume(device, element), original > 0 else { continue }
+            // A pending entry from a failed restore still holds the true original.
+            guard !ducked.contains(where: { $0.device == device && $0.element == element }),
+                  let original = client.volume(device, element), original > 0 else { continue }
             // Core Audio may apply the write later, so record the target, not a read-back.
             let target = original * Self.duckFactor
             guard client.setVolume(device, element, target) else { continue }
