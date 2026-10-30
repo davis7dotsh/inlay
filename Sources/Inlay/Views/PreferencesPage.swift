@@ -29,8 +29,8 @@ private struct DevicePreferencesForm: View {
     private var recordingOutputAudioCaption: String {
         switch controller.recordingOutputAudio {
         case .none: "Leaves system audio unchanged while recording."
-        case .mute: "Also silences VoiceOver and dictation sounds. Unsupported outputs stay unchanged."
-        case .duck: "Lowers system audio, including VoiceOver, to 25%. Unsupported outputs stay unchanged."
+        case .mute: "Silences system audio, VoiceOver and dictation sounds. Unsupported outputs stay unchanged."
+        case .duck: "Lowers system audio, including VoiceOver, to a quarter of its starting volume. Unsupported outputs stay unchanged."
         }
     }
 
