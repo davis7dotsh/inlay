@@ -105,14 +105,23 @@ final class SystemOutputMuter {
         for element in client.volumeElements(device) {
             guard let original = client.volume(device, element), original.isFinite,
                   original > 0, original <= 1 else { continue }
-            // Core Audio may apply the write later, so record the target, not an
-            // immediate read-back. Recovery allows scalar rounding below.
+            // Journal the target first: Core Audio can apply the write later.
             let target = original * Self.duckFactor
             let entry = OutputMuteRecord.VolumeEntry(uid: uid, element: element, original: original, ducked: target)
             record.volumes?.append(entry)
             guard persistRecord() else { record.volumes?.removeLast(); continue }
-            if client.setVolume(device, element, target) { activeVolumes.insert(entry.key) }
-            else {
+            if client.setVolume(device, element, target) {
+                activeVolumes.insert(entry.key)
+                // A synchronous driver may quantize more coarsely than the
+                // scalar tolerance. Keep its applied value, but never replace
+                // the target with a stale pre-write read from an async driver.
+                if let applied = client.volume(device, element), applied.isFinite,
+                   (0...1).contains(applied), !Self.isUnchanged(applied, original),
+                   let index = record.volumes?.indices.last {
+                    record.volumes?[index].ducked = applied
+                    _ = persistRecord()
+                }
+            } else {
                 record.volumes?.removeLast()
                 _ = persistRecord()
             }
@@ -153,15 +162,17 @@ final class SystemOutputMuter {
         guard loadRecord() else { return }
         record.entries = record.entries.filter { entry in
             guard !activeMutes.contains(entry), let device = client.deviceID(entry.uid),
-                  let current = client.isMuted(device, entry.element) else { return true }
-            // A readable different value relinquishes ownership to the user.
-            guard current else { return false }
+                  client.isMuted(device, entry.element) != nil else { return true }
+            // Even an already-unmuted read needs a restore write: the earlier
+            // mute may still be queued by the driver. This preserves that value.
             return !client.setMuted(device, entry.element, false)
         }
         record.volumes = (record.volumes ?? []).filter { entry in
             guard !activeVolumes.contains(entry.key), let device = client.deviceID(entry.uid),
                   let current = client.volume(device, entry.element), current.isFinite else { return true }
-            guard Self.isUnchanged(current, entry.ducked) else { return false }
+            // The original can still be visible before an async duck applies.
+            // Reasserting it is harmless and supersedes that queued write.
+            guard Self.isUnchanged(current, entry.ducked) || Self.isUnchanged(current, entry.original) else { return false }
             return !client.setVolume(device, entry.element, entry.original)
         }
         // On persistence failure the previous atomic file still contains the
