@@ -44,6 +44,7 @@ final class TakeDeliveryGate {
     }
 
     func waitForDecision() async {
+        // Only the take's owning delivery task waits, sequentially.
         guard state == .undoPending else { return }
         await withCheckedContinuation { waiter = $0 }
     }

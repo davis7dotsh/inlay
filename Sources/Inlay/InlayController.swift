@@ -344,7 +344,7 @@ final class InlayController: ObservableObject {
                 refreshServer()
                 return
             }
-            closeCancelledDeliveries()
+            keepCancelledTake()
             serverHealth = nil
             serverStatusMessage = Self.connectionMessage(error)
             if !isBusy, activity == .idle { statusMessage = serverStatusMessage }
@@ -625,6 +625,9 @@ final class InlayController: ObservableObject {
                 pending.gate.keepInHistory()
                 statusMessage = "Saving to history…"
             }
+        } else if let earlier = pendingDictations.last {
+            errorMessage = nil
+            showEarlierDictation(earlier)
         }
     }
 
@@ -827,8 +830,15 @@ final class InlayController: ObservableObject {
             entry.endpoint == preferences.endpoint && pendingEntries.contains { $0.id == entry.id }
         }
         for entry in pendingEntries where isCurrent(entry) && !isLive(entry.id) {
-            guard let record = try? await connection.generation(entry.id),
-                  isCurrent(entry), !isLive(entry.id) else { continue }
+            let record: GenerationRecord
+            do { record = try await connection.generation(entry.id) }
+            catch let ServerClientError.rejected(status, _, _) where status == 404 {
+                // A deleted record cannot accept this receipt or recover audio.
+                // Auth and transport failures still retain their recovery intent.
+                if isCurrent(entry), !isLive(entry.id) { removePendingEntry(entry.id) }
+                continue
+            } catch { continue }
+            guard isCurrent(entry), !isLive(entry.id) else { continue }
             switch record.status {
             case .completed:
                 if record.delivery == nil, let receipt = entry.receipt ?? (entry.disposition == .historyOnly
@@ -1302,13 +1312,15 @@ final class InlayController: ObservableObject {
         let message: String
         let deliveryStatus: DictationDeliveryStatus
         let status: String
-        if pending.gate.state == .historyOnly {
-            message = "Saved to history. Not pasted."; deliveryStatus = .kept; status = "Saved to history"
-        } else if isTest {
+        if isTest {
             rememberContinuation(record, at: .test)
             message = "Test complete. Nothing was pasted."
             deliveryStatus = .tested
             status = record.finalText.isEmpty ? "No speech detected" : "Ready to copy"
+        } else if record.insertionText.isEmpty, record.continuation == nil, record.previewText.isEmpty {
+            message = "No speech detected"; deliveryStatus = .none; status = message
+        } else if pending.gate.state == .historyOnly {
+            message = "Saved to history. Not pasted."; deliveryStatus = .kept; status = "Saved to history"
         } else if record.insertionText.isEmpty {
             if record.continuation == nil && record.previewText.isEmpty {
                 message = "No speech detected"; deliveryStatus = .none

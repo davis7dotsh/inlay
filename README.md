@@ -96,6 +96,8 @@ For newly launched Electron apps, Inlay requests accessibility support when a ta
 
 All connected Macs share history, tagged by device. Both original and inference audio are kept by default; **Keep original microphone audio** changes original retention for future takes. Back up the server data directory to preserve history.
 
+Cancelling a usable take stops the microphone and keeps transcribing into History without pasting. **Undo cancel** is available for eight seconds and can insert the captured portion only at the safely verified original cursor; it never restarts the microphone. Starting another take closes that opportunity. Relaunch recovery never pastes automatically.
+
 ## Releases
 
 GitHub Releases come from tags: a `client-v*` tag publishes the notarized `Inlay.dmg` from the `Client release package` workflow, and a `server-v*` tag publishes the server tarballs from `Server release packages`. Manual workflow runs upload Actions artifacts instead of publishing a release. You can also build the Mac app locally with `./scripts/build-app.sh` and copy `build/Inlay.app` where you want it. Pull-request CI builds the Mac app bundle to verify it, but not the MLX helper or the CUDA package, and publishes nothing. Details, artifact names, and checksums are in [how releases are produced](Server/README.md#releases).

@@ -125,15 +125,15 @@ struct HistoryPage: View {
                         Text(generation.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
                             .font(.caption)
                         Spacer(minLength: 4)
-                        if let label = deliveryLabel(generation.delivery, id: generation.id) {
-                            Text(label).font(.caption).foregroundStyle(InlayPalette.muted)
-                        } else if generation.status == .failed || generation.status == .cancelled {
+                        if generation.status == .failed || generation.status == .cancelled {
                             Text(statusLabel(generation.status))
                                 .font(.caption)
                                 .foregroundStyle(InlayPalette.warning)
                         } else if generation.status != .completed {
                             Image(systemName: "clock")
                                 .foregroundStyle(InlayPalette.warning)
+                        } else if let label = controller.pendingHistoryLabel(generation.id) {
+                            Text(label).font(.caption).foregroundStyle(InlayPalette.muted)
                         }
                     }
                     Text(summary(generation))
@@ -186,7 +186,8 @@ struct HistoryPage: View {
                     Label(sourceLabel(selected),
                           systemImage: selected.importedSource == nil ? "laptopcomputer" : "square.and.arrow.down")
                     if selected.importedSource == nil {
-                        Text(deliveryLabel(selected.delivery, id: selected.id) ?? statusLabel(selected.status))
+                        Text(statusLabel(selected.status))
+                        if let label = deliveryLabel(selected.delivery, id: selected.id) { Text(label) }
                     }
                     if let sourceStatus = selected.importedSource?.sourceStatus, !sourceStatus.isEmpty {
                         Text("Flow status: \(sourceStatus)")
@@ -333,7 +334,7 @@ struct HistoryPage: View {
     }
 
     private func accessibilityText(_ generation: GenerationSummary) -> String {
-        let base = [deliveryLabel(generation.delivery, id: generation.id), sourceLabel(generation), summary(generation)]
+        let base = [controller.pendingHistoryLabel(generation.id), sourceLabel(generation), summary(generation)]
             .compactMap { $0 }.joined(separator: ", ")
         return generation.status == .failed || generation.status == .cancelled
             ? "\(statusLabel(generation.status)), \(base)" : base
