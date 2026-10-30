@@ -58,7 +58,7 @@ final class InlayController: ObservableObject {
             hotkey.mode = activationMode
         }
     }
-    @Published var launchAtLogin = false {
+    @Published var launchAtLogin = true {
         didSet {
             guard hasInitialized, !applyingConfiguration, !updatingLogin, launchAtLogin != oldValue else { return }
             configuration.update { $0.launchAtLogin = launchAtLogin }
