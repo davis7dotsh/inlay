@@ -373,14 +373,17 @@ public struct GenerationSummary: Codable, Equatable, Sendable, Identifiable {
     public var queuePosition: Int?
     public var originalAudioOmittedReason: String?
     public var importedSource: ImportedSource?
+    public var delivery: DeliveryReceipt?
     public init(id: UUID, device: DeviceIdentity, mode: GenerationMode, status: GenerationStatus,
                 createdAt: Date, updatedAt: Date, previewText: String, queuePosition: Int? = nil,
-                originalAudioOmittedReason: String? = nil, importedSource: ImportedSource? = nil) {
+                originalAudioOmittedReason: String? = nil, importedSource: ImportedSource? = nil,
+                delivery: DeliveryReceipt? = nil) {
         self.id = id; self.device = device; self.mode = mode; self.status = status
         self.createdAt = createdAt; self.updatedAt = updatedAt; self.previewText = previewText
         self.queuePosition = queuePosition
         self.originalAudioOmittedReason = originalAudioOmittedReason
         self.importedSource = importedSource
+        self.delivery = delivery
     }
 }
 

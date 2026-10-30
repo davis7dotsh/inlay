@@ -2598,6 +2598,8 @@ extension Components {
             public var originalAudioOmittedReason: Swift.String?
             /// - Remark: Generated from `#/components/schemas/GenerationSummary/importedSource`.
             public var importedSource: Components.Schemas.ImportedSource?
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/delivery`.
+            public var delivery: Components.Schemas.DeliveryReceipt?
             /// Creates a new `GenerationSummary`.
             ///
             /// - Parameters:
@@ -2611,6 +2613,7 @@ extension Components {
             ///   - queuePosition:
             ///   - originalAudioOmittedReason:
             ///   - importedSource:
+            ///   - delivery:
             public init(
                 id: Components.Schemas.Uuid,
                 device: Components.Schemas.DeviceIdentity,
@@ -2621,7 +2624,8 @@ extension Components {
                 previewText: Swift.String,
                 queuePosition: Swift.Int? = nil,
                 originalAudioOmittedReason: Swift.String? = nil,
-                importedSource: Components.Schemas.ImportedSource? = nil
+                importedSource: Components.Schemas.ImportedSource? = nil,
+                delivery: Components.Schemas.DeliveryReceipt? = nil
             ) {
                 self.id = id
                 self.device = device
@@ -2633,6 +2637,7 @@ extension Components {
                 self.queuePosition = queuePosition
                 self.originalAudioOmittedReason = originalAudioOmittedReason
                 self.importedSource = importedSource
+                self.delivery = delivery
             }
             public enum CodingKeys: String, CodingKey {
                 case id
@@ -2645,6 +2650,7 @@ extension Components {
                 case queuePosition
                 case originalAudioOmittedReason
                 case importedSource
+                case delivery
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -2688,6 +2694,10 @@ extension Components {
                     Components.Schemas.ImportedSource.self,
                     forKey: .importedSource
                 )
+                self.delivery = try container.decodeIfPresent(
+                    Components.Schemas.DeliveryReceipt.self,
+                    forKey: .delivery
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "id",
                     "device",
@@ -2698,7 +2708,8 @@ extension Components {
                     "previewText",
                     "queuePosition",
                     "originalAudioOmittedReason",
-                    "importedSource"
+                    "importedSource",
+                    "delivery"
                 ])
             }
         }

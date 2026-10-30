@@ -733,6 +733,7 @@ export interface components {
       queuePosition?: number;
       originalAudioOmittedReason?: string;
       importedSource?: components["schemas"]["ImportedSource"];
+      delivery?: components["schemas"]["DeliveryReceipt"];
     };
     GenerationPage: {
       items: components["schemas"]["GenerationSummary"][];

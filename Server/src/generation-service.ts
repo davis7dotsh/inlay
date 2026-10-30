@@ -96,6 +96,7 @@ const summarizeGeneration = (record: GenerationRecord): GenerationSummary => ({
     ? { originalAudioOmittedReason: record.originalAudioOmittedReason }
     : {}),
   ...(record.importedSource !== undefined ? { importedSource: record.importedSource } : {}),
+  ...(record.delivery !== undefined ? { delivery: record.delivery } : {}),
 });
 
 export const defaultPreferences = (): PreferencesSnapshot => ({

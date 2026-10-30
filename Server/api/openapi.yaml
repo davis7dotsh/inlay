@@ -1522,6 +1522,8 @@ components:
           type: "string"
         importedSource:
           "$ref": "#/components/schemas/ImportedSource"
+        delivery:
+          "$ref": "#/components/schemas/DeliveryReceipt"
       required:
         - "id"
         - "device"

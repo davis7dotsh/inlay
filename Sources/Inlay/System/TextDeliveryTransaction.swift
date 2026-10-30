@@ -39,6 +39,8 @@ struct TextDeliveryEnvironment {
     var pause: (UInt64) async throws -> Void
     var waitUntilReady: (() async -> Void)? = nil
     var isCaptureActive: (() -> Bool)? = nil
+    var deliveryAllowed: (() -> Bool)? = nil
+    var beginDelivery: (() -> Bool)? = nil
 }
 
 /// Owns delivery and its temporary clipboard lease, not application discovery.
@@ -55,6 +57,7 @@ struct TextDeliveryTransaction {
                  clipboardUnchangedSince changeCount: Int) async -> InsertionOutcome {
         while true {
             await environment.waitUntilReady?()
+            guard environment.deliveryAllowed?() != false else { return .withheld }
             guard !Task.isCancelled else { return .failed(reason: Self.cancelled) }
             if let outcome = await attemptDelivery(text, copying: clipboardText, strategy: strategy,
                                                    clipboardUnchangedSince: changeCount) {
@@ -71,6 +74,7 @@ struct TextDeliveryTransaction {
             return .failed(reason: "There is no text to deliver.")
         }
         let prepared = await prepareForDelivery()
+        guard environment.deliveryAllowed?() != false else { return .withheld }
         if shouldDeferForCapture { return nil }
         switch prepared {
         case .valid: break
@@ -82,6 +86,7 @@ struct TextDeliveryTransaction {
         guard !environment.modifiersAreHeld() else {
             return .failed(reason: "A keyboard shortcut is still held. Your words are ready to copy.")
         }
+        guard environment.deliveryAllowed?() != false else { return .withheld }
 
         if strategy == .nativeSelection {
             switch environment.replaceSelection(text) {
@@ -98,6 +103,7 @@ struct TextDeliveryTransaction {
             }
         }
 
+        guard environment.deliveryAllowed?() != false else { return .withheld }
         let snapshot: ClipboardSnapshot
         switch ClipboardSnapshot.capture(pasteboard) {
         case .success(let value): snapshot = value
@@ -111,6 +117,7 @@ struct TextDeliveryTransaction {
 
         let validation = await environment.validate()
         guard !Task.isCancelled else { return .failed(reason: Self.cancelled) }
+        guard environment.deliveryAllowed?() != false else { return .withheld }
         if shouldDeferForCapture { return nil }
         switch validation {
         case .valid: break
@@ -198,7 +205,7 @@ struct TextDeliveryTransaction {
     }
 
     private func keepBackup(_ text: String, in clipboard: inout DeliveryClipboardLease, unchangedSince count: Int) -> Bool {
-        !preservesClipboard && clipboard.keepBackup(text, unchangedSince: count)
+        !preservesClipboard && environment.beginDelivery?() != false && clipboard.keepBackup(text, unchangedSince: count)
     }
 
     private func copyNewChunk(_ text: String, expectedCount: Int) -> Bool {
@@ -207,7 +214,7 @@ struct TextDeliveryTransaction {
                                                         through: snapshot.changeCount) else { return false }
         var clipboard = DeliveryClipboardLease(pasteboard: pasteboard, snapshot: snapshot)
         defer { clipboard.restore() }
-        guard clipboard.write(text, transient: false), !Task.isCancelled else { return false }
+        guard environment.beginDelivery?() != false, clipboard.write(text, transient: false), !Task.isCancelled else { return false }
         clipboard.commit()
         return true
     }
