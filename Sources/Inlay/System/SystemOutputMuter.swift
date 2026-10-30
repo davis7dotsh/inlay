@@ -127,7 +127,7 @@ final class SystemOutputMuter {
                 pendingOutput = nil
                 settlingTask = nil
                 defer { updateDeviceObservers() }
-                guard latest.quietUntil <= latest.deadline, now >= latest.quietUntil, now <= latest.deadline else {
+                guard latest.quietUntil <= latest.deadline, now >= latest.quietUntil else {
                     Self.logger.notice("Skipped Bluetooth output adjustment because the profile did not settle.")
                     return
                 }
@@ -148,7 +148,6 @@ final class SystemOutputMuter {
         pendingOutput = nil
         settlingTask?.cancel()
         settlingTask = nil
-        updateDeviceObservers()
     }
 
     private func apply(_ mode: RecordingOutputAudio, to device: AudioDeviceID, uid: String) {
@@ -191,7 +190,8 @@ final class SystemOutputMuter {
                 // scalar tolerance. Keep its applied value, but never replace
                 // the target with a stale pre-write read from an async driver.
                 if let applied = client.volume(device, element), applied.isFinite,
-                   (0...1).contains(applied), !Self.isUnchanged(applied, original),
+                   applied >= 0, applied < original, !Self.isUnchanged(applied, original),
+                   abs(applied - target) < abs(applied - original),
                    let index = record.volumes?.indices.last {
                     record.volumes?[index].ducked = applied
                     _ = persistRecord()
@@ -326,15 +326,18 @@ final class SystemOutputMuter {
             if var pending = pendingOutput, uid == nil || uid == pending.uid {
                 // Before the single mutation, a profile/layout/volume event
                 // restarts the quiet period, but never extends the hard cap.
-                if let device = client.defaultOutputDevice(), client.deviceUID(device) == pending.uid {
-                    pending.quietUntil = clock.now + Self.outputQuietPeriod
-                    pendingOutput = pending
-                    updateDeviceObservers()
-                } else {
+                if let device = client.defaultOutputDevice(), let currentUID = client.deviceUID(device), currentUID != pending.uid {
                     cancelPendingOutputChange()
                     Self.logger.notice("Skipped Bluetooth output adjustment because the output changed.")
+                } else {
+                    // Missing reads during a profile switch do not prove a
+                    // route change. Allow a bounded quiet period to try again.
+                    pending.quietUntil = clock.now + Self.outputQuietPeriod
+                    pendingOutput = pending
                 }
             }
+            // Refresh listeners after the callback returns, including when a
+            // confirmed route change cancelled the pending adjustment.
             scheduleRecovery()
         }
     }
