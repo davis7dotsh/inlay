@@ -17,7 +17,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public static var defaultHoldKey: String { InlayBuild.current.isDevelopment ? "rightOption" : "fn" }
     public static let `default` = InlayConfiguration()
 
-    public init(holdKey: String = InlayConfiguration.defaultHoldKey, activationMode: String = "hold", launchAtLogin: Bool = false,
+    public init(holdKey: String = InlayConfiguration.defaultHoldKey, activationMode: String = "hold", launchAtLogin: Bool = true,
                 recordingOutputAudio: String = "none", dictationSoundsEnabled: Bool = true,
                 customTriggerKeyCode: Int? = nil, preserveClipboard: Bool = false,
                 microphones: MicrophonePreferences = MicrophonePreferences()) {
@@ -69,7 +69,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
         }
         self.init(holdKey: holdKey,
                   activationMode: activationMode,
-                  launchAtLogin: try values.value(Bool.self, for: .launchAtLogin, default: false),
+                  launchAtLogin: try values.value(Bool.self, for: .launchAtLogin, default: true),
                   recordingOutputAudio: recordingOutputAudio,
                   dictationSoundsEnabled: try values.value(Bool.self, for: .dictationSoundsEnabled, default: true),
                   customTriggerKeyCode: customTriggerKeyCode,
