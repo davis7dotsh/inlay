@@ -22,6 +22,7 @@ struct InsertionTarget: Equatable {
 }
 
 enum InsertionOutcome: Equatable {
+    case withheld
     case inserted
     case copied(reason: String)
     case unconfirmed(clipboardBackup: Bool)
@@ -199,7 +200,10 @@ final class TextInserter {
                  clipboardUnchangedSince changeCount: Int,
                  waitUntilReady: (() async -> Void)? = nil,
                  isCaptureActive: (() -> Bool)? = nil,
-                 preservingClipboard: Bool = false) async -> InsertionOutcome {
+                 preservingClipboard: Bool = false,
+                 requiresKnownSelection: (() -> Bool)? = nil,
+                 deliveryAllowed: (() -> Bool)? = nil,
+                 beginDelivery: (() -> Bool)? = nil) async -> InsertionOutcome {
         confirmedAnchor = nil
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .failed(reason: "There is no text to deliver.")
@@ -208,17 +212,25 @@ final class TextInserter {
         switch destination {
         case .field(let target):
             let environment = TextDeliveryEnvironment(
-                validate: { await Self.validate(target) },
+                validate: { await Self.validate(target, requiresKnownSelection: requiresKnownSelection?() == true) },
                 modifiersAreHeld: { Self.modifiersAreHeld },
-                replaceSelection: { Self.replaceSelection($0, in: target) },
-                postPaste: { Self.postPaste(into: target, canDispatch: $0) },
+                replaceSelection: { Self.replaceSelection($0, in: target, requiresKnownSelection: requiresKnownSelection?() == true, beginDelivery: beginDelivery) },
+                postPaste: { Self.postPaste(into: target, requiresKnownSelection: requiresKnownSelection?() == true, canDispatch: $0, beginDelivery: beginDelivery) },
                 confirmation: { [weak self] text in
                     guard let self else { return .blocked }
-                    return await self.confirm(text, in: target)
+                    return await self.confirm(text, in: target, requiresKnownSelection: requiresKnownSelection?() == true)
                 },
                 pause: { try await Task.sleep(nanoseconds: $0) },
                 waitUntilReady: waitUntilReady,
-                isCaptureActive: isCaptureActive
+                isCaptureActive: isCaptureActive,
+                deliveryAllowed: deliveryAllowed,
+                beginDelivery: {
+                    // Copy fallbacks need a fresh safety check too. The async
+                    // field probe may have returned before focus changed again.
+                    guard requiresKnownSelection?() != true || Self.permitsClipboardFallback() else { return false }
+                    guard beginDelivery?() != false else { return false }
+                    return requiresKnownSelection?() != true || Self.permitsClipboardFallback()
+                }
             )
             return await TextDeliveryTransaction(pasteboard: pasteboard, environment: environment,
                                                  preservesClipboard: preservingClipboard)
@@ -226,9 +238,17 @@ final class TextInserter {
                          clipboardUnchangedSince: changeCount)
         case .blocked(let reason): return .failed(reason: reason)
         case .clipboard:
+            await waitUntilReady?()
+            guard deliveryAllowed?() != false else { return .withheld }
+            // Undo with no original AX target is History-only. In particular it
+            // cannot turn an unknown/protected destination into an automatic copy.
+            guard requiresKnownSelection?() != true else {
+                return .failed(reason: "The original cursor was not captured. Your words are ready to copy.")
+            }
             guard !preservingClipboard else {
                 return .failed(reason: "No editable field was confirmed. Your words are ready to copy.")
             }
+            guard beginDelivery?() != false else { return .withheld }
             switch DictationClipboard.copy(clipboardText, to: pasteboard, onlyIfUnchangedSince: changeCount) {
             case .success: return .copied(reason: "Copied to clipboard")
             case .failure(let error): return .failed(reason: error.localizedDescription)
@@ -236,9 +256,24 @@ final class TextInserter {
         }
     }
 
-    private static func validate(_ target: InsertionTarget) async -> TargetValidation {
+    private static func permitsClipboardFallback() -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        switch readFocusedElement() {
+        case .found(let focus):
+            switch fieldEligibility(of: focus.element) {
+            case .editable, .notEditable: return true
+            case .protected, .unverified, nil: return false
+            }
+        case .absent: return true
+        case .unverified: return false
+        }
+    }
+
+    private static func validate(_ target: InsertionTarget, requiresKnownSelection: Bool) async -> TargetValidation {
         guard !target.application.isTerminated else {
-            return .changed(reason: "The original app closed.")
+            return requiresKnownSelection
+                ? .blocked(reason: "The original app closed. Your words are ready to copy.")
+                : .changed(reason: "The original app closed.")
         }
         let expected = target.snapshot
         var probe = await readOffMain { probeField(expected.focus) }
@@ -250,9 +285,16 @@ final class TextInserter {
             probe = await readOffMain { probeField(expected.focus) }
         }
         guard !Task.isCancelled else { return .blocked(reason: "Dictation was cancelled.") }
-        guard !target.application.isTerminated else { return .changed(reason: "The original app closed.") }
+        guard !target.application.isTerminated else {
+            return requiresKnownSelection
+                ? .blocked(reason: "The original app closed. Your words are ready to copy.")
+                : .changed(reason: "The original app closed.")
+        }
         switch probe {
         case .valid(let selection):
+            guard !requiresKnownSelection || expected.selection != nil else {
+                return .blocked(reason: "The original cursor was not captured. Your words are ready to copy.")
+            }
             if let original = expected.selection, selection != original {
                 return .changed(reason: "The cursor or selection changed.")
             }
@@ -262,8 +304,8 @@ final class TextInserter {
         }
     }
 
-    private func confirm(_ text: String, in target: InsertionTarget) async -> DeliveryConfirmation {
-        guard !target.application.isTerminated else { return .unavailable }
+    private func confirm(_ text: String, in target: InsertionTarget, requiresKnownSelection: Bool) async -> DeliveryConfirmation {
+        guard !target.application.isTerminated else { return requiresKnownSelection ? .blocked : .unavailable }
         let expected = target.snapshot
         let probe = await Self.readOffMain { Self.probeField(expected.focus) }
         guard !Task.isCancelled else { return .blocked }
@@ -283,7 +325,8 @@ final class TextInserter {
         }
     }
 
-    private static func replaceSelection(_ text: String, in target: InsertionTarget) -> NativeTextWrite {
+    private static func replaceSelection(_ text: String, in target: InsertionTarget,
+                                         requiresKnownSelection: Bool, beginDelivery: (() -> Bool)?) -> NativeTextWrite {
         guard !Task.isCancelled, AXIsProcessTrusted(), !target.application.isTerminated else {
             return .uncertain(reason: "Insertion was interrupted.")
         }
@@ -296,7 +339,15 @@ final class TextInserter {
             guard settable.boolValue else { return .unsupported }
         default: return .uncertain(reason: "Native insertion access could not be verified.")
         }
-        guard readyToDispatch(into: target) else { return .uncertain(reason: "The original cursor changed.") }
+        guard readyToDispatch(into: target, requiresKnownSelection: requiresKnownSelection) else {
+            return .uncertain(reason: "The original cursor changed.")
+        }
+        guard beginDelivery?() != false else { return .unsupported }
+        // Persisting an attempted Undo is synchronous disk I/O; focus can move
+        // in another app during it. Keep the final AX check next to the write.
+        guard readyToDispatch(into: target, requiresKnownSelection: requiresKnownSelection) else {
+            return .uncertain(reason: "The original cursor changed.")
+        }
         let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString)
         switch result {
         case .success: return .acknowledged
@@ -308,7 +359,8 @@ final class TextInserter {
         }
     }
 
-    private static func postPaste(into target: InsertionTarget, canDispatch: () -> Bool) -> PasteDispatch {
+    private static func postPaste(into target: InsertionTarget, requiresKnownSelection: Bool,
+                                  canDispatch: () -> Bool, beginDelivery: (() -> Bool)?) -> PasteDispatch {
         guard !Task.isCancelled, AXIsProcessTrusted(), !target.application.isTerminated else {
             return .blocked(reason: "Insertion was interrupted.")
         }
@@ -316,7 +368,8 @@ final class TextInserter {
             switch command.invoke(canDispatch: {
                 // Menu readiness reads can take time. Check the field first,
                 // then the clipboard lease immediately before the action.
-                readyToDispatch(into: target) && canDispatch()
+                readyToDispatch(into: target, requiresKnownSelection: requiresKnownSelection) && canDispatch() &&
+                    beginDelivery?() != false && readyToDispatch(into: target, requiresKnownSelection: requiresKnownSelection) && canDispatch()
             }) {
             case .dispatched: return .sent
             case .blocked: return .blocked(reason: "The app's Paste command could not be invoked safely.")
@@ -332,7 +385,8 @@ final class TextInserter {
         }
         down.flags = .maskCommand
         up.flags = .maskCommand
-        guard CGPreflightPostEventAccess(), readyToDispatch(into: target), canDispatch() else {
+        guard CGPreflightPostEventAccess(), readyToDispatch(into: target, requiresKnownSelection: requiresKnownSelection), canDispatch(), beginDelivery?() != false,
+              readyToDispatch(into: target, requiresKnownSelection: requiresKnownSelection), canDispatch() else {
             return .blocked(reason: "Focus, cursor, clipboard, or input access changed before pasting.")
         }
         down.postToPid(target.processIdentifier)
@@ -340,9 +394,10 @@ final class TextInserter {
         return .sent
     }
 
-    private static func readyToDispatch(into target: InsertionTarget) -> Bool {
+    private static func readyToDispatch(into target: InsertionTarget, requiresKnownSelection: Bool) -> Bool {
         guard !Task.isCancelled, AXIsProcessTrusted(), !target.application.isTerminated,
               case .valid(let selection) = probeField(target.snapshot.focus),
+              (!requiresKnownSelection || target.selection != nil),
               target.selection == nil || selection == target.selection else { return false }
         // Recheck cheap local guards after the potentially slow AX queries.
         return !Task.isCancelled && AXIsProcessTrusted() && !target.application.isTerminated && !modifiersAreHeld
