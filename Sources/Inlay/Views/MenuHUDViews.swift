@@ -87,6 +87,7 @@ extension DictationDeliveryStatus {
     var hudSymbol: String {
         switch self {
         case .none: "mic.slash"
+        case .kept: "clock.arrow.circlepath"
         case .inserted: "checkmark"
         case .copied: "doc.on.clipboard"
         case .tested: "waveform"
@@ -99,6 +100,7 @@ extension DictationDeliveryStatus {
     var hudLabel: String {
         switch self {
         case .none: "No speech detected"
+        case .kept: "Saved to history"
         case .inserted: "Pasted at your cursor"
         case .copied: "Copied to clipboard"
         case .tested: "Microphone test complete"
@@ -126,12 +128,26 @@ struct DictationHUD: View {
         VStack(spacing: 0) {
             capsule
                 .frame(width: Self.width, height: Self.height)
-            RecordingLimitNote(feedback: controller.recordingFeedback)
-                .frame(width: Self.width, height: Self.noticeHeight)
+            ZStack {
+                RecordingLimitNote(feedback: controller.recordingFeedback)
+                    .opacity(controller.pendingPersistenceError == nil ? 1 : 0)
+                if let error = controller.pendingPersistenceError {
+                    Text("Recovery could not be saved")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(InlayPalette.warning)
+                        .help(error)
+                        .accessibilityLabel(error)
+                }
+            }
+            .frame(width: Self.width, height: Self.noticeHeight)
         }
         .task(id: presentation.id) { await enter() }
+        .onChange(of: controller.isUndoPending) { _, pending in
+            guard presentation.id != nil, pending else { return }
+            withAnimation(morphAnimation) { expanded = true }
+        }
         .onChange(of: controller.activity) { _, activity in
-            guard presentation.id != nil, !activity.isBusy, !controller.attentionPresented else { return }
+            guard presentation.id != nil, !activity.isBusy, !controller.attentionPresented, !controller.isUndoPending else { return }
             withAnimation(morphAnimation) { expanded = false }
         }
         .onChange(of: controller.attentionPresented) { _, presented in
@@ -154,7 +170,7 @@ struct DictationHUD: View {
         guard presentation.id != nil else { return }
         if reduceMotion {
             entered = true
-            expanded = controller.activity.isBusy || controller.attentionPresented
+            expanded = controller.activity.isBusy || controller.attentionPresented || controller.isUndoPending
             return
         }
         await Task.yield()
@@ -163,7 +179,7 @@ struct DictationHUD: View {
         // This only stages the visual; microphone startup never waits for it.
         do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
         guard !Task.isCancelled, presentation.id != nil else { return }
-        withAnimation(morphAnimation) { expanded = controller.activity.isBusy || controller.attentionPresented }
+        withAnimation(morphAnimation) { expanded = controller.activity.isBusy || controller.attentionPresented || controller.isUndoPending }
     }
 
     private var capsule: some View {
@@ -200,7 +216,7 @@ struct DictationHUD: View {
             if controller.canCancelWithEscape { controller.cancelDictation() }
             else if !controller.isBusy { controller.dismissFeedback() }
         }
-        .help(controller.errorMessage ?? hudLabel)
+        .help(controller.pendingPersistenceError ?? controller.errorMessage ?? hudLabel)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(InlayBuild.current.displayName) dictation")
         .accessibilityValue(controller.errorMessage ?? hudLabel)
@@ -210,7 +226,9 @@ struct DictationHUD: View {
     private var expandedContent: some View {
         HStack(spacing: 10) {
             DevBadge()
-            if controller.attentionPresented, !controller.isBusy {
+            if let deadline = controller.undoDeadline {
+                undoContent(deadline: deadline)
+            } else if controller.attentionPresented, !controller.isBusy {
                 attentionContent
             } else {
             HStack(spacing: 8) {
@@ -239,6 +257,33 @@ struct DictationHUD: View {
             }
         }
         .padding(.horizontal, 12)
+    }
+
+    private func undoContent(deadline: Date) -> some View {
+        HStack(spacing: 8) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text("\(max(0, Int(ceil(deadline.timeIntervalSince(context.date)))))")
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
+            }
+            Button("Undo cancel") { controller.undoCancellation() }
+                .font(.caption.weight(.medium))
+                .buttonStyle(.plain)
+                .lineLimit(1)
+                .accessibilityHint("Finish the captured portion at the original cursor if it can still be verified. Does not restart the microphone.")
+                .accessibilityIdentifier("hud.undo-cancel")
+            Spacer(minLength: 0)
+            Button { controller.keepCancelledTake() } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    .frame(width: 22, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Keep in History without pasting")
+            .accessibilityLabel("Keep in History without pasting")
+            .accessibilityIdentifier("hud.keep-cancelled")
+        }
     }
 
     private var attentionContent: some View {
@@ -298,7 +343,8 @@ struct DictationHUD: View {
     }
 
     private var hudLabel: String {
-        switch controller.activity {
+        if controller.isUndoPending { return "Undo cancel · Saving to history without pasting" }
+        return switch controller.activity {
         case .idle: "Ready"
         case .starting: "Starting microphone"
         case .recording: "Listening"

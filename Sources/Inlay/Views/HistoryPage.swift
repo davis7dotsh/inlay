@@ -50,7 +50,7 @@ struct HistoryPage: View {
             }
             VStack(spacing: 4) {
                 ServerConnectionStatus(controller: controller)
-                InlayActionMessage(message: controller.errorMessage)
+                InlayActionMessage(message: controller.pendingPersistenceError ?? controller.errorMessage)
             }
 
             HSplitView {
@@ -132,6 +132,8 @@ struct HistoryPage: View {
                         } else if generation.status != .completed {
                             Image(systemName: "clock")
                                 .foregroundStyle(InlayPalette.warning)
+                        } else if let label = controller.pendingHistoryLabel(generation.id) {
+                            Text(label).font(.caption).foregroundStyle(InlayPalette.muted)
                         }
                     }
                     Text(summary(generation))
@@ -183,7 +185,10 @@ struct HistoryPage: View {
                 HStack(spacing: 12) {
                     Label(sourceLabel(selected),
                           systemImage: selected.importedSource == nil ? "laptopcomputer" : "square.and.arrow.down")
-                    if selected.importedSource == nil { Text(statusLabel(selected.status)) }
+                    if selected.importedSource == nil {
+                        Text(statusLabel(selected.status))
+                        if let label = deliveryLabel(selected.delivery, id: selected.id) { Text(label) }
+                    }
                     if let sourceStatus = selected.importedSource?.sourceStatus, !sourceStatus.isEmpty {
                         Text("Flow status: \(sourceStatus)")
                     }
@@ -329,9 +334,15 @@ struct HistoryPage: View {
     }
 
     private func accessibilityText(_ generation: GenerationSummary) -> String {
-        let base = "\(sourceLabel(generation)), \(summary(generation))"
+        let base = [controller.pendingHistoryLabel(generation.id), sourceLabel(generation), summary(generation)]
+            .compactMap { $0 }.joined(separator: ", ")
         return generation.status == .failed || generation.status == .cancelled
             ? "\(statusLabel(generation.status)), \(base)" : base
+    }
+
+    private func deliveryLabel(_ receipt: DeliveryReceipt?, id: UUID) -> String? {
+        if receipt?.status == "cancelled" { return "Not pasted" }
+        return receipt == nil ? controller.pendingHistoryLabel(id) : nil
     }
 
     private func statusLabel(_ status: GenerationStatus) -> String {
