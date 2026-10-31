@@ -16,14 +16,19 @@ final class UpdateChecker: ObservableObject {
     private struct Release: Decodable {
         let tagName: String
         let htmlURL: URL
+        let draft: Bool
+        let prerelease: Bool
 
         enum CodingKeys: String, CodingKey {
             case tagName = "tag_name"
             case htmlURL = "html_url"
+            case draft, prerelease
         }
     }
 
-    private static let latestRelease = URL(string: "https://api.github.com/repos/davis7dotsh/inlay/releases/latest")!
+    // Server releases (server-v*) share this repository, so pick the newest
+    // app release from the list instead of trusting releases/latest.
+    private static let releases = URL(string: "https://api.github.com/repos/davis7dotsh/inlay/releases?per_page=100")!
 
     @Published private(set) var state: State = .idle
     let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
@@ -45,19 +50,21 @@ final class UpdateChecker: ObservableObject {
     }
 
     private func latestState() async throws -> State {
-        var request = URLRequest(url: Self.latestRelease)
+        var request = URLRequest(url: Self.releases)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        // GitHub answers 404 until the first non-prerelease is published.
-        if status == 404 { return .noRelease }
         guard status == 200 else { return .failed("GitHub didn’t answer the update check (HTTP \(status)). Try again later.") }
-        let release = try JSONDecoder().decode(Release.self, from: data)
-        guard let latest = Self.components(release.tagName), release.htmlURL.host == "github.com" else {
-            return .failed("The latest release (\(release.tagName)) has no version Inlay can compare.")
+        let appReleases = try JSONDecoder().decode([Release].self, from: data).compactMap { release in
+            !release.draft && !release.prerelease && release.htmlURL.host == "github.com"
+                ? Self.components(release.tagName).map { (version: $0, page: release.htmlURL) } : nil
         }
-        if let current = Self.components(currentVersion), !current.lexicographicallyPrecedes(latest) { return .current }
-        return .available(version: latest.map(String.init).joined(separator: "."), page: release.htmlURL)
+        guard let latest = appReleases.max(by: { $0.version.lexicographicallyPrecedes($1.version) }) else { return .noRelease }
+        guard let current = Self.components(currentVersion) else {
+            return .failed("This build has no version Inlay can compare.")
+        }
+        if !current.lexicographicallyPrecedes(latest.version) { return .current }
+        return .available(version: latest.version.map(String.init).joined(separator: "."), page: latest.page)
     }
 
     /// "v1.2.0", "client-v1.2", or "1.2.0" → [1, 2, 0], padded to three parts
