@@ -292,8 +292,27 @@ jobs:
             exit 1
           fi
           assets=(release-artifacts/*)
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          want_draft=false
+          if [[ "$DRAFT" == true ]]; then want_draft=true; fi
+          if release_is_draft=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft --jq .isDraft 2>/dev/null); then
+            if [[ "$release_is_draft" != true && "$release_is_draft" != false ]]; then
+              echo "::error::Could not read whether $GITHUB_REF_NAME is a draft."
+              exit 1
+            fi
+            echo "Existing release $GITHUB_REF_NAME is draft=$release_is_draft; requested draft=$want_draft."
+            # A draft rerun must not replace assets while the release is public.
+            # Flip to draft first, upload, and publish only after the new files are in place.
+            if [[ "$want_draft" == true && "$release_is_draft" != true ]]; then
+              gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=true
+            fi
             gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+            if [[ "$want_draft" != true && "$release_is_draft" == true ]]; then
+              publish_flags=(--draft=false)
+              # Publishing a prerelease draft tries to mark it latest and the API rejects that.
+              if [[ "$GITHUB_REF_NAME" == *-* ]]; then publish_flags+=(--latest=false); fi
+              gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${publish_flags[@]}"
+            fi
             exit 0
           fi
           flags=()
