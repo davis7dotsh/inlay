@@ -15,42 +15,65 @@ namespace Inlay.Windows;
 // never request names, values, document text, or change focus/selection/clipboard.
 internal static class AccessibleDelivery
 {
-    internal readonly record struct NativeCaret(nint Owner, int Left, int Top, int Right, int Bottom);
-    internal sealed record Window(nint Frame, nint Focus, uint Thread, uint Process, NativeCaret Caret);
-    internal sealed class Target(Window window, long epoch, nint host, int[] id, TextPatternRange caret)
+    internal sealed record Window(nint Frame, nint Focus, uint Thread, uint Process);
+    internal sealed class Watch(Window window)
     {
         internal readonly Window Window = window;
-        internal readonly long Epoch = epoch;
-        internal readonly nint Host = host;
-        internal readonly int[] Id = id;
-        internal readonly TextPatternRange Caret = caret;
+        private int[]? field;
+        private string? failure;
+        internal string? Failure => Volatile.Read(ref failure);
+        internal void Reject(string reason) => Interlocked.CompareExchange(ref failure, reason, null);
+        internal void Observe(int[]? id)
+        {
+            if (id is not { Length: > 0 }) { Reject("Field focus could not be identified."); return; }
+            var first = Interlocked.CompareExchange(ref field, id, null);
+            if (first != null && !first.AsSpan().SequenceEqual(id)) Reject("Focus left the original field.");
+        }
+    }
+    internal sealed record Target(Watch Watch, nint Host, TextPatternRange Caret, int? Offset)
+    {
         internal int Used;
     }
+    internal sealed record Probe(Target? Target, string? Reason);
+    private static Watch? active;
+    internal static void Forget() => Interlocked.Exchange(ref active, null)?.Reject("This take ended.");
 
-    internal static async Task<Target?> CaptureAsync(CancellationToken ct)
+    internal static async Task<Probe> CaptureAsync(CancellationToken ct)
     {
-        long stamp = Interlocked.Increment(ref epoch); // another take invalidates outstanding tokens
         ct.ThrowIfCancellationRequested();
-        if (!WatchWindows() || Focus() is not { } window) return null;
-        var target = await ProbeAsync(window, stamp, null, ct).ConfigureAwait(false);
-        return target != null && Current(stamp) && Focus() == window ? target : null;
+        if (!WatchWindows() || Focus() is not { } window || TextDelivery.PressWindows != (window.Frame, window.Focus))
+            return new(null, "Could not identify the editor at shortcut press.");
+        var watch = new Watch(window);
+        Interlocked.Exchange(ref active, watch)?.Reject("A newer take started.");
+        return await ProbeAsync(watch, null, ct).ConfigureAwait(false);
     }
 
-    internal static async Task<TextDelivery.Result> InsertAsync(Target? target, string text, CancellationToken ct)
+    internal static async Task<TextDelivery.Result> InsertAsync(Probe captured, string text, CancellationToken ct)
     {
-        if (target == null || Interlocked.Exchange(ref target.Used, 1) != 0)
-            return Preview("No unused, verified editable caret.");
+        if (captured.Target is not { } target) return Preview(captured.Reason ?? "No verified editable caret.");
+        if (Interlocked.Exchange(ref target.Used, 1) != 0) return Preview("This destination was already used.");
         ct.ThrowIfCancellationRequested();
         var input = UnicodeInput(text);
         if (input == null) return Preview("Text is empty, too long, or contains unsupported characters.");
-        if (!Current(target.Epoch) || Focus() != target.Window || ShortcutHeld() || LastInput() is not uint inputTime)
-            return Preview("Focus, desktop or keyboard state changed.");
-
-        var verified = await ProbeAsync(target.Window, target.Epoch, target, ct).ConfigureAwait(false);
-        // A click/key during the COM probe can move a virtual caret without
-        // changing HWNDs or generating a timely accessibility notification.
-        if (verified == null || Focus() != target.Window || LastInput() != inputTime || !Current(target.Epoch) || ShortcutHeld())
-            return Preview("Could not verify the original writable field and caret.");
+        var watch = target.Watch;
+        // LastInput also advances for a harmless mouse move. In that case allow
+        // one fresh, read-only verification; never retry a write or a mismatched field.
+        for (int attempt = 0; ; attempt++)
+        {
+            if (watch.Failure is { } changed) return Preview(changed);
+            if (Focus() != watch.Window) return Preview("The foreground editor changed.");
+            if (TextDelivery.ShortcutHeld()) return Preview("A shortcut modifier is still held.");
+            // Chromium exposes its accessibility tree asynchronously. Give a recent
+            // click or key-up time to reach it before trusting its view of focus.
+            if (await QuietInputAsync(ct).ConfigureAwait(false) is not uint before)
+                return Preview("Keyboard or mouse input is still changing.");
+            var verified = await ProbeAsync(watch, target, ct).ConfigureAwait(false);
+            if (verified.Target == null) return Preview(verified.Reason ?? "The editor could not verify its caret.");
+            if (Focus() != watch.Window || TextDelivery.ShortcutHeld() || watch.Failure != null)
+                return Preview(watch.Failure ?? "The foreground editor or keyboard state changed during verification.");
+            if (LastInput() == before) break;
+            if (attempt != 0) return Preview("Keyboard or mouse input continued during verification.");
+        }
         ct.ThrowIfCancellationRequested();
 
         // SendInput targets the foreground queue, not an HWND. One bounded batch
@@ -65,8 +88,6 @@ internal static class AccessibleDelivery
     }
 
     private static TextDelivery.Result Preview(string reason) => new("failed", reason + " Text is available in preview.");
-    private static long epoch;
-    private static bool Current(long stamp) => stamp == Interlocked.Read(ref epoch);
     private static int probing;
     private static bool watchingUia;
 
@@ -74,52 +95,64 @@ internal static class AccessibleDelivery
     // thread pool's MTA, never the dispatcher/keyboard hook or a lock around COM.
     // If a provider hangs, callers time out and new probes fail closed rather than
     // leaking workers. An abandoned probe has no text and no path to SendInput.
-    private static async Task<Target?> ProbeAsync(Window window, long stamp, Target? expected, CancellationToken ct)
+    private static async Task<Probe> ProbeAsync(Watch watch, Target? expected, CancellationToken ct)
     {
-        if (Interlocked.CompareExchange(ref probing, 1, 0) != 0) return null;
+        if (Interlocked.CompareExchange(ref probing, 1, 0) != 0) return new(null, "The accessibility provider is still busy.");
         var read = Task.Run(() =>
         {
             try
             {
-                if (ct.IsCancellationRequested || !Current(stamp) || !AllowedProcess(window.Process)) return null;
+                ct.ThrowIfCancellationRequested();
+                if (!AllowedProcess(watch.Window.Process)) return new Probe(null, "The editor is elevated or inaccessible.");
                 if (!watchingUia)
                 {
-                    // One process-lifetime subscription, not one per take. Never call
-                    // back into UIA from a focus notification, or retain its sender.
-                    Automation.AddAutomationFocusChangedEventHandler((_, _) => Interlocked.Increment(ref epoch));
+                    var cache = new CacheRequest { AutomationElementMode = AutomationElementMode.None };
+                    cache.Add(AutomationElement.RuntimeIdProperty);
+                    using (cache.Activate()) Automation.AddAutomationFocusChangedEventHandler(FieldFocused);
                     watchingUia = true;
                 }
-                return ReadField(window, stamp, expected);
+                return ReadField(watch, expected);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException && ex is not AccessViolationException)
-            { return null; } // disappearing elements, disabled accessibility, COM/provider failures
+            { return new Probe(null, "The accessibility provider could not read the field."); }
             finally { Volatile.Write(ref probing, 0); }
         });
         try { return await read.WaitAsync(TimeSpan.FromMilliseconds(1500), ct).ConfigureAwait(false); }
-        catch (TimeoutException) { return null; }
+        catch (TimeoutException) { return new(null, "The accessibility provider took too long."); }
     }
 
-    private static Target? ReadField(Window window, long stamp, Target? expected)
+    // Chromium can re-announce the very same focused editor on modifier release.
+    // Only compare cached runtime IDs here: no COM round trips in an event handler.
+    private static void FieldFocused(object sender, AutomationFocusChangedEventArgs args)
     {
-        if (!Current(stamp) || Focus() != window) return null;
+        if (Volatile.Read(ref active) is not { } watch) return;
+        try { watch.Observe((sender as AutomationElement)?.GetCachedPropertyValue(AutomationElement.RuntimeIdProperty, true) as int[]); }
+        catch (InvalidOperationException) { watch.Reject("Field focus could not be identified."); }
+    }
+
+    private static Probe ReadField(Watch watch, Target? expected)
+    {
+        var window = watch.Window;
+        if (watch.Failure != null || Focus() != window) return new(null, watch.Failure ?? "The foreground editor changed.");
         var field = AutomationElement.FocusedElement;
         if (field == null || field.Current.ProcessId != window.Process || field.Current.ControlType != ControlType.Edit ||
-            field.Current.FrameworkId is not ("Chrome" or "Gecko" or "WPF")) return null;
+            field.Current.FrameworkId is not ("Chrome" or "Gecko" or "WPF")) return new(null, "The focused control is not a supported editor.");
         // The normal UIA defaults (e.g. IsPassword=false) aren't provider evidence.
         object Property(AutomationProperty p) => field.GetCurrentPropertyValue(p, ignoreDefaultValue: true);
         if (Property(AutomationElement.IsPasswordProperty) is not false ||
             Property(AutomationElement.IsOffscreenProperty) is not false ||
             Property(AutomationElement.IsEnabledProperty) is not true ||
             Property(AutomationElement.HasKeyboardFocusProperty) is not true ||
-            field.Current.BoundingRectangle is not { Width: > 0, Height: > 0 }) return null;
+            field.Current.BoundingRectangle is not { Width: > 0, Height: > 0 }) return new(null, "The field is protected, hidden or inactive.");
 
-        int[] id = field.GetRuntimeId();
+        watch.Observe(field.GetRuntimeId());
+        if (watch.Failure is { } failure) return new(null, failure);
         nint host = Host(field, window);
-        if (id.Length == 0 || host == 0 || (expected != null && (host != expected.Host || !id.AsSpan().SequenceEqual(expected.Id)))) return null;
+        if (host == 0 || (expected != null && host != expected.Host)) return new(null, "The field's editor host changed or could not be verified.");
         if (!field.TryGetCurrentPattern(TextPattern.Pattern, out var pattern) || pattern is not TextPattern text ||
-            text.SupportedTextSelection == SupportedTextSelection.None) return null;
+            text.SupportedTextSelection == SupportedTextSelection.None) return new(null, "The field does not expose a text selection.");
         var caret = CollapsedCaret(text);
-        if (caret == null || (expected != null && !caret.Compare(expected.Caret))) return null;
+        if (caret == null) return new(null, "The field does not have a single insertion point.");
 
         // Require positive writability evidence. A provider may omit the range
         // attribute for a plain Edit, but an explicit mixed/readonly run always wins.
@@ -127,9 +160,69 @@ internal static class AccessibleDelivery
         object valueReadOnly = Property(ValuePattern.IsReadOnlyProperty);
         object hidden = caret.GetAttributeValue(TextPattern.IsHiddenAttribute);
         if (valueReadOnly is true || (readOnly is not false && !(readOnly == AutomationElement.NotSupported && valueReadOnly is false)) ||
-            (hidden is not false && hidden != AutomationElement.NotSupported)) return null;
-        return Current(stamp) && Automation.Compare(field, AutomationElement.FocusedElement) &&
-            CollapsedCaret(text) is { } now && now.Compare(caret) ? new(window, stamp, host, id, now) : null;
+            (hidden is not false && hidden != AutomationElement.NotSupported)) return new(null, "The caret is not visibly writable.");
+
+        // Chromium may recreate the AX text leaf for a contenteditable (Codex) or
+        // browser input (Helium) without replacing the field or moving the caret.
+        // Prefer a field-relative character offset to a live range the renderer can
+        // invalidate. Never read editor text to calculate it.
+        int? offset = expected?.Offset;
+        if (expected == null && field.Current.FrameworkId == "Chrome") offset = Offset(text, caret);
+        if (expected != null && !(offset is int saved ? AtOffset(text, caret, saved) : caret.Compare(expected.Caret)))
+            return new(null, "The insertion point moved.");
+        if (watch.Failure != null || Focus() != window || !Automation.Compare(field, AutomationElement.FocusedElement) ||
+            CollapsedCaret(text) is not { } now || !now.Compare(caret)) return new(null, watch.Failure ?? "The field or caret changed during verification.");
+        return new(new(watch, host, now, offset), null);
+    }
+
+    private static bool AtOffset(TextPattern field, TextPatternRange caret, int offset)
+    {
+        var prefix = field.DocumentRange;
+        var start = TextPatternRangeEndpoint.Start;
+        var end = TextPatternRangeEndpoint.End;
+        // Some browser providers allow ranges to leave their owning control.
+        // A field that shrank must not validate an offset in the surrounding page.
+        if (prefix.CompareEndpoints(end, caret, start) < 0) return false;
+        if (offset == 0) return prefix.CompareEndpoints(start, caret, start) == 0;
+        prefix.MoveEndpointByRange(end, prefix, start);
+        return prefix.MoveEndpointByUnit(end, TextUnit.Character, offset) == offset && prefix.CompareEndpoints(end, caret, start) == 0;
+    }
+
+    private static int? Offset(TextPattern field, TextPatternRange caret)
+    {
+        // Chromium lets a range move beyond its owning input into other page text.
+        // Start at the *field's* beginning and count a bounded number of units toward
+        // the selection. Cloning and moving range endpoints never moves the real caret.
+        const int limit = 8192;
+        var start = TextPatternRangeEndpoint.Start;
+        var end = TextPatternRangeEndpoint.End;
+        try
+        {
+            var prefix = field.DocumentRange;
+            int cmp = prefix.CompareEndpoints(start, caret, start);
+            if (cmp == 0) return 0;
+            if (cmp > 0 || prefix.CompareEndpoints(end, caret, start) < 0) return null;
+            prefix.MoveEndpointByRange(end, prefix, start);
+            int offset = 0, step = 16;
+            bool bracketed = false;
+            long started = Environment.TickCount64;
+            while (step > 0 && Environment.TickCount64 - started < 300)
+            {
+                var next = prefix.Clone();
+                int moved = next.MoveEndpointByUnit(end, TextUnit.Character, step);
+                if (moved <= 0 || moved > step) break;
+                cmp = next.CompareEndpoints(end, caret, start);
+                if (cmp == 0) return offset + moved;
+                if (cmp > 0) { bracketed = true; step /= 2; continue; }
+                prefix = next;
+                offset += moved;
+                if (moved < step) break;
+                step = Math.Min(bracketed ? step / 2 : step * 2, limit - offset);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or ArgumentException or COMException)
+        { /* Optional provider capability. Keep strict range comparison when unavailable. */ }
+        return null;
     }
 
     private static TextPatternRange? CollapsedCaret(TextPattern text) => text.GetSelection() is [var r] &&
@@ -163,37 +256,37 @@ internal static class AccessibleDelivery
             (info.Focus != frame && !IsChild(frame, info.Focus)) || GetWindowThreadProcessId(info.Focus, out uint focusPid) != thread ||
             focusPid != pid || !IsWindowVisible(info.Focus) || !IsWindowEnabled(frame) || !IsWindowEnabled(info.Focus) ||
             GetForegroundWindow() != frame) return null;
-        return new(frame, info.Focus, thread, pid, info.Caret == 0 ? default :
-            new(info.Caret, info.Left, info.Top, info.Right, info.Bottom));
+        return new(frame, info.Focus, thread, pid);
     }
 
     // Endpoint equality misses leaving and returning. Observe desktop/foreground
-    // and native focus from the start of capture, plus virtual focus via UIA. OS
+    // changes from the start of capture, plus the actual field identity via UIA. OS
     // notifications are asynchronous; this is a guard, not a focus reservation.
     private static Dispatcher? owner;
-    private static nint systemHook, focusHook;
-    private static readonly EventProc changed = (_, kind, _, _, _, _, _) =>
+    private static nint foregroundHook, desktopHook;
+    private static readonly EventProc changed = (_, kind, hwnd, _, _, _, _) =>
     {
-        if (kind is 3 or 0x20 or 0x8005) Interlocked.Increment(ref epoch);
+        if (Volatile.Read(ref active) is not { } watch) return;
+        if (kind == 0x20 || hwnd != watch.Window.Frame) watch.Reject("Focus left the original window or desktop.");
     };
     private static bool WatchWindows()
     {
         var ui = Dispatcher.FromThread(Thread.CurrentThread);
         if (ui == null || ui.HasShutdownStarted) return false;
         if (owner != null) return ui == owner;
-        systemHook = SetWinEventHook(3, 0x20, 0, changed, 0, 0, 0); // FOREGROUND through DESKTOPSWITCH
-        focusHook = SetWinEventHook(0x8005, 0x8005, 0, changed, 0, 0, 0); // OBJECT_FOCUS
-        if (systemHook == 0 || focusHook == 0) { StopWatching(); return false; }
+        foregroundHook = SetWinEventHook(3, 3, 0, changed, 0, 0, 0);
+        desktopHook = SetWinEventHook(0x20, 0x20, 0, changed, 0, 0, 0);
+        if (foregroundHook == 0 || desktopHook == 0) { StopWatching(); return false; }
         owner = ui;
         ui.ShutdownStarted += (_, _) => StopWatching();
         return true;
     }
     private static void StopWatching()
     {
-        Interlocked.Increment(ref epoch);
-        if (focusHook != 0) UnhookWinEvent(focusHook);
-        if (systemHook != 0) UnhookWinEvent(systemHook);
-        focusHook = systemHook = 0;
+        Forget();
+        if (desktopHook != 0) UnhookWinEvent(desktopHook);
+        if (foregroundHook != 0) UnhookWinEvent(foregroundHook);
+        desktopHook = foregroundHook = 0;
         owner = null;
     }
 
@@ -234,13 +327,23 @@ internal static class AccessibleDelivery
     }
 
     [StructLayout(LayoutKind.Sequential)] private struct LastInputInfo { public uint Size, Time; }
+    private static async Task<uint?> QuietInputAsync(CancellationToken ct)
+    {
+        const uint settleMs = 200;
+        for (int retries = 0; LastInput() is uint last; retries++)
+        {
+            uint age = unchecked((uint)Environment.TickCount - last);
+            if (age >= settleMs) return last;
+            if (retries == 3) break;
+            await Task.Delay((int)(settleMs - age), ct).ConfigureAwait(false);
+        }
+        return null;
+    }
     private static uint? LastInput()
     {
         var info = new LastInputInfo { Size = (uint)Marshal.SizeOf<LastInputInfo>() };
         return GetLastInputInfo(ref info) ? info.Time : null;
     }
-    private static bool ShortcutHeld() => GetAsyncKeyState(0x10) < 0 || GetAsyncKeyState(0x11) < 0 ||
-        GetAsyncKeyState(0x12) < 0 || GetAsyncKeyState(0x5B) < 0 || GetAsyncKeyState(0x5C) < 0;
 
     private static Input[]? UnicodeInput(string text)
     {
@@ -285,7 +388,6 @@ internal static class AccessibleDelivery
     [DllImport("user32")] private static extern bool CloseDesktop(nint desktop);
     [DllImport("user32", CharSet = CharSet.Unicode, ExactSpelling = true)] private static extern bool GetUserObjectInformationW(nint desktop, int index, StringBuilder name, uint bytes, out uint needed);
     [DllImport("user32")] private static extern bool GetLastInputInfo(ref LastInputInfo info);
-    [DllImport("user32")] private static extern short GetAsyncKeyState(int key);
     [DllImport("user32")] private static extern uint SendInput(uint count, Input[] input, int size);
     [DllImport("kernel32")] private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("advapi32")] private static extern bool OpenProcessToken(SafeProcessHandle process, uint access, out SafeAccessTokenHandle token);

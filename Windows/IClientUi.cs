@@ -24,6 +24,7 @@ internal interface IClientUi
 
 internal enum UiActivity { Idle, Starting, Recording, Processing }
 internal sealed record UiInput(string Id, string Name);
+internal sealed record UiTestResult(string Message, string Transcript);
 internal sealed record UiHistoryEntry(string Id, DateTimeOffset CreatedAt, string Device, string Status, string Preview);
 internal sealed record UiHistoryPage(IReadOnlyList<UiHistoryEntry> Items, string? NextCursor);
 internal sealed record UiPreferences(long Revision, string Language, bool Proofread, string Prompt, string Vocabulary);
@@ -36,6 +37,8 @@ internal sealed record ClientUiState
     public string ServerStatus { get; init; } = "Not connected";
     public bool ServerReady { get; init; }
     public bool CanTest { get; init; }
+    public bool IsTesting { get; init; }
+    public UiTestResult? TestResult { get; init; }
     public UiActivity Activity { get; init; }
     public string ActivityText { get; init; } = "";
     public string Transcript { get; init; } = "";

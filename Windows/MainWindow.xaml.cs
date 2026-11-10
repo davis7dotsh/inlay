@@ -99,32 +99,34 @@ internal partial class MainWindow : Window
         var state = app.State;
         var busy = state.Activity != UiActivity.Idle;
         var listening = state.Activity == UiActivity.Recording;
+        var dictating = busy && !state.IsTesting;
         rendering = true;
         try
         {
             if (previous != null && (state.Endpoint != previous.Endpoint || state.DeviceName != previous.DeviceName))
                 ResetSharedPages();
             if (previous?.KeyLabel != state.KeyLabel || previous?.Activity != state.Activity)
-                SetKeyCaps(state.KeyLabel, listening);
+                SetKeyCaps(state.KeyLabel, dictating && listening);
             SideStatus.ToolTip = SideStatus.Text = MainStatus.Text = state.ServerStatus;
             MainStatus.ToolTip = state.Endpoint;
             string dot = state.ServerReady ? "Success" : "Warning";
             SideDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, dot);
             MainDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, dot);
             DictationHeading.Text = state.HoldToTalk ? "Hold to dictate." : "Tap to dictate.";
-            TranscriptHeading.Text = busy ? "Current dictation" : "Last dictation";
+            TranscriptHeading.Text = dictating ? "Current dictation" : "Last dictation";
             if (Transcript.Text != state.Transcript) Transcript.Text = state.Transcript;
-            CopyLast.IsEnabled = !busy && !string.IsNullOrWhiteSpace(state.Transcript);
-            Transcript.Visibility = Visible(!busy);
-            TranscriptPlaceholder.Visibility = Visible(!busy && state.Transcript.Length == 0);
-            LivePanel.Visibility = Visible(busy);
+            CopyLast.IsEnabled = !dictating && !string.IsNullOrWhiteSpace(state.Transcript);
+            Transcript.Visibility = Visible(!dictating);
+            TranscriptPlaceholder.Visibility = Visible(!dictating && state.Transcript.Length == 0);
+            LivePanel.Visibility = Visible(dictating);
             LiveStatus.Text = state.ActivityText;
             LiveDetail.Text = listening ? $"{Duration(state.Elapsed)}   ·   {state.InputName}" : state.InputName;
             if (previous == null || state.Delivery != previous.Delivery || state.Activity != previous.Activity)
                 DeliveryMessage.Text = state.Delivery;
-            string test = !listening ? "Test microphone" : state.CanTest ? "Finish dictation" : "Release keys to finish";
+            bool activeTest = state.IsTesting && state.TestResult == null;
+            string test = activeTest ? (listening ? "Finish test" : "Cancel test") : listening ? "Release keys to finish" : "Test microphone";
             DictateTest.Content = MicrophoneTest.Content = test;
-            DictateTest.IsEnabled = MicrophoneTest.IsEnabled = state.CanTest && (!busy || listening);
+            DictateTest.IsEnabled = MicrophoneTest.IsEnabled = busy ? activeTest : state.CanTest;
             CheckConnection.IsEnabled = RefreshInputs.IsEnabled = !busy && !refreshing && !connecting;
             Connect.IsEnabled = !busy && !connecting;
             if (!choosingInput && !ReferenceEquals(InputPicker.ItemsSource, state.Inputs))
@@ -134,8 +136,14 @@ internal partial class MainWindow : Window
             ResolvedInput.Text = string.IsNullOrEmpty(state.InputName) ? "No input selected" : state.InputName;
             MicMeter.Value = listening && double.IsFinite(state.Level) ? Math.Clamp(state.Level, 0, 1) : 0;
             MicMeterLabel.Text = listening ? $"Input level   ·   {Duration(state.Elapsed)}" : "Input level";
-            if (previous == null || state.Activity != previous.Activity || state.Delivery != previous.Delivery || state.ActivityText != previous.ActivityText)
-                MicMessage.Text = busy ? state.ActivityText : state.Delivery;
+            if (previous == null || state.TestResult != previous.TestResult || state.IsTesting != previous.IsTesting ||
+                (state.IsTesting && state.ActivityText != previous.ActivityText))
+            {
+                MicMessage.Text = state.TestResult?.Message ?? (state.IsTesting ? state.ActivityText : "");
+                var text = state.TestResult?.Transcript ?? "";
+                if (MicTranscript.Text != text) MicTranscript.Text = text;
+                MicTranscript.Visibility = string.IsNullOrWhiteSpace(text) ? Visibility.Hidden : Visibility.Visible;
+            }
             if (previous == null || previous.ServerStatus != state.ServerStatus) DeviceMessage.Text = state.ServerStatus;
             DeviceKey.Text = state.KeyLabel;
             DeviceTrigger.Text = state.HoldToTalk ? "Hold to talk" : "Tap to toggle";
@@ -193,8 +201,13 @@ internal partial class MainWindow : Window
     }
     private async void TestClicked(object sender, RoutedEventArgs e)
     {
-        try { await app.ToggleTestAsync(); }
-        catch (Exception ex) { DeliveryMessage.Text = MicMessage.Text = ex.Message; }
+        if (sender == DictateTest) Navigation.SelectedIndex = 2;
+        try
+        {
+            if (app.State.IsTesting && app.State.Activity != UiActivity.Recording) await app.CancelAsync();
+            else await app.ToggleTestAsync();
+        }
+        catch (Exception ex) { MicMessage.Text = ex.Message; }
     }
     private async void CancelClicked(object sender, RoutedEventArgs e)
     {

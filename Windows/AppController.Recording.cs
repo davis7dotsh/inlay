@@ -39,15 +39,20 @@ internal sealed partial class AppController
         Task<GenerationRecord>? creating = null;
         bool submitted = false, announced = false;
         previewOnly = false;
+
+        void PublishResult(string message, string transcript) => Publish(test
+            ? State with { TestResult = new(message, transcript), ActivityText = "" }
+            : State with { Delivery = message, Transcript = transcript, ActivityText = "" });
+
         try
         {
             var destination = test ? null : TextDelivery.Capture();
-            var accessible = !test && destination == null && TextDelivery.AtPhysicalPress
-                ? AccessibleDelivery.CaptureAsync(ct) : Task.FromResult<AccessibleDelivery.Target?>(null);
+            var accessible = !test && destination == null ? AccessibleDelivery.CaptureAsync(ct) : null;
             // Let ordinary Win+Ctrl+<key> shortcuts pass without opening a mic or a server session.
             if (!test) await Task.Delay(160, ct);
             announced = true;
-            Publish(State with { Activity = UiActivity.Starting, ActivityText = "Starting microphone…", Delivery = "", Level = 0, Elapsed = TimeSpan.Zero });
+            Publish(State with { Activity = UiActivity.Starting, ActivityText = "Starting microphone…", IsTesting = test,
+                TestResult = test ? null : State.TestResult, Delivery = test ? State.Delivery : "", Level = 0, Elapsed = TimeSpan.Zero });
             MicrophoneResult frames;
             long releasedAt;
             // Begin local capture before waiting on the network. The bounded upload queue holds
@@ -79,10 +84,16 @@ internal sealed partial class AppController
             if (!completed.IsTerminal) completed = await conn.PollAsync(record.Id, ct);
             if (completed.Status != "completed") throw new InvalidOperationException(completed.Error ?? $"Recording {completed.Status}.");
             ct.ThrowIfCancellationRequested();
-            var transcript = string.IsNullOrEmpty(completed.PreviewText) ? completed.FinalText : completed.PreviewText;
+            var transcript = string.IsNullOrWhiteSpace(completed.PreviewText) ? completed.FinalText : completed.PreviewText;
             string receipt, message;
-            if (frames.Interrupted) (receipt, message) = (test ? "tested" : "failed", "The microphone dropped audio. Check the preview for missing words; nothing was inserted.");
-            else if (test) (receipt, message) = ("tested", "Microphone test complete. Nothing was inserted.");
+            if (test)
+            {
+                receipt = "tested";
+                message = frames.Interrupted ? "The microphone dropped audio. Try the test again."
+                    : string.IsNullOrWhiteSpace(transcript) ? "No speech detected."
+                    : "Microphone test complete.";
+            }
+            else if (frames.Interrupted) (receipt, message) = ("failed", "The microphone dropped audio. Check the preview for missing words; nothing was inserted.");
             else if (previewOnly || Environment.TickCount64 - releasedAt > 60_000) (receipt, message) = ("failed", "Saved to preview only. The shortcut was interrupted or the response arrived late.");
             else if (string.IsNullOrEmpty(completed.InsertionText)) (receipt, message) = ("failed", "No text to insert.");
             else
@@ -90,21 +101,27 @@ internal sealed partial class AppController
                 for (int wait = 0; wait < 20 && TextDelivery.ShortcutHeld(); wait++) await Task.Delay(50, ct);
                 ct.ThrowIfCancellationRequested();
                 var result = destination != null ? TextDelivery.Insert(destination, completed.InsertionText)
-                    : await AccessibleDelivery.InsertAsync(await accessible, completed.InsertionText, ct);
+                    : await AccessibleDelivery.InsertAsync(await accessible!, completed.InsertionText, ct);
                 (receipt, message) = (result.Status, result.Message);
             }
-            Publish(State with { Transcript = transcript, Delivery = message, ActivityText = "" });
+            PublishResult(message, transcript);
             if (!test && receipt != "inserted") Notice?.Invoke(receipt == "unconfirmed" ? "Check the destination before copying from Inlay." : "Open Inlay to copy your dictation.");
             using var reporting = new CancellationTokenSource(TimeSpan.FromSeconds(4));
             try { await conn.DeliveryAsync(record.Id, receipt, message, reporting.Token); }
             catch (Exception)
-            { Publish(State with { Delivery = message + " Delivery receipt wasn’t saved." }); }
+            { PublishResult(message + " Delivery receipt wasn’t saved.", transcript); }
         }
         catch (Exception ex)
         {
             var cancelled = ct.IsCancellationRequested;
-            if (announced || !cancelled) Publish(State with { Activity = UiActivity.Idle, Delivery = cancelled ? "Recording cancelled." : ex.Message, ActivityText = "" });
-            if (!cancelled) Notice?.Invoke("Dictation couldn’t finish. Open Inlay for details.");
+            var idle = State with { Activity = UiActivity.Idle, ActivityText = "", IsTesting = false };
+            if (test)
+            {
+                testing = false;
+                Publish(idle with { TestResult = new(cancelled ? "Microphone test cancelled." : $"Microphone test failed: {ex.Message}", "") });
+            }
+            else if (announced || !cancelled) Publish(idle with { Delivery = cancelled ? "Recording cancelled." : ex.Message });
+            if (!cancelled) Notice?.Invoke(test ? "Microphone test failed. Open Inlay for details." : "Dictation couldn’t finish. Open Inlay for details.");
             // A create request already on the wire can still commit after cancellation. Observe its
             // actual id before cancelling; never create a replacement or replay a sealed take.
             if (creating != null && (!submitted || cancelled))
@@ -122,12 +139,13 @@ internal sealed partial class AppController
         {
             ticket.TrySetCanceled();
             TextDelivery.Forget();
+            AccessibleDelivery.Forget();
             elapsed.Reset();
             Volatile.Write(ref peak, 0);
             release = null;
             take = null;
             testing = false;
-            Publish(State with { Activity = UiActivity.Idle, ActivityText = "", Elapsed = TimeSpan.Zero, Level = 0 });
+            Publish(State with { Activity = UiActivity.Idle, ActivityText = "", IsTesting = false, Elapsed = TimeSpan.Zero, Level = 0 });
         }
     }
 }

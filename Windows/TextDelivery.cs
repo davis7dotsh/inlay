@@ -100,7 +100,9 @@ internal static class TextDelivery
     }
 
     private static Result Preview(string reason) => new("failed", reason + " Text is available in preview.");
-    internal static bool AtPhysicalPress => pressPoint is { Frame: not 0 } point && Probe() == point;
+    // Guard the short handoff from the hook to the dispatcher. After it, a web
+    // editor's UIA selection (not the proxy caret's pixels) identifies the caret.
+    internal static (nint Frame, nint Edit) PressWindows => pressPoint is { } p && Probe() == p ? (p.Frame, p.Edit) : default;
     internal static void Forget()
     {
         var old = current;
