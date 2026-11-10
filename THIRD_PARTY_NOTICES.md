@@ -7,6 +7,11 @@
 - **JSON for Modern C++** v3.11.2 (speech helper) and v3.11.3 (vendored by MLX Swift), MIT license. [nlohmann/json](https://github.com/nlohmann/json). Upstream license/copyright notices are included in `Resources/JSON-LICENSE.txt` and `Resources/mlx-vendored-LICENSE.txt`.
 - **miniaudio / dr_wav**, MIT No Attribution option, copyright 2025 David Reid. [mackron/miniaudio](https://github.com/mackron/miniaudio). Only the WAV decoding component is used; its license is included in the server resources.
 
+## Windows client
+
+- **NAudio.Core and NAudio.Wasapi 2.2.1**, MIT, provide microphone capture and audio processing. [Upstream source](https://github.com/naudio/NAudio/tree/v2.2.1); the license is embedded from `Resources/NAudio-LICENSE.txt`.
+- **Microsoft .NET and Windows Desktop runtimes** are redistributed in the self-contained executable. Their license texts and applicable third-party notices are embedded from the runtime packages selected for the build.
+
 ## TypeScript server and API bindings
 
 - **Bun 1.4.2**, MIT, embeds its runtime in the compiled server. The exact [upstream license and runtime acknowledgements](https://github.com/oven-sh/bun/blob/bun-v1.4.2/LICENSE.md), including JavaScriptCore/WebKit and linked-library notices, are preserved in `Resources/bun-LICENSE.txt`.

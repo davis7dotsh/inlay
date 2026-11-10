@@ -3,6 +3,8 @@ build/
 .DS_Store
 .swiftpm/
 node_modules/
+Windows/bin/
+Windows/obj/
 *.xcuserstate
 *.xcuserdatad/
 *.wav

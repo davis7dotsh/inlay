@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <ApplicationIcon>Inlay.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace>Inlay.Windows</RootNamespace>
+    <Product>Inlay</Product>
+    <Description>Inlay dictation for Windows</Description>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <EmbeddedResource Include="../LICENSE;../Resources/NAudio-LICENSE.txt" />
+  </ItemGroup>
+  <Target Name="EmbedRuntimeLicenses" BeforeTargets="AssignTargetPaths" DependsOnTargets="ResolveFrameworkReferences">
+    <ItemGroup>
+      <CoreRuntime Include="@(ResolvedRuntimePack)" Condition="'%(NuGetPackageId)' == 'Microsoft.NETCore.App.Runtime.win-x64'" />
+      <DesktopRuntime Include="@(ResolvedRuntimePack)" Condition="'%(NuGetPackageId)' == 'Microsoft.WindowsDesktop.App.Runtime.win-x64'" />
+      <EmbeddedResource Include="@(CoreRuntime->'%(PackageDirectory)/LICENSE.TXT')" LogicalName="Notices.NetCore.License" />
+      <EmbeddedResource Include="@(CoreRuntime->'%(PackageDirectory)/THIRD-PARTY-NOTICES.TXT')" LogicalName="Notices.NetCore.ThirdParty" />
+      <EmbeddedResource Include="@(DesktopRuntime->'%(PackageDirectory)/LICENSE')" LogicalName="Notices.WindowsDesktop.License" />
+    </ItemGroup>
+  </Target>
+</Project>
