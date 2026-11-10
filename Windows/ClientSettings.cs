@@ -24,15 +24,25 @@ internal sealed class ClientSettings
     private volatile Settings saved;
 
     private ClientSettings(Settings state) => saved = state;
+    public bool HasCredentials => saved.Credentials.Count != 0;
     public string Endpoint => saved.Endpoint;
     public string DeviceName => saved.DeviceName;
     public string DeviceId => saved.DeviceId.ToString("D");
     public string? MicrophoneId => saved.MicrophoneId;
     public bool AutoCopyDictations => saved.AutoCopyDictations;
 
-    public static ClientSettings Load()
+    // SSH enrollment and the interactive tray may run in different Windows sessions.
+    // Serialize ownership of this user's settings before loading any in-memory copy.
+    public static FileStream LockProfile()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+        try { return new FileStream(FilePath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+        catch (IOException ex) when ((ex.HResult & 0xffff) == 32 /* ERROR_SHARING_VIOLATION */)
+        { throw new IOException("This Inlay profile is in use. Quit the other client or finish enrollment first.", ex); }
+    }
+
+    public static ClientSettings Load()
+    {
         try
         {
             using var file = File.OpenRead(FilePath);

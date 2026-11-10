@@ -1,12 +1,10 @@
 using System;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
 using System.Windows.Threading;
-using Microsoft.Win32.SafeHandles;
 
 namespace Inlay.Windows;
 
@@ -103,7 +101,7 @@ internal static class AccessibleDelivery
             try
             {
                 ct.ThrowIfCancellationRequested();
-                if (!AllowedProcess(watch.Window.Process)) return new Probe(null, "The editor is elevated or inaccessible.");
+                if (!TextDelivery.AllowedProcess(watch.Window.Process)) return new Probe(null, "The editor is elevated or inaccessible.");
                 if (!watchingUia)
                 {
                     var cache = new CacheRequest { AutomationElementMode = AutomationElementMode.None };
@@ -248,7 +246,7 @@ internal static class AccessibleDelivery
     private static Window? Focus()
     {
         nint frame = GetForegroundWindow();
-        if (frame == 0 || !OnInputDesktop()) return null;
+        if (frame == 0 || !TextDelivery.OnInputDesktop()) return null;
         uint thread = GetWindowThreadProcessId(frame, out uint pid);
         var info = new GuiInfo { Size = (uint)Marshal.SizeOf<GuiInfo>() };
         if (thread == 0 || pid == Environment.ProcessId || !GetGUIThreadInfo(thread, ref info) || info.Active != frame ||
@@ -288,42 +286,6 @@ internal static class AccessibleDelivery
         if (foregroundHook != 0) UnhookWinEvent(foregroundHook);
         desktopHook = foregroundHook = 0;
         owner = null;
-    }
-
-    private static bool AllowedProcess(uint pid)
-    {
-        using var process = OpenProcess(0x1000 /* QUERY_LIMITED_INFORMATION */, false, pid);
-        if (process.IsInvalid || !OpenProcessToken(process, 8 /* TOKEN_QUERY */, out var token)) return false;
-        using (token)
-        {
-            if (!TokenFlag(token, 20 /* TokenElevation */, out uint elevated, 4, out _) || elevated != 0 ||
-                !TokenFlag(token, 26 /* TokenUIAccess */, out uint uiAccess, 4, out _) || uiAccess != 0) return false;
-            GetTokenInformation(token, 25 /* TokenIntegrityLevel */, 0, 0, out uint size);
-            if (size < nint.Size || size > 1024) return false;
-            nint buffer = Marshal.AllocHGlobal((int)size);
-            try
-            {
-                if (!GetTokenInformation(token, 25, buffer, size, out _)) return false;
-                nint sid = Marshal.ReadIntPtr(buffer);
-                if (sid == 0 || !IsValidSid(sid)) return false;
-                byte count = Marshal.ReadByte(GetSidSubAuthorityCount(sid));
-                return count > 0 && unchecked((uint)Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)count - 1))) <= 0x2000; // medium
-            }
-            finally { Marshal.FreeHGlobal(buffer); }
-        }
-    }
-
-    private static bool OnInputDesktop()
-    {
-        nint desktop = OpenInputDesktop(0, false, 1 /* DESKTOP_READOBJECTS */);
-        if (desktop == 0) return false;
-        try
-        {
-            var name = new StringBuilder(64);
-            return GetUserObjectInformationW(desktop, 2 /* UOI_NAME */, name, (uint)name.Capacity * 2, out _) &&
-                name.ToString().Equals("Default", StringComparison.OrdinalIgnoreCase);
-        }
-        finally { CloseDesktop(desktop); }
     }
 
     [StructLayout(LayoutKind.Sequential)] private struct LastInputInfo { public uint Size, Time; }
@@ -384,16 +346,6 @@ internal static class AccessibleDelivery
     [DllImport("user32")] private static extern bool IsChild(nint parent, nint child);
     [DllImport("user32")] private static extern bool IsWindowVisible(nint hwnd);
     [DllImport("user32")] private static extern bool IsWindowEnabled(nint hwnd);
-    [DllImport("user32")] private static extern nint OpenInputDesktop(uint flags, bool inherit, uint access);
-    [DllImport("user32")] private static extern bool CloseDesktop(nint desktop);
-    [DllImport("user32", CharSet = CharSet.Unicode, ExactSpelling = true)] private static extern bool GetUserObjectInformationW(nint desktop, int index, StringBuilder name, uint bytes, out uint needed);
     [DllImport("user32")] private static extern bool GetLastInputInfo(ref LastInputInfo info);
     [DllImport("user32")] private static extern uint SendInput(uint count, Input[] input, int size);
-    [DllImport("kernel32")] private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint pid);
-    [DllImport("advapi32")] private static extern bool OpenProcessToken(SafeProcessHandle process, uint access, out SafeAccessTokenHandle token);
-    [DllImport("advapi32", EntryPoint = "GetTokenInformation")] private static extern bool TokenFlag(SafeAccessTokenHandle token, int kind, out uint value, uint bytes, out uint needed);
-    [DllImport("advapi32")] private static extern bool GetTokenInformation(SafeAccessTokenHandle token, int kind, nint value, uint bytes, out uint needed);
-    [DllImport("advapi32")] private static extern bool IsValidSid(nint sid);
-    [DllImport("advapi32")] private static extern nint GetSidSubAuthorityCount(nint sid);
-    [DllImport("advapi32")] private static extern nint GetSidSubAuthority(nint sid, uint index);
 }

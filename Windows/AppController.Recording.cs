@@ -36,7 +36,6 @@ internal sealed partial class AppController
         release = stopped;
         var ticket = new TaskCompletionSource<Task<GenerationRecord>>(TaskCreationOptions.RunContinuationsAsynchronously);
         var admitted = ticket.Task.Unwrap();
-        Task<GenerationRecord>? creating = null;
         bool submitted = false, announced = false;
         previewOnly = false;
 
@@ -67,8 +66,7 @@ internal sealed partial class AppController
             }, new Progress<float>(level => Volatile.Write(ref peak, level)), ct))
             {
                 ct.ThrowIfCancellationRequested();
-                creating = conn.CreateAsync(Guid.NewGuid(), test ? "test" : "dictation", ct);
-                ticket.SetResult(creating);
+                ticket.SetResult(conn.CreateAsync(Guid.NewGuid(), test ? "test" : "dictation", ct));
                 elapsed.Restart();
                 Publish(State with { Activity = UiActivity.Recording, ActivityText = test ? "Testing microphone" : "Recording" });
                 await Task.WhenAny(stopped.Task, microphone.Completion).WaitAsync(ct);
@@ -153,18 +151,8 @@ internal sealed partial class AppController
             }
             else if (announced || !cancelled) Publish(idle with { Delivery = cancelled ? "Recording cancelled." : ex.Message });
             if (!cancelled) Notice?.Invoke(test ? "Microphone test failed. Open Inlay for details." : "Dictation couldn’t finish. Open Inlay for details.");
-            // A create request already on the wire can still commit after cancellation. Observe its
-            // actual id before cancelling; never create a replacement or replay a sealed take.
-            if (creating != null && (!submitted || cancelled))
-            {
-                try
-                {
-                    var abandoned = await creating;
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                    await conn.CancelAsync(abandoned.Id, timeout.Token);
-                }
-                catch { /* unsealed uploads also expire */ }
-            }
+            if (ticket.Task.IsCompletedSuccessfully && (!submitted || cancelled))
+                _ = CancelAbandonedAsync(conn, admitted);
         }
         finally
         {
@@ -178,5 +166,18 @@ internal sealed partial class AppController
             testing = false;
             Publish(State with { Activity = UiActivity.Idle, ActivityText = "", IsTesting = false, Elapsed = TimeSpan.Zero, Level = 0 });
         }
+    }
+
+    // A create already on the wire can commit after Esc. Clean up its actual ID on the
+    // original connection without holding the shortcut or touching the next take's UI.
+    private static async Task CancelAbandonedAsync(InlayApi conn, Task<GenerationRecord> admitted)
+    {
+        try
+        {
+            var record = await admitted.ConfigureAwait(false);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            await conn.CancelAsync(record.Id, timeout.Token).ConfigureAwait(false);
+        }
+        catch { /* best effort; unsealed uploads also expire on the server */ }
     }
 }

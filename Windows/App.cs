@@ -13,6 +13,7 @@ internal sealed class App : Application
     [STAThread]
     public static int Main(string[] args)
     {
+        using var mutex = new Mutex(true, @"Local\Inlay.Dictation.Client", out var first);
         // For managed installs: the setup secret must come from a redirected pipe,
         // never argv, environment, a log, or a scheduled task. Don't rotate an existing identity.
         if (args.Length != 0 && args[0] == "--enroll-stdin")
@@ -20,8 +21,10 @@ internal sealed class App : Application
             if (args.Length != 2 || !Console.IsInputRedirected) return 2;
             try
             {
+                if (!first) return 3;
+                using var profile = ClientSettings.LockProfile();
                 var settings = ClientSettings.Load();
-                if (settings.OpenApi() != null) return 3;
+                if (settings.HasCredentials) return 3;
                 string? token = Console.ReadLine();
                 if (string.IsNullOrWhiteSpace(token)) return 2;
                 settings.ConnectAsync(args[1], token, settings.DeviceName).GetAwaiter().GetResult();
@@ -29,7 +32,6 @@ internal sealed class App : Application
             }
             catch { return 1; } // Never echo a token or untrusted server response.
         }
-        using var mutex = new Mutex(true, @"Local\Inlay.Dictation.Client", out var first);
         using var show = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\Inlay.Dictation.Show");
         if (!first)
         {
@@ -38,6 +40,7 @@ internal sealed class App : Application
         }
         try
         {
+            using var profile = ClientSettings.LockProfile();
             var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             return app.RunClient(show, args.Contains("--tray", StringComparer.Ordinal));
         }

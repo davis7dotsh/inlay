@@ -4,7 +4,7 @@ Hold a key, speak, and release to insert your dictation. Inlay has native client
 
 The dev runner builds **Inlay Dev**, with separate settings and visible Dev labels. For the regular app, run `./scripts/build-app.sh` and install `build/Inlay.app` in Applications. Both connect to an independently running server.
 
-On Windows, open `Inlay.exe`, connect to your server, then hold **left Ctrl + left Windows** to dictate. See [Windows setup and build instructions](docs/windows.md).
+On Windows, run `Inlay-Setup.exe` or open the portable `Inlay.exe`, connect to your server, then hold **left Ctrl + left Windows** to dictate. See [Windows setup and build instructions](docs/windows.md).
 
 ## Get started on one Mac
 

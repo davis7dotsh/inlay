@@ -153,14 +153,17 @@ internal static class TextDelivery
     private static long? Query(nint edit, uint message) =>
         SendMessageTimeoutW(edit, message, 0, 0, SendFlags, TimeoutMs, out var value) != 0 ? (long)value : null;
 
-    private static bool AllowedProcess(Window window)
+    private static bool AllowedProcess(Window window) => AllowedProcess(window.Process, window.Notepad);
+
+    internal static bool AllowedProcess(uint pid, bool notepad = false)
     {
-        using var process = OpenProcess(0x1000 /* QUERY_LIMITED_INFORMATION */, false, window.Process);
+        using var process = OpenProcess(0x1000 /* QUERY_LIMITED_INFORMATION */, false, pid);
         if (process.IsInvalid || !OpenProcessToken(process, 8 /* TOKEN_QUERY */, out var token)) return false;
         using (token)
         {
-            if (!GetElevation(token, 20 /* TokenElevation */, out uint elevation, 4, out _) || elevation != 0) return false;
-            // Reject high/system/UIAccess integrity even when TokenElevation is false.
+            if (!TokenFlag(token, 20 /* TokenElevation */, out uint elevated, 4, out _) || elevated != 0 ||
+                !TokenFlag(token, 26 /* TokenUIAccess */, out uint uiAccess, 4, out _) || uiAccess != 0) return false;
+            // Reject high/system integrity even when TokenElevation is false.
             GetTokenInformation(token, 25 /* TokenIntegrityLevel */, 0, 0, out uint bytes);
             if (bytes < (uint)nint.Size || bytes > 1024) return false;
             nint buffer = Marshal.AllocHGlobal((int)bytes);
@@ -176,7 +179,7 @@ internal static class TextDelivery
         }
         // Do not write to arbitrary rich-text engines, protected runs, web views,
         // terminals, or emulated editors. Only Notepad's packaged plain-text host.
-        if (!window.Notepad) return true;
+        if (!notepad) return true;
         uint chars = 128;
         var family = new StringBuilder((int)chars);
         return GetPackageFamilyName(process, ref chars, family) == 0 &&
@@ -267,7 +270,7 @@ internal static class TextDelivery
     [DllImport("kernel32")] private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("kernel32", CharSet = CharSet.Unicode, ExactSpelling = true)] private static extern int GetPackageFamilyName(SafeProcessHandle process, ref uint length, StringBuilder family);
     [DllImport("advapi32")] private static extern bool OpenProcessToken(SafeProcessHandle process, uint access, out SafeAccessTokenHandle token);
-    [DllImport("advapi32", EntryPoint = "GetTokenInformation")] private static extern bool GetElevation(SafeAccessTokenHandle token, int kind, out uint value, uint bytes, out uint needed);
+    [DllImport("advapi32", EntryPoint = "GetTokenInformation")] private static extern bool TokenFlag(SafeAccessTokenHandle token, int kind, out uint value, uint bytes, out uint needed);
     [DllImport("advapi32")] private static extern bool GetTokenInformation(SafeAccessTokenHandle token, int kind, nint value, uint bytes, out uint needed);
     [DllImport("advapi32")] private static extern bool IsValidSid(nint sid);
     [DllImport("advapi32")] private static extern nint GetSidSubAuthorityCount(nint sid);
