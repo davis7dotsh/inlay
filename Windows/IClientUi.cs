@@ -15,6 +15,7 @@ internal interface IClientUi
     Task ToggleTestAsync();
     Task CancelAsync();
     Task SelectInputAsync(string id);
+    void SetAutoCopyDictations(bool enabled);
     Task<UiHistoryPage> GetHistoryAsync(string? before = null);
     Task<string> GetTranscriptAsync(string id);
     Task<UiPreferences> GetPreferencesAsync();
@@ -34,6 +35,7 @@ internal sealed record ClientUiState
     public string DeviceName { get; init; } = "";
     public string KeyLabel { get; init; } = "";
     public bool HoldToTalk { get; init; } = true;
+    public bool AutoCopyDictations { get; init; }
     public string ServerStatus { get; init; } = "Not connected";
     public bool ServerReady { get; init; }
     public bool CanTest { get; init; }

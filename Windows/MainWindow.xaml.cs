@@ -145,6 +145,7 @@ internal partial class MainWindow : Window
                 MicTranscript.Visibility = string.IsNullOrWhiteSpace(text) ? Visibility.Hidden : Visibility.Visible;
             }
             if (previous == null || previous.ServerStatus != state.ServerStatus) DeviceMessage.Text = state.ServerStatus;
+            AutoCopyDictations.IsChecked = state.AutoCopyDictations;
             DeviceKey.Text = state.KeyLabel;
             DeviceTrigger.Text = state.HoldToTalk ? "Hold to talk" : "Tap to toggle";
             hud.Update(state);
@@ -241,11 +242,13 @@ internal partial class MainWindow : Window
         catch (Exception ex) { DeviceMessage.Text = ex.Message; }
         finally { TokenBox.Clear(); connecting = false; EndpointBox.IsEnabled = DeviceNameBox.IsEnabled = TokenBox.IsEnabled = true; Render(); }
     }
-    private static string CopyText(string text)
+    private void AutoCopyClicked(object sender, RoutedEventArgs e)
     {
-        try { Clipboard.SetText(text); return "Copied to clipboard."; }
-        catch (System.Runtime.InteropServices.ExternalException) { return "The clipboard is busy. Try copying again."; }
+        try { app.SetAutoCopyDictations(AutoCopyDictations.IsChecked == true); }
+        catch (Exception ex) { Render(); DeviceMessage.Text = $"Couldn’t save the clipboard setting: {ex.Message}"; }
     }
+    private static string CopyText(string text) => DictationClipboard.TryCopy(text)
+        ? "Copied to clipboard." : "Couldn’t copy to the clipboard. Try again.";
     private void CopyLastClicked(object sender, RoutedEventArgs e)
     { if (app.State.Transcript.Length != 0) DeliveryMessage.Text = CopyText(app.State.Transcript); }
     private void CopySessionClicked(object sender, RoutedEventArgs e)

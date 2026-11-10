@@ -11,7 +11,7 @@ internal sealed partial class AppController
 
     private void LoadConnection()
     {
-        State = State with { KeyLabel = "Left Ctrl + Left Windows", Endpoint = settings.Endpoint,
+        State = State with { KeyLabel = "Left Ctrl + Left Windows", AutoCopyDictations = settings.AutoCopyDictations, Endpoint = settings.Endpoint,
             DeviceName = settings.DeviceName, InputId = settings.MicrophoneId ?? "", InputName = "Windows default" };
         try { api = settings.OpenApi(); }
         catch (InvalidOperationException ex) { State = State with { ServerStatus = ex.Message }; }

@@ -94,18 +94,49 @@ internal sealed partial class AppController
                     : "Microphone test complete.";
             }
             else if (frames.Interrupted) (receipt, message) = ("failed", "The microphone dropped audio. Check the preview for missing words; nothing was inserted.");
-            else if (previewOnly || Environment.TickCount64 - releasedAt > 60_000) (receipt, message) = ("failed", "Saved to preview only. The shortcut was interrupted or the response arrived late.");
+            else if (previewOnly || Environment.TickCount64 - releasedAt > 60_000) (receipt, message) = ("failed", "Nothing was inserted. The shortcut was interrupted or the response arrived late.");
             else if (string.IsNullOrEmpty(completed.InsertionText)) (receipt, message) = ("failed", "No text to insert.");
             else
             {
                 for (int wait = 0; wait < 20 && TextDelivery.ShortcutHeld(); wait++) await Task.Delay(50, ct);
                 ct.ThrowIfCancellationRequested();
-                var result = destination != null ? TextDelivery.Insert(destination, completed.InsertionText)
-                    : await AccessibleDelivery.InsertAsync(await accessible!, completed.InsertionText, ct);
-                (receipt, message) = (result.Status, result.Message);
+                try
+                {
+                    var result = destination != null ? TextDelivery.Insert(destination, completed.InsertionText)
+                        : await AccessibleDelivery.InsertAsync(await accessible!, completed.InsertionText, ct);
+                    (receipt, message) = (result.Status, result.Message);
+                }
+                catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException or AccessViolationException))
+                { (receipt, message) = ("unconfirmed", "Insertion could not be confirmed. Check the field before pasting."); }
+            }
+
+            string? notice = null;
+            if (!test && !string.IsNullOrWhiteSpace(transcript))
+            {
+                if (settings.AutoCopyDictations && !ct.IsCancellationRequested && TextDelivery.OnInputDesktop())
+                {
+                    if (DictationClipboard.TryCopy(transcript))
+                    {
+                        message = "Copied to clipboard. " + message;
+                        if (receipt == "failed") receipt = "copied";
+                        notice = receipt switch {
+                            "unconfirmed" => "Copied. Check the field before pasting to avoid a duplicate.",
+                            "copied" when frames.Interrupted => "Audio dropped. The available words were copied; check them before pasting.",
+                            "copied" => "Dictation copied. Press Ctrl+V to paste.",
+                            _ => null
+                        };
+                    }
+                    else
+                    {
+                        message += " Couldn’t copy to the clipboard.";
+                        notice = receipt == "unconfirmed" ? "Clipboard unavailable. Check the field before copying from Inlay."
+                            : "Clipboard unavailable. Use Copy in Inlay if needed.";
+                    }
+                }
+                else if (receipt != "inserted") notice = receipt == "unconfirmed" ? "Check the field before copying from Inlay." : "Open Inlay to copy your dictation.";
             }
             PublishResult(message, transcript);
-            if (!test && receipt != "inserted") Notice?.Invoke(receipt == "unconfirmed" ? "Check the destination before copying from Inlay." : "Open Inlay to copy your dictation.");
+            if (notice != null) Notice?.Invoke(notice);
             using var reporting = new CancellationTokenSource(TimeSpan.FromSeconds(4));
             try { await conn.DeliveryAsync(record.Id, receipt, message, reporting.Token); }
             catch (Exception)

@@ -175,6 +175,8 @@
                         <DockPanel Margin="0,12"><TextBlock Text="Dictation key"/><TextBlock x:Name="DeviceKey" Style="{StaticResource Caption}" FontSize="14" TextAlignment="Right"/></DockPanel>
                         <Border Style="{StaticResource Rule}"/>
                         <DockPanel Margin="0,12"><TextBlock Text="Trigger"/><TextBlock x:Name="DeviceTrigger" Style="{StaticResource Caption}" FontSize="14" TextAlignment="Right"/></DockPanel>
+                        <Border Style="{StaticResource Rule}"/>
+                        <CheckBox x:Name="AutoCopyDictations" Content="Copy each dictation to the clipboard" Foreground="{DynamicResource Ink}" Margin="0,13" Click="AutoCopyClicked"/>
                     </StackPanel></Border>
                 </StackPanel>
             </ScrollViewer>

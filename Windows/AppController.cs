@@ -76,6 +76,12 @@ internal sealed partial class AppController : IClientUi, IDisposable
     {
         if (e.Mode == PowerModes.Suspend) dispatcher.BeginInvoke((Action)(() => _ = CancelAsync()));
     }
+    public void SetAutoCopyDictations(bool enabled)
+    {
+        settings.SetAutoCopyDictations(enabled);
+        Publish(State with { AutoCopyDictations = enabled });
+    }
+
     public Task ToggleTestAsync()
     {
         if (take == null) return StartAsync(true);

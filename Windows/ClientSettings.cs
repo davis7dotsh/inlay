@@ -11,14 +11,14 @@ using System.Threading.Tasks;
 
 namespace Inlay.Windows;
 
-// Only connection/identity and microphone selection live on disk. DPAPI's optional
+// Only connection/identity and this PC's preferences live on disk. DPAPI's optional
 // entropy binds each device credential to the *validated* endpoint and device ID.
 // The admin token is used in memory once and never written, even temporarily.
 internal sealed class ClientSettings
 {
     private const string DefaultEndpoint = "http://127.0.0.1:8391";
     private static readonly string FilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Inlay", "client.json");
-    private sealed record Settings(string Endpoint, Guid DeviceId, string DeviceName, Dictionary<string, byte[]> Credentials, string? MicrophoneId = null);
+    private sealed record Settings(string Endpoint, Guid DeviceId, string DeviceName, Dictionary<string, byte[]> Credentials, string? MicrophoneId = null, bool AutoCopyDictations = true);
     private readonly object sync = new();
     private readonly SemaphoreSlim connecting = new(1, 1);
     private volatile Settings saved;
@@ -28,6 +28,7 @@ internal sealed class ClientSettings
     public string DeviceName => saved.DeviceName;
     public string DeviceId => saved.DeviceId.ToString("D");
     public string? MicrophoneId => saved.MicrophoneId;
+    public bool AutoCopyDictations => saved.AutoCopyDictations;
 
     public static ClientSettings Load()
     {
@@ -115,6 +116,11 @@ internal sealed class ClientSettings
             return api;
         }
         finally { connecting.Release(); }
+    }
+
+    public void SetAutoCopyDictations(bool enabled)
+    {
+        lock (sync) Save(saved with { AutoCopyDictations = enabled });
     }
 
     public void SetMicrophone(string? id)

@@ -83,8 +83,8 @@ internal static class AccessibleDelivery
         // app shortcuts, etc.); even caret motion cannot prove what was inserted.
         uint sent = SendInput((uint)input.Length, input, Marshal.SizeOf<Input>());
         return sent == 0 ? Preview("Windows did not queue the text.") : new("unconfirmed",
-            sent == input.Length ? "Text was sent but insertion is unconfirmed. Check the field before copying the preview."
-                                 : "Only part of the input was queued. Check the field before copying the preview.");
+            sent == input.Length ? "Text was sent but insertion is unconfirmed. Check the field before pasting."
+                                 : "Only part of the input was queued. Check the field before pasting.");
     }
 
     private static TextDelivery.Result Preview(string reason) => new("failed", reason + " Text is available in preview.");

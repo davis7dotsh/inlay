@@ -94,7 +94,7 @@ internal static class TextDelivery
                 (after.Length == before.Length + value.Length ||
                  (window.Notepad && after.Length == before.Length + value.ReplaceLineEndings("\r\n").Length)))
                 return new("inserted", "Inserted at the original caret.");
-            return new("unconfirmed", "Insertion could not be confirmed. Check the editor before copying the preview.");
+            return new("unconfirmed", "Insertion could not be confirmed. Check the editor before pasting.");
         }
         finally { Forget(); } // tokens are single-use, including uncertain writes
     }
