@@ -6,6 +6,7 @@ public enum InlayAPI {
     public static let defaultPort = GeneratedShared.defaultPort
     public static let maximumRecordingSeconds = GeneratedShared.maximumRecordingSeconds
     public static let maximumChunkBytes = GeneratedShared.maximumChunkBytes
+    public static let maximumMetadataBytes = GeneratedShared.maximumMetadataBytes
     public static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -157,8 +158,9 @@ public struct CreateGenerationRequest: Codable, Sendable {
     public var requestID: UUID
     public var device: DeviceIdentity
     public var mode: GenerationMode
-    public init(requestID: UUID = UUID(), device: DeviceIdentity, mode: GenerationMode = .dictation) {
-        self.requestID = requestID; self.device = device; self.mode = mode
+    public var continuationID: UUID?
+    public init(requestID: UUID = UUID(), device: DeviceIdentity, mode: GenerationMode = .dictation, continuationID: UUID? = nil) {
+        self.requestID = requestID; self.device = device; self.mode = mode; self.continuationID = continuationID
     }
 }
 

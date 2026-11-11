@@ -1,6 +1,6 @@
 # Architecture
 
-Inlay's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use API version 4. The contract is `Server/api/openapi.yaml` (OpenAPI 3.1). HTTP paths stay under `/v1`, and the client requires `apiVersion` 4 before dictation. The same contract applies on one machine or across the network.
+Inlay's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use API version 5. The contract is `Server/api/openapi.yaml` (OpenAPI 3.1). HTTP paths stay under `/v1`, and the client requires `apiVersion` 5 before dictation. The same contract applies on one machine or across the network.
 
 ## Code map
 
@@ -25,7 +25,7 @@ Bun manages all JavaScript dependencies and compiles the coordinator plus its co
 
 1. The client asks the server to create a generation with its device identity. The server freezes shared settings and accepts independent uploads from any connected client. Offline or unavailable speech recognition prevents capture; other recordings do not.
 2. The client pins its microphone and uploads acknowledged, sequenced PCM chunks while recording. Inference audio is mono 16 kHz float32; optional original audio keeps the microphone rate/channels as float32.
-3. Release stops capture, drains uploads, and sends final frame counts. The microphone is available for the next take while earlier uploads finish. The server checks the complete intervals and seals WAV files. Recordings must be 0.25–180 seconds.
+3. Release stops capture, drains uploads, and sends final frame counts. The microphone is available for the next take while earlier uploads finish. The server checks the complete intervals and seals WAV files. Recordings must be 0.25 seconds–2 hours. Capture-time speech windows target a pause near 30 seconds and cap at 40 seconds. Speech and proof keep separate FIFO stages; durable frame and text cursors resume after restart. Short takes retain the batch composition path.
 4. Sealed recordings enter a FIFO processing queue. Jobs run concurrently, but each helper stage is serialized: one job at a time runs Parakeet, mechanical cleanup, dictionary rules, and list formatting, and one job at a time proofreads, so speech for one take can overlap proofreading for another. Optional Qwen output passes through dictionary rules and deterministic rewrite checks. Rejection or proofreading failure retains the pre-proofreading text. Cancelling one upload or queued job does not interrupt another.
 5. NDJSON events carry progress and the saved final result for each generation. Each pending client take retains its original server connection and destination. The client serializes delivery attempts, verifies focus/caret safety, and reports each outcome separately from inference completion.
 

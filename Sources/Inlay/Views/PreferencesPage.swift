@@ -133,7 +133,7 @@ private struct DevicePreferencesForm: View {
                 }
                 .accessibilityIdentifier("preferences.activation")
                 if controller.activationMode == .tapToggle {
-                    Text("Recording continues until you tap again, press the stop button, or reach 3 minutes.")
+                    Text("Recording continues until you tap again, press the stop button, or reach the recording limit.")
                         .font(.caption)
                         .foregroundStyle(InlayPalette.muted)
                 }

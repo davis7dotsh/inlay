@@ -176,6 +176,59 @@ final class InlayController: ObservableObject {
     @Published private var pendingDictations: [PendingDictation] = []
     private var uploadTask: Task<UploadOutcome, Error>?
     private var uploadPipe: AudioChunkPipe?
+    @Published private(set) var localCaptures: [AudioChunkPipe] = []
+    @Published private(set) var recoveringCaptures: Set<UUID> = []
+    private var captureRoot: URL { configuration.url.deletingLastPathComponent().appendingPathComponent("captures", isDirectory: true) }
+
+    func refreshLocalCaptures() {
+        let live = Set(pendingDictations.map(\.id) + [activeGenerationID].compactMap { $0 })
+        localCaptures = AudioChunkPipe.recover(in: captureRoot, excluding: live.union(recoveringCaptures)).filter {
+            !live.contains($0.id) && $0.deviceID == preferences.deviceID && $0.endpoint.absoluteString == (try? client().endpoint.absoluteString)
+        }
+    }
+
+    func discardLocalCapture(_ pipe: AudioChunkPipe) {
+        guard !recoveringCaptures.contains(pipe.id) else { return }
+        do {
+            try pipe.discard(); refreshLocalCaptures()
+            if let connection = try? client(), connection.endpoint == pipe.endpoint {
+                Task { try? await connection.cancel(pipe.id) }
+            }
+        }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func finishLocalCapture(_ pipe: AudioChunkPipe) {
+        guard !recoveringCaptures.contains(pipe.id), let connection = try? client(), connection.endpoint == pipe.endpoint else { return }
+        recoveringCaptures.insert(pipe.id)
+        pipe.resume()
+        Task { [weak self] in
+            guard let self else { return }
+            defer { recoveringCaptures.remove(pipe.id); refreshLocalCaptures() }
+            do {
+                try pipe.finish()
+                var record = try await connection.generation(pipe.id)
+                if record.status == .receiving {
+                    let uploaded = try await connection.upload(pipe.stream, to: pipe.id, preserveOriginal: pipe.record.settings.preferences.keepOriginalAudio)
+                    guard uploaded.complete else { throw ServerClientError.disconnected }
+                    record = try await Self.seal(connection, id: pipe.id, finish: uploaded.finish, fallback: uploaded.fallback)
+                }
+                if record.status == .failed { record = try await connection.reprocess(pipe.id) }
+                if !record.status.isTerminal { record = try await connection.events(pipe.id) { _ in } }
+                guard record.status == .completed else { throw ServerClientError.rejected(422, record.error ?? "Saved audio could not be processed.", "") }
+                // Recovery is explicitly History-only, including a lost Finish or delivery response.
+                if record.delivery == nil {
+                    let receipt = pendingEntries.first { $0.id == pipe.id }?.receipt
+                        ?? .init(status: "cancelled", message: "Recovered to History. Nothing was pasted.")
+                    try await connection.delivery(pipe.id, receipt: receipt)
+                }
+                try pipe.discard()
+                removePendingEntry(pipe.id)
+                refreshHistory()
+            } catch { errorMessage = "Audio remains saved on this Mac. " + error.localizedDescription }
+        }
+    }
+
     private var refreshTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
     private var hudTask: Task<Void, Never>?
@@ -634,6 +687,7 @@ final class InlayController: ObservableObject {
     private func discardCapture() {
         let generation = activeGenerationID
         let connection = activeClient
+        try? uploadPipe?.discard()
         resetSession()
         if let generation, let connection { Task { try? await connection.cancel(generation) } }
         let remaining = pendingDictations.last
@@ -855,6 +909,7 @@ final class InlayController: ObservableObject {
             case .failed, .cancelled:
                 removePendingEntry(entry.id)
             case .receiving:
+                if FileManager.default.fileExists(atPath: captureRoot.appendingPathComponent(entry.id.uuidString).path) { continue }
                 // A cancellation may have been persisted before upload finished.
                 // Keep that intent, but never seal with fabricated counts.
                 guard let inferenceFrames = entry.inferenceFrames else { continue }
@@ -925,12 +980,11 @@ final class InlayController: ObservableObject {
         closeCancelledDeliveries()
         wisprImport.shutdown()
         stopShortcutCheck()
-        // Quitting the client cancels an incomplete recording. A sealed server
-        // generation remains independently owned and may complete in history.
-        let generation = activeGenerationID
-        let connection = activeClient
+        // Quitting leaves durable capture and server receipts resumable. A
+        // later explicit History recovery cannot repeat a paste transaction.
+        recorder.stopAcceptingAudio()
+        try? uploadPipe?.finish()
         resetSession()
-        if let generation, let connection { Task { try? await connection.cancel(generation) } }
         stopPendingDictations()
         monitorTask?.cancel(); refreshTask?.cancel(); hudTask?.cancel(); permissionTask?.cancel()
         configuration.stopWatching()
@@ -1015,8 +1069,17 @@ final class InlayController: ObservableObject {
             defer { if sessionID == current { microphoneStartTask = nil } }
             do {
                 let connection = try client()
+                let initialDestination = isTest ? nil : await destinationTask?.value
+                try Task.checkCancellation()
+                guard sessionID == current, activity == .starting else { return }
+                let anchor: DictationDestination? = isTest ? .test : initialDestination?.target.map(DictationDestination.field)
+                let sharesEarlierAnchor = pendingDictations.contains { earlier in
+                    earlier.target.map { $0.anchor == anchor } ?? true
+                }
+                let continuationID = sharesEarlierAnchor ? nil : anchor.flatMap { self.continuation(for: $0)?.generationID }
                 let created = try await connection.create(.init(requestID: current,
-                    device: .init(id: preferences.deviceID, name: preferences.deviceName), mode: isTest ? .test : .dictation))
+                    device: .init(id: preferences.deviceID, name: preferences.deviceName), mode: isTest ? .test : .dictation,
+                    continuationID: continuationID))
                 guard sessionID == current, activity == .starting, !Task.isCancelled else {
                     Task { try? await connection.cancel(created.id) }; return
                 }
@@ -1025,7 +1088,7 @@ final class InlayController: ObservableObject {
                 activeClient = connection
                 sharedPreferences = created.settings
                 // A backlog stops capture; the upload seals what reached the server.
-                let pipe = AudioChunkPipe { [weak self] error in
+                let pipe = try AudioChunkPipe(root: captureRoot, record: created, endpoint: connection.endpoint, deviceID: preferences.deviceID) { [weak self] error in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         if sessionID == current, isCapturing {
@@ -1045,7 +1108,7 @@ final class InlayController: ObservableObject {
                     }
                     catch {
                         if let self, sessionID == current, isCapturing, !Task.isCancelled {
-                            failSession(Self.connectionMessage(error), cancelServer: true)
+                            salvageDictation(reason: Self.connectionMessage(error))
                         }
                         throw error
                     }
@@ -1128,8 +1191,9 @@ final class InlayController: ObservableObject {
                 capturedAudio?.cleanup()
                 pending.gate.decide(insert: false)
                 clearUndo(for: pending)
-                if pending.resolved { removePendingEntry(pending.id) }
+                if pending.resolved { removePendingEntry(pending.id); try? pending.pipe.discard(); refreshLocalCaptures() }
                 pendingDictations.removeAll { $0 === pending }
+                refreshLocalCaptures()
                 if pendingDictations.isEmpty {
                     deliveryTail = nil
                     applyConfiguration(configuration.configuration)
@@ -1145,23 +1209,13 @@ final class InlayController: ObservableObject {
                 }
                 capturedAudio = stoppedAudio
                 try Task.checkCancellation()
-                pending.pipe.finish()
+                try pending.pipe.finish()
                 let uploadOutcome = try await pending.upload.value
                 var finish = uploadOutcome.finish
                 var fallback = uploadOutcome.fallback
                 addPendingEntry(id: id, finish: finish, fallback: fallback, isTest: test)
-                let truncated = !uploadOutcome.complete && !test
-                if !uploadOutcome.complete, max(finish.inferenceFrames, fallback?.inferenceFrames ?? 0) < 4_000 {
-                    // The real acknowledged prefix is unusable, not a saved transcript.
-                    pending.resolved = true
-                    Task { try? await connection.cancel(id) }
-                    throw ServerClientError.rejected(422, "The interrupted recording was too short to save.", "")
-                }
-                if truncated {
-                    // Released, but the upload stopped early: only a prefix exists.
-                    // Like a salvaged take, it is copied and never auto-inserted.
-                    pending.target = (.clipboard, nil)
-                    if sessionID == current { statusMessage = "Saving interrupted recording…" }
+                guard uploadOutcome.complete else {
+                    throw ServerClientError.disconnected
                 }
                 try Task.checkCancellation()
                 stoppedAudio?.cleanup()
@@ -1184,7 +1238,7 @@ final class InlayController: ObservableObject {
                 var result: GenerationRecord
                 do { result = try await Self.seal(connection, id: id, finish: finish, fallback: fallback) }
                 catch let ServerClientError.rejected(status, message, code) where (400..<500).contains(status) && ![408, 429].contains(status) {
-                    pending.sealed = false // The server answered without sealing, so cancel promptly.
+                    pending.sealed = false // Preserve local audio for explicit recovery.
                     throw ServerClientError.rejected(status, message, code)
                 }
                 try Task.checkCancellation()
@@ -1204,13 +1258,8 @@ final class InlayController: ObservableObject {
                 await waitForDeliveryPermission(pending)
                 try Task.checkCancellation()
                 let deliveryDestination = rebasedDestination(resolved)
-                var receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
+                let receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
                                             clipboardCount: clipboardCount, session: current, pending: pending)
-                if truncated, receipt.status == DictationDeliveryStatus.copied.rawValue {
-                    let message = "Recording was interrupted. The saved part was copied to the clipboard."
-                    receipt.message = message
-                    lastDelivery = message
-                }
                 // A cancel after dispatch cannot interrupt confirmation or its receipt.
                 pending.settlingReceipt = true
                 saveReceipt(receipt, for: pending)
@@ -1242,10 +1291,9 @@ final class InlayController: ObservableObject {
                 refreshServer()
             } catch {
                 pending.upload.cancel(); pending.pipe.cancel(); pending.destination?.cancel()
-                if !pending.sealed, !pending.gate.requiresOriginalSelection {
-                    pending.resolved = true
-                    Task { try? await connection.cancel(id) }
-                }
+                // A failed upload or Finish never turns useful local audio into
+                // an implicit Cancel. Recovery is explicit and History-only.
+                try? pending.pipe.finish()
                 guard !Task.isCancelled else { return }
                 if let clientError = error as? ServerClientError, case .processingTimedOut = clientError {
                     // Not a failure: stop blocking later deliveries and let the
@@ -1256,7 +1304,7 @@ final class InlayController: ObservableObject {
                     }
                 } else if sessionID == current {
                     if error is URLError { serverHealth = nil; serverStatusMessage = Self.connectionMessage(error) }
-                    showError(Self.connectionMessage(error))
+                    showError("Audio is saved on this Mac. Open History to finish it. " + Self.connectionMessage(error))
                 } else {
                     let message = "Earlier dictation failed: \(Self.connectionMessage(error))"
                     errorMessage = message
@@ -1267,6 +1315,7 @@ final class InlayController: ObservableObject {
                     if !activity.isBusy { showError(message) } else { announceOutcome(message, .failure) }
                 }
                 refreshHistory()
+                refreshLocalCaptures()
             }
         }
         pending.task = task
@@ -1405,10 +1454,7 @@ final class InlayController: ObservableObject {
             // dispatched transactions always finish their receipt bookkeeping.
             if pending.gate.requiresOriginalSelection || pending.gate.state == .dispatching || pending.settlingReceipt { continue }
             pending.cancel()
-            if !pending.sealed {
-                removePendingEntry(pending.id)
-                Task { try? await pending.client.cancel(pending.id) }
-            }
+            try? pending.pipe.finish()
         }
         pendingDictations.removeAll { !$0.gate.requiresOriginalSelection && $0.gate.state != .dispatching && !$0.settlingReceipt }
         if pendingDictations.isEmpty { deliveryTail = nil }

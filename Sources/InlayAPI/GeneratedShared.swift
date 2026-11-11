@@ -1,13 +1,13 @@
 // Generated from Server/api (openapi.yaml + default-proofreading-prompt.txt) by generate-api.ts; edit the sources, never this file.
 
 enum GeneratedShared {
-    static let apiVersion = 4
+    static let apiVersion = 5
     static let defaultPort = 8391
-    static let maximumRecordingSeconds = 180
+    static let maximumRecordingSeconds = 7200
     static let maximumChunkBytes = 1048576
     static let maximumArtifactBytes = 8388608
     static let maximumDictionaryBytes = 8388608
-    static let maximumMetadataBytes = 1048576
+    static let maximumMetadataBytes = 8388608
     static let maximumPreferencesBytes = 262144
     static let supportedLanguages = ["en", "auto", "es", "fr", "de", "it", "pt", "nl", "ja", "zh", "ko", "hi", "ar", "pl", "ru", "uk", "sv"]
     static let defaultProofreadingPrompt = """

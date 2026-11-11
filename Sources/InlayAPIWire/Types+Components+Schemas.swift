@@ -932,25 +932,31 @@ extension Components {
             public var device: Components.Schemas.DeviceIdentity
             /// - Remark: Generated from `#/components/schemas/CreateGenerationRequest/mode`.
             public var mode: Components.Schemas.GenerationMode
+            /// - Remark: Generated from `#/components/schemas/CreateGenerationRequest/continuationID`.
+            public var continuationID: Components.Schemas.Uuid?
             /// Creates a new `CreateGenerationRequest`.
             ///
             /// - Parameters:
             ///   - requestID:
             ///   - device:
             ///   - mode:
+            ///   - continuationID:
             public init(
                 requestID: Components.Schemas.Uuid,
                 device: Components.Schemas.DeviceIdentity,
-                mode: Components.Schemas.GenerationMode
+                mode: Components.Schemas.GenerationMode,
+                continuationID: Components.Schemas.Uuid? = nil
             ) {
                 self.requestID = requestID
                 self.device = device
                 self.mode = mode
+                self.continuationID = continuationID
             }
             public enum CodingKeys: String, CodingKey {
                 case requestID
                 case device
                 case mode
+                case continuationID
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -966,10 +972,15 @@ extension Components {
                     Components.Schemas.GenerationMode.self,
                     forKey: .mode
                 )
+                self.continuationID = try container.decodeIfPresent(
+                    Components.Schemas.Uuid.self,
+                    forKey: .continuationID
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "requestID",
                     "device",
-                    "mode"
+                    "mode",
+                    "continuationID"
                 ])
             }
         }

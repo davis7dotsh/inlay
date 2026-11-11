@@ -135,31 +135,6 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Se
     }
 }
 
-/// The callback never blocks the capture queue. Its bounded queue fails the take
-/// if a connection falls behind, instead of building a hidden offline backlog.
-final class AudioChunkPipe: @unchecked Sendable {
-    let stream: AsyncThrowingStream<CapturedAudioChunk, Error>
-    private let continuation: AsyncThrowingStream<CapturedAudioChunk, Error>.Continuation
-    private let onFailure: (@Sendable (Error) -> Void)?
-
-    init(onFailure: (@Sendable (Error) -> Void)? = nil) {
-        self.onFailure = onFailure
-        let pair = AsyncThrowingStream<CapturedAudioChunk, Error>.makeStream(bufferingPolicy: .bufferingOldest(512))
-        stream = pair.stream
-        continuation = pair.continuation
-    }
-
-    func append(_ chunk: CapturedAudioChunk) {
-        if case .dropped = continuation.yield(chunk) {
-            continuation.finish(throwing: ServerClientError.uploadBacklog)
-            onFailure?(ServerClientError.uploadBacklog)
-        }
-    }
-
-    func finish() { continuation.finish() }
-    func cancel() { continuation.finish(throwing: CancellationError()) }
-}
-
 extension ServerClient {
     func health() async throws -> ServerHealth { try await json(path: "v1/health") }
     func enroll(device: DeviceIdentity) async throws -> EnrollDeviceResponse {
@@ -313,7 +288,7 @@ extension ServerClient {
                     line.removeAll(keepingCapacity: true)
                 }
             } else {
-                guard line.count < 2 * 1_024 * 1_024 else { throw ServerClientError.invalidResponse }
+                guard line.count < InlayAPI.maximumMetadataBytes else { throw ServerClientError.invalidResponse }
                 line.append(byte)
             }
         }
@@ -379,7 +354,7 @@ extension ServerClient {
     }
 
     /// Returns false when the flush ultimately failed (non-transient error or
-    /// the 60 s retry deadline passed); throws only on cancellation. Retries
+    /// the bounded retry deadline passed); throws only on cancellation. Retries
     /// re-send byte-identical content, which the server safely replays.
     private func flush(_ buffer: inout UploadBuffer, to id: UUID) async throws -> Bool {
         guard !buffer.data.isEmpty, let format = buffer.format else { return true }
@@ -398,11 +373,11 @@ extension ServerClient {
                 let (data, response) = try await session.data(for: uploadRequest)
                 try Self.validate(response, data: data)
                 let receipt = try InlayAPI.decodeWire(AudioChunkReceipt.self, from: data)
-                guard receipt.nextSequence == sequence + 1, receipt.frameCount == expectedFrames else {
+                guard receipt.nextSequence >= sequence + 1, receipt.frameCount >= expectedFrames else {
                     throw ServerClientError.invalidResponse
                 }
-                buffer.sequence = receipt.nextSequence
-                buffer.acknowledgedFrames = receipt.frameCount
+                buffer.sequence = sequence + 1
+                buffer.acknowledgedFrames = expectedFrames
                 buffer.data.removeAll(keepingCapacity: true)
                 return true
             } catch {

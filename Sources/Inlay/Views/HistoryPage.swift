@@ -53,6 +53,15 @@ struct HistoryPage: View {
                 InlayActionMessage(message: controller.pendingPersistenceError ?? controller.errorMessage)
             }
 
+            ForEach(controller.localCaptures) { capture in
+                HStack {
+                    Text("Saved recording · \(Int(capture.seconds)) seconds")
+                    Spacer()
+                    Button("Finish in History") { controller.finishLocalCapture(capture) }
+                        .disabled(controller.recoveringCaptures.contains(capture.id))
+                    Button("Discard saved audio", role: .destructive) { controller.discardLocalCapture(capture) }
+                }
+            }
             HSplitView {
                 historyList.frame(minWidth: 220, idealWidth: 255, maxWidth: 320)
                 detail.frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -82,7 +91,7 @@ struct HistoryPage: View {
             .frame(height: 28)
         }
         .padding(26)
-        .onAppear { controller.refreshHistory() }
+        .onAppear { controller.refreshHistory(); controller.refreshLocalCaptures() }
         // Summary changes (status, updatedAt) after completion or reprocess refresh the detail too.
         .onChange(of: selected) { _, summary in controller.loadGenerationDetail(summary?.id) }
         .onChange(of: controller.historySourceFilter) { _, _ in

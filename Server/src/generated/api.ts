@@ -550,6 +550,7 @@ export interface components {
       requestID: components["schemas"]["UUID"];
       device: components["schemas"]["DeviceIdentity"];
       mode: components["schemas"]["GenerationMode"];
+      continuationID?: components["schemas"]["UUID"];
     };
     AudioStreamFormat: {
       sampleRate: number;
