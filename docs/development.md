@@ -2,7 +2,7 @@
 
 - Install Bun 1.4.2 and run `bun install --frozen-lockfile` from the repository root.
 - Run `bun run fmt`, `bun run fmt:check`, `bun run lint`, and `bun run check`. The last command checks strict TypeScript and generated TypeScript/OpenAPI consistency. Lint includes type-aware correctness and promise handling; warnings fail the command.
-- Behavioral automated tests are not allowed. Do not add suites, test dependencies, fixtures, mocks, or assertion harnesses for runtime behavior. Deterministic cross-file consistency checks that only compare committed text are allowed and run in `bun run check`: generated API bindings, formatting, and `Server/scripts/check-parity.ts` (generated constants agree, dev/production ports stay distinct, documented `INLAY_*` variables exist in code). New checks must be deterministic, offline, and must never execute the code they inspect. CI runs static checks, generated API verification, and compilation/packaging.
+- Behavioral automated tests are not allowed. Do not add suites, test dependencies, fixtures, mocks, or assertion harnesses for runtime behavior. Deterministic cross-file consistency checks that only compare committed text are allowed and run in `bun run check`: generated API bindings, formatting, and `Server/scripts/check-parity.ts` (generated constants agree, dev/production ports stay distinct, the `package.json` and app plist versions match, documented `INLAY_*` variables exist in code). New checks must be deterministic, offline, and must never execute the code they inspect. CI runs static checks, generated API verification, and compilation/packaging.
 
 ## Source server
 
