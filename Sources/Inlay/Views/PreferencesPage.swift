@@ -239,7 +239,7 @@ private struct DevicePreferencesForm: View {
             keyRecorder.onCancel = { controller.setKeyRecording(false) }
             keyRecorder.onTimeout = {
                 controller.setKeyRecording(false)
-                keyRecorderMessage = "No key pressed. Click to try again. If Fn / Globe does nothing, set ‘Press Globe key to’ to ‘Do Nothing’ in Keyboard settings."
+                keyRecorderMessage = "No supported key recorded. Click to try again. If Fn / Globe does nothing, set ‘Press Globe key to’ to ‘Do Nothing’ in Keyboard settings."
             }
 
         }

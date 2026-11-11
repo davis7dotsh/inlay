@@ -38,6 +38,7 @@ final class HoldKeyRecorder: ObservableObject {
                 self?.receive(.escape)
                 return nil
             }
+            if event.type == .keyDown, event.isARepeat { return event }
             if event.type == .keyDown, HoldKey.recordableKeyTitles[event.keyCode] != nil {
                 self?.stop()
                 self?.onCustomCapture?(Int(event.keyCode))
