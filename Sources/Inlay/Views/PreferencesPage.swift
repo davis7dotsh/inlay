@@ -118,6 +118,7 @@ private struct DevicePreferencesForm: View {
                             .frame(minWidth: 109)
                         }
                         .accessibilityIdentifier("preferences.shortcut")
+                        .disabled(controller.isBusy)
                         .accessibilityLabel(keyRecorder.isRecording
                             ? "Waiting for a key press"
                             : "Dictation key, \(dictationKeyTitle)")
