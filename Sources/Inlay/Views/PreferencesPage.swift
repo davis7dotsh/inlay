@@ -22,7 +22,9 @@ private struct DevicePreferencesForm: View {
     @State private var deviceName = ""
     @State private var showingDiagnostics = false
     @State private var deviceToRevoke: DeviceSummary?
-    @StateObject private var triggerRecorder = TriggerKeyRecorder()
+    @StateObject private var keyRecorder = HoldKeyRecorder()
+    @State private var keyRecorderMessage: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var usesPlainHTTP: Bool { (try? ServerEndpoint(endpoint))?.usesPlainHTTP ?? false }
 
@@ -96,37 +98,36 @@ private struct DevicePreferencesForm: View {
             } header: { Text("Connection").textCase(nil) }
 
             Section {
-                Picker("Dictation key", selection: Binding<HoldKey?>(
-                    get: { controller.customTriggerKeyCode == nil ? controller.shortcut : nil },
-                    set: { if let key = $0 { controller.customTriggerKeyCode = nil; controller.shortcut = key } }
-                )) {
-                    ForEach(HoldKey.allCases) { key in
-                        if key == .fn { Text(key.title).tag(Optional(key)) }
-                        else { Text(key.title).tag(Optional(key)) }
-                    }
-                }
-                .accessibilityIdentifier("preferences.shortcut")
                 LabeledContent {
-                    HStack {
-                        if triggerRecorder.isRecording {
-                            Button("Cancel") { triggerRecorder.stop() }
-                        } else {
-                            Button("Record key") {
-                                triggerRecorder.start { code in controller.customTriggerKeyCode = code }
-                            }
-                            if controller.customTriggerKeyCode != nil {
-                                Button("Clear") { controller.customTriggerKeyCode = nil }
-                            }
+                    HStack(spacing: 8) {
+                        if keyRecorder.isRecording {
+                            Button("Cancel", action: stopKeyRecording)
+                                .buttonStyle(.borderless)
+                                .accessibilityIdentifier("preferences.shortcut-cancel")
                         }
+                        Button(action: keyRecorder.isRecording ? stopKeyRecording : startKeyRecording) {
+                            HStack(spacing: 6) {
+                                if keyRecorder.isRecording {
+                                    Image(systemName: "record.circle.fill")
+                                        .symbolEffect(.pulse, isActive: !reduceMotion)
+                                    Text("Press a key…")
+                                } else {
+                                    Text(dictationKeyTitle)
+                                }
+                            }
+                            .frame(minWidth: 109)
+                        }
+                        .accessibilityIdentifier("preferences.shortcut")
+                        .disabled(controller.isBusy)
+                        .accessibilityLabel(keyRecorder.isRecording
+                            ? "Waiting for a key press"
+                            : "Dictation key, \(dictationKeyTitle)")
+                        .accessibilityHint(keyRecorder.isRecording ? "Cancels key recording" : "Records a new dictation key")
                     }
                 } label: {
-                    Text(triggerRecorder.isRecording
-                        ? "Press a function key (Esc cancels)"
-                        : "Custom key: \(controller.customTriggerKeyCode.flatMap { HoldKey.customKeyTitle(CGKeyCode($0)) } ?? "None")")
-                }
-                .disabled(controller.isBusy)
-                if let rejection = triggerRecorder.rejection {
-                    Text(rejection).font(.caption).foregroundStyle(InlayPalette.warning)
+                    Text("Dictation key")
+                    Text(keyRecorderCaption)
+                        .foregroundStyle(keyRecorderMessage == nil ? InlayPalette.muted : InlayPalette.warning)
                 }
                 Picker("Trigger", selection: $controller.activationMode) {
                     ForEach(HotkeyActivationMode.allCases) { mode in Text(mode.title).tag(mode) }
@@ -142,11 +143,11 @@ private struct DevicePreferencesForm: View {
                         if controller.isCheckingShortcut { controller.stopShortcutCheck() }
                         else { controller.startShortcutCheck(); showingDiagnostics = true }
                     }
-                    .frame(width: 125)
+                    .frame(minWidth: 109)
+                    .disabled(keyRecorder.isRecording)
                 } label: {
                     Text(controller.isCheckingShortcut ? "Hold the key for a second" : "Shortcut check")
                 }
-                if let note = controller.shortcut.note { Text(note).font(.caption).foregroundStyle(InlayPalette.muted) }
                 DisclosureGroup("Shortcut diagnostics", isExpanded: $showingDiagnostics) {
                     ScrollView {
                         Text(controller.shortcutCheckText.isEmpty ? "Run a shortcut check to see events." : controller.shortcutCheckText)
@@ -227,7 +228,25 @@ private struct DevicePreferencesForm: View {
             deviceName = preferences.deviceName
             controller.refreshPermissions()
             Task { await controller.refreshDevices() }
+            keyRecorder.onCapture = {
+                controller.customTriggerKeyCode = nil
+                controller.shortcut = $0
+                controller.setKeyRecording(false)
+            }
+            keyRecorder.onCustomCapture = {
+                controller.customTriggerKeyCode = $0
+                controller.setKeyRecording(false)
+            }
+            keyRecorder.onCancel = { controller.setKeyRecording(false) }
+            keyRecorder.onTimeout = {
+                controller.setKeyRecording(false)
+                keyRecorderMessage = "No supported key recorded. Click to try again. If Fn / Globe does nothing, set ‘Press Globe key to’ to ‘Do Nothing’ in Keyboard settings."
+            }
+
         }
+        .onDisappear { stopKeyRecording() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in stopKeyRecording() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stopKeyRecording() }
         .onChange(of: preferences.token) { _, newToken in token = newToken }
         .confirmationDialog("Revoke this device?", isPresented: Binding(
             get: { deviceToRevoke != nil }, set: { if !$0 { deviceToRevoke = nil } })) {
@@ -239,6 +258,30 @@ private struct DevicePreferencesForm: View {
         } message: {
             Text("It will lose access to this server immediately.")
         }
+    }
+    private var dictationKeyTitle: String {
+        controller.customTriggerKeyCode.flatMap { HoldKey.customKeyTitle(CGKeyCode($0)) }
+            ?? "\(controller.shortcut.symbol) \(controller.shortcut.title)"
+    }
+
+    private var keyRecorderCaption: String {
+        let keys = HoldKey.allCases.map(\.title)
+        let choices = keys.dropLast().joined(separator: ", ") + ", or " + (keys.last ?? "")
+        if keyRecorder.isRecording { return "Press \(choices), or a function key (F1–F20). Esc cancels." }
+        if let keyRecorderMessage { return keyRecorderMessage }
+        let hint = "Click to change. Use \(choices), or a function key (F1–F20)."
+        return controller.shortcut.note.map { "\(hint)\n\($0)" } ?? hint
+    }
+
+    private func startKeyRecording() {
+        keyRecorderMessage = nil
+        controller.setKeyRecording(true)
+        keyRecorder.start()
+    }
+
+    private func stopKeyRecording() {
+        keyRecorder.stop()
+        controller.setKeyRecording(false)
     }
 }
 
@@ -482,46 +525,6 @@ struct ServerPreferencesPage: View {
         guard let snapshot = controller.sharedPreferences else { return }
         base = snapshot
         draft = snapshot.preferences
-    }
-}
-
-
-/// Captures one function-key press for the custom trigger. Text-typing keys
-/// are rejected (with a message) instead of recorded, so an Escape press
-/// always cancels.
-@MainActor
-final class TriggerKeyRecorder: ObservableObject {
-    @Published var isRecording = false
-    @Published var rejection: String?
-    private var monitor: Any?
-
-    func start(onCapture: @escaping (Int) -> Void) {
-        stop()
-        isRecording = true
-        rejection = nil
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let self else { return event }
-                if event.keyCode == 53 {
-                    self.stop()
-                    return nil
-                }
-                if HoldKey.recordableKeyTitles[event.keyCode] != nil {
-                    let code = Int(event.keyCode)
-                    self.stop()
-                    onCapture(code)
-                    return nil
-                }
-                self.rejection = "That key types or is a modifier. Choose a function key (F1-F20), or Esc to cancel."
-                return nil
-            }
-        }
-    }
-
-    func stop() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
-        isRecording = false
     }
 }
 

@@ -93,6 +93,12 @@ enum HoldKey: String, CaseIterable, Identifiable {
         return self != .fn && keyState()
     }
 
+    /// The key codes monitored for dictation holds; nil for ordinary keys.
+    init?(keyCode: CGKeyCode) {
+        guard let key = Self.allCases.first(where: { $0.keyCode == keyCode }) else { return nil }
+        self = key
+    }
+
     fileprivate var physicallyDown: Bool {
         isPhysicallyDown(
             in: CGEventSource.flagsState(.hidSystemState),
