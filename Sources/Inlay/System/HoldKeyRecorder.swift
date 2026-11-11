@@ -21,6 +21,7 @@ final class HoldKeyRecorder: ObservableObject {
     @Published private(set) var isRecording = false
     /// The captured key. Nil when recording stopped without a usable press.
     var onCapture: ((HoldKey) -> Void)?
+    var onCustomCapture: ((Int) -> Void)?
     var onTimeout: (() -> Void)?
     var onCancel: (() -> Void)?
 
@@ -35,6 +36,11 @@ final class HoldKeyRecorder: ObservableObject {
             // the window handles the exit command.
             if event.type == .keyDown, event.keyCode == escapeKeyCode {
                 self?.receive(.escape)
+                return nil
+            }
+            if event.type == .keyDown, HoldKey.recordableKeyTitles[event.keyCode] != nil {
+                self?.stop()
+                self?.onCustomCapture?(Int(event.keyCode))
                 return nil
             }
             guard let cgEvent = event.cgEvent, let key = HoldKey(keyCode: event.keyCode) else { return event }

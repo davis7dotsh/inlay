@@ -29,6 +29,12 @@ else()
     set(GGML_ACCELERATE OFF CACHE BOOL "" FORCE)
     set(GGML_BLAS OFF CACHE BOOL "" FORCE)
     set(GGML_CUDA ${INLAY_CUDA} CACHE BOOL "" FORCE)
+    # Static cudart/cublas so the tarball does not need /usr/local/cuda.
+    # libcuda.so.1 still comes from the host driver. Do not pull in NCCL.
+    if(INLAY_CUDA)
+        set(GGML_STATIC ON CACHE BOOL "" FORCE)
+        set(GGML_CUDA_NCCL OFF CACHE BOOL "" FORCE)
+    endif()
 endif()
 find_package(Threads REQUIRED)
 

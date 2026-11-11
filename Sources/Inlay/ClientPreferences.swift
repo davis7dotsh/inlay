@@ -8,6 +8,7 @@ import InlayCore
 /// processing preferences belong to the server.
 @MainActor
 final class ClientPreferencesStore: ObservableObject {
+    static let defaultEndpoint = "http://127.0.0.1:8391"
     private struct Settings: Codable {
         var endpoint: String
         var deviceID: String
@@ -27,7 +28,7 @@ final class ClientPreferencesStore: ObservableObject {
         url = root.appendingPathComponent("client.json")
         credentialAccount = root.standardizedFileURL.path
         let saved = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(Settings.self, from: $0) }
-        let resolvedEndpoint = environment["INLAY_SERVER_URL"] ?? saved?.endpoint ?? "http://127.0.0.1:8391"
+        let resolvedEndpoint = environment["INLAY_SERVER_URL"] ?? saved?.endpoint ?? Self.defaultEndpoint
         endpoint = resolvedEndpoint
         deviceID = saved?.deviceID ?? UUID().uuidString.lowercased()
         deviceName = saved?.deviceName ?? Host.current().localizedName ?? "My Mac"
@@ -75,6 +76,17 @@ final class ClientPreferencesStore: ObservableObject {
             (self.endpoint, self.deviceName, self.token) = previous
             return false
         }
+        return true
+    }
+
+    @discardableResult
+    func replaceToken(_ newToken: String) -> Bool {
+        let trimmed = newToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.writeToken(trimmed, account: credentialAccount + "|" + endpoint) else {
+            errorMessage = "The server credential could not be saved in Keychain."
+            return false
+        }
+        token = trimmed
         return true
     }
 

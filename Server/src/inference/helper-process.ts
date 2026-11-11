@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { InferenceError, checkCancellation } from "./inference-error";
+import { logError, logInfo, logWarn } from "../log";
 
 export interface HelperResponse {
   type: string;
@@ -89,6 +90,8 @@ export class HelperProcess {
   private progress?: (value: number) => void;
   private timeout?: ReturnType<typeof setTimeout>;
   private readonly retiring = new Map<ChildProcessWithoutNullStreams, Promise<void>>();
+  private stderrChunks: Buffer[] = [];
+  private stderrBytes = 0;
 
   constructor(private readonly configuration: HelperConfiguration) {}
 
@@ -172,6 +175,15 @@ export class HelperProcess {
     if (this.operation || this.loading || this.ready) this.reset(new InferenceError("cancelled"));
   }
 
+  /** Evicts a protocol-corrupt helper without blocking on its exit. */
+  discard(error: InferenceError) {
+    this.reset(error);
+  }
+
+  private stderrSnapshot() {
+    return new TextDecoder().decode(Buffer.concat(this.stderrChunks).subarray(-4096));
+  }
+
   async shutdown() {
     this.reset(new InferenceError("cancelled"));
     // Children retired by previous cancellation or protocol errors still belong
@@ -216,6 +228,9 @@ export class HelperProcess {
       return ready.promise;
     }
     this.child = child;
+    this.stderrChunks = [];
+    this.stderrBytes = 0;
+    logInfo("helper_spawned", { helper: configuration.name });
     let buffer = Buffer.alloc(0);
     child.stdout.on("data", (chunk: Buffer) => {
       if (this.generation !== current) return;
@@ -247,13 +262,29 @@ export class HelperProcess {
     child.stdin.on("error", () =>
       this.transportFailed(current, `Could not write to ${configuration.name}.`),
     );
-    // Drain GPU diagnostics without retaining them or logging transcript content.
-    child.stderr.resume();
+    // Retain a bounded diagnostics tail in memory only; it is logged on
+    // exit and never persisted. Workers suppress token-bearing debug output.
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (this.generation !== current) return;
+      this.stderrChunks.push(Buffer.from(chunk));
+      this.stderrBytes += chunk.length;
+      while (this.stderrBytes > 65_536 && this.stderrChunks.length > 1)
+        this.stderrBytes -= this.stderrChunks.shift()!.length;
+    });
     child.stderr.on("error", () => {});
     child.on("error", () =>
       this.transportFailed(current, `Could not launch ${configuration.name}.`),
     );
-    child.on("close", () => this.transportFailed(current, "Native helper closed its output."));
+    child.on("close", (code, signal) => {
+      if (this.generation === current)
+        logError("helper_exited", undefined, {
+          helper: configuration.name,
+          exitCode: code,
+          signal,
+          stderrTail: this.stderrSnapshot(),
+        });
+      this.transportFailed(current, "Native helper closed its output.");
+    });
     this.setTimeout(configuration.loadTimeout, `${configuration.name} model loading timed out.`);
     return ready.promise;
   }
@@ -275,6 +306,10 @@ export class HelperProcess {
         this.clearTimeout();
         this.loaded = true;
         this.engineVersion = response.engineVersion;
+        logInfo("helper_ready", {
+          helper: this.configuration.name,
+          engineVersion: response.engineVersion ?? null,
+        });
         ready.resolve();
         break;
       }
@@ -297,15 +332,31 @@ export class HelperProcess {
         result.resolve(response);
         break;
       }
-      case "error":
-        if (response.id !== undefined && response.id !== this.requestID) return;
-        this.reset(
-          new InferenceError(
-            "unavailable",
-            response.message ?? `${this.configuration.name} inference failed.`,
-          ),
+      case "error": {
+        if (response.id !== undefined && response.id !== this.requestID) {
+          logWarn("helper_error_unknown_id", { helper: this.configuration.name });
+          return;
+        }
+        const failure = new InferenceError(
+          "unavailable",
+          response.message ?? `${this.configuration.name} inference failed.`,
         );
+        // A per-request failure rejects only that request; workers clear
+        // their own per-request state, so the warm process survives.
+        if (response.id === this.requestID && this.result) {
+          const result = this.result;
+          this.result = undefined;
+          this.requestID = undefined;
+          this.progress = undefined;
+          this.clearTimeout();
+          result.reject(failure);
+          break;
+        }
+        if (this.loaded && !this.ready)
+          logError("helper_unsolicited_error", failure, { helper: this.configuration.name });
+        this.reset(failure);
         break;
+      }
       default:
         this.reset(
           new InferenceError(

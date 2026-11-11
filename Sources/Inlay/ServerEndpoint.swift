@@ -41,6 +41,13 @@ struct ServerEndpoint {
         self.url = url
     }
 
+    var isLoopback: Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return host == "localhost" || host.hasPrefix("127.") || host == "::1" || host == "[::1]"
+    }
+
+    var usesPlainHTTP: Bool { url.scheme?.lowercased() == "http" && !isLoopback }
+
     private static func permitsHTTP(host: String) -> Bool {
         if host.lowercased() == "localhost" { return true }
         var ipv4 = in_addr()

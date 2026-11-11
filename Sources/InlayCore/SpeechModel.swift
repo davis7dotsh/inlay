@@ -19,13 +19,13 @@ public struct SpeechModel: Sendable {
     }
 
     // Pinned upstream revision and LFS digest, not a mutable "latest" download.
-    public static let turbo = SpeechModel(
-        id: "whisper-large-v3-turbo",
-        name: "Whisper large-v3-turbo",
-        filename: "ggml-large-v3-turbo.bin",
-        byteCount: 1_624_555_275,
-        sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
-        downloadURL: URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo.bin")!
+    public static let parakeet = SpeechModel(
+        id: GeneratedModelPins.speechID,
+        name: GeneratedModelPins.speechName,
+        filename: GeneratedModelPins.speechFilename,
+        byteCount: GeneratedModelPins.speechByteCount,
+        sha256: GeneratedModelPins.speechSHA256,
+        downloadURL: URL(string: GeneratedModelPins.speechURL)!
     )
 }
 
@@ -46,7 +46,7 @@ public enum ModelIntegrityError: LocalizedError, Equatable {
 }
 
 public enum ModelIntegrity {
-    public static func verify(_ url: URL, model: SpeechModel = .turbo) -> Result<Void, ModelIntegrityError> {
+    public static func verify(_ url: URL, model: SpeechModel = .parakeet) -> Result<Void, ModelIntegrityError> {
         guard FileManager.default.fileExists(atPath: url.path) else { return .failure(.missing) }
         do {
             let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -56,6 +56,7 @@ public enum ModelIntegrity {
             defer { try? file.close() }
             var digest = SHA256()
             while let data = try file.read(upToCount: 4 * 1_024 * 1_024), !data.isEmpty {
+                if Task.isCancelled { return .failure(.unreadable("Model verification was cancelled.")) }
                 digest.update(data: data)
             }
             let actual = digest.finalize().map { String(format: "%02x", $0) }.joined()

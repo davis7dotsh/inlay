@@ -81,6 +81,8 @@ final class InputOnlyAudioUnit {
             try set(kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, UInt32(1))
             try set(kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, deviceID)
             let hardware = try hardwareFormat()
+            // Admission stays wider than archival eligibility
+            // (OriginalAudioPolicy): inference downmixes any admitted format.
             // Original-audio uploads support at most eight input channels.
             guard hardware.mSampleRate.isFinite, hardware.mSampleRate > 0,
                   hardware.mSampleRate <= 768_000,

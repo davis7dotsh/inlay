@@ -73,15 +73,7 @@ export async function atomicPrivateWrite(path: string, data: Uint8Array | string
     await file.close();
     await rename(temporary, path);
     // Persist the directory entry before acknowledging a durable mutation.
-    const directory = await open(
-      dirname(path),
-      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-    );
-    try {
-      await directory.sync();
-    } finally {
-      await directory.close();
-    }
+    await syncDirectory(dirname(path));
   } catch (error) {
     await file.close().catch(() => {});
     await rm(temporary, { force: true }).catch(() => {});
@@ -89,15 +81,35 @@ export async function atomicPrivateWrite(path: string, data: Uint8Array | string
   }
 }
 
+export async function syncDirectory(path: string) {
+  const directory = await open(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
+}
+
 export const sha256 = (data: Uint8Array | string) =>
   createHash("sha256").update(data).digest("hex");
 
-export async function requireDiskSpace(dataDirectory: string) {
+export async function freeBytes(dataDirectory: string) {
   const disk = await statfs(dataDirectory, { bigint: true });
-  if (disk.bavail * disk.bsize < 100n * 1024n * 1024n)
+  return disk.bavail * disk.bsize;
+}
+
+export async function requireDiskSpaceFor(dataDirectory: string, additionalBytes: number) {
+  if ((await freeBytes(dataDirectory)) < 100n * 1024n * 1024n + BigInt(Math.ceil(additionalBytes)))
     throw new ServiceError(
       507,
       "storage_full",
       "The server needs more free disk space before accepting audio.",
     );
+}
+
+export async function requireDiskSpace(dataDirectory: string) {
+  return requireDiskSpaceFor(dataDirectory, 0);
 }

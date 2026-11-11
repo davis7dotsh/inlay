@@ -4,7 +4,7 @@ import SwiftUI
 enum InlayPalette {
     // Glacier is the dark counterpart to Inlay's unchanged warm light palette.
     static let ink = adaptive(light: 0x352D3A, dark: 0xEDF5FA, contrastLight: 0x241E28, contrastDark: 0xFFFFFF)
-    static let muted = adaptive(light: 0x766D78, dark: 0xA4B8C7, contrastLight: 0x514955, contrastDark: 0xDAEAF5)
+    static let muted = adaptive(light: 0x6B6270, dark: 0xA4B8C7, contrastLight: 0x514955, contrastDark: 0xDAEAF5)
     static let faint = muted
     static let canvas = adaptive(light: 0xF8F6F2, dark: 0x1B252E)
     // Opaque equivalents of the mockup's raised glass layers keep long text legible.
@@ -18,7 +18,7 @@ enum InlayPalette {
     static let onAccent = adaptive(light: 0xFFFFFF, dark: 0x192C3A)
     static let glassTint = adaptive(light: 0xF8F6F2, dark: 0x223949)
     static let success = Color(nsColor: .systemGreen)
-    static let warning = Color(nsColor: .systemOrange)
+    static let warning = adaptive(light: 0xA65A00, dark: 0xFF9F0A, contrastLight: 0x8A4A00, contrastDark: 0xFFB340)
 
     private static func adaptive(light: UInt32, dark: UInt32, darkAlpha: CGFloat = 1,
                                  contrastLight: UInt32? = nil, contrastDark: UInt32? = nil) -> Color {
@@ -39,33 +39,90 @@ enum InlayPalette {
     }
 }
 
-/// Only the sidebar looks through the window; reading and editing surfaces stay
-/// solid. Use AppKit's behind-window material rather than blurring app content.
+/// The window's one glass layer: behind-window material tinted with the
+/// palette, painted edge-to-edge under a transparent titlebar. The sidebar
+/// and titlebar look through it; reading and editing surfaces stay solid.
+/// Every page sees the same bar because no page paints the top strip itself.
+struct InlayWindowGlassSurface: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        if reduceTransparency || contrast == .increased {
+            InlayPalette.canvas
+        } else {
+            InlayBehindWindowMaterial()
+                .overlay(InlayPalette.glassTint.opacity(colorScheme == .dark ? 0.58 : 0.5))
+                .overlay {
+                    LinearGradient(colors: [.white.opacity(colorScheme == .dark ? 0.07 : 0.35), .clear],
+                                   startPoint: .top, endPoint: .center)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+/// A blue tint over the window glass, deepening the sidebar column (and its
+/// slice of the titlebar) without a second material seam.
 struct InlaySidebarSurface: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        if colorScheme == .dark && !reduceTransparency && contrast != .increased {
-            InlaySidebarMaterial()
-                .overlay(InlayPalette.sidebar.opacity(0.54))
+        if reduceTransparency || contrast == .increased {
+            InlayPalette.sidebar
+        } else {
+            InlayPalette.sidebar.opacity(colorScheme == .dark ? 0.34 : 0.62)
                 .overlay {
                     LinearGradient(colors: [.white.opacity(0.05), .clear],
                                    startPoint: .topLeading, endPoint: .bottomTrailing)
                 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
-        } else {
-            InlayPalette.sidebar
         }
     }
 }
 
-private struct InlaySidebarMaterial: NSViewRepresentable {
+/// Glass strip above detail content, exactly filling the titlebar area.
+/// Pages whose scroll view reaches the top edge scroll *under* it and are
+/// blurred by the material, like a native toolbar; other pages simply show
+/// the same tinted glass. Height comes from the safe-area inset, so it
+/// matches the system titlebar on every OS version and window state.
+struct InlayTitlebarGlassStrip: View {
+    var topInset: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                if reduceTransparency || contrast == .increased {
+                    InlayPalette.canvas
+                } else {
+                    Rectangle().fill(.ultraThinMaterial)
+                    InlayPalette.glassTint.opacity(colorScheme == .dark ? 0.52 : 0.45)
+                    LinearGradient(colors: [.white.opacity(colorScheme == .dark ? 0.07 : 0.3), .clear],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+            }
+            .frame(height: topInset)
+            Rectangle()
+                .fill(InlayPalette.line.opacity(contrast == .increased ? 1 : 0.55))
+                .frame(height: 0.5)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct InlayBehindWindowMaterial: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
-        view.material = .sidebar
+        view.material = .underWindowBackground
         view.blendingMode = .behindWindow
         view.state = .followsWindowActiveState
         return view
@@ -223,14 +280,23 @@ struct InlayFloatingSurface: ViewModifier {
 }
 
 struct StatusDot: View {
-    var color: Color
+    var isReady: Bool
     var size: CGFloat = 6
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
 
     var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
+        Group {
+            if differentiateWithoutColor {
+                Image(systemName: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(isReady ? InlayPalette.success : InlayPalette.warning)
+            } else {
+                Circle()
+                    .fill(isReady ? InlayPalette.success : InlayPalette.warning)
+                    .frame(width: size, height: size)
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -294,6 +360,7 @@ struct KeyCap: View {
 
 struct InlayHoldKeyCap: View {
     var key: HoldKey
+    var titleOverride: String?
     var isPressed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
@@ -304,8 +371,8 @@ struct InlayHoldKeyCap: View {
             shape.fill(InlayPalette.line)
                 .frame(height: 60)
                 .offset(y: 4)
-            Text(key.symbol)
-                .font(.system(size: key == .fn ? 27 : 30, weight: .regular))
+            Text(titleOverride ?? key.symbol)
+                .font(.system(size: titleOverride != nil ? 20 : (key == .fn ? 27 : 30), weight: .regular))
                 .foregroundStyle(InlayPalette.accentInk)
                 .frame(width: 64, height: 60)
                 .background(isPressed ? InlayPalette.tint : InlayPalette.surface, in: shape)
@@ -315,7 +382,7 @@ struct InlayHoldKeyCap: View {
         .frame(width: 64, height: 64)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: isPressed)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(key.title)
+        .accessibilityLabel(titleOverride ?? key.title)
         .accessibilityValue(isPressed ? "Pressed" : "Not pressed")
     }
 }
@@ -436,7 +503,7 @@ struct InlineNotice: View {
                 .font(.system(size: 13))
                 .padding(.top, 1)
             Text(message)
-                .font(.system(size: 12))
+                .font(.caption)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
         }

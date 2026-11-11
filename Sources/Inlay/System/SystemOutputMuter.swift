@@ -9,15 +9,29 @@ struct SystemOutputClient {
     let muteElements: (AudioDeviceID) -> [AudioObjectPropertyElement]
     let isMuted: (AudioDeviceID, AudioObjectPropertyElement) -> Bool?
     let setMuted: (AudioDeviceID, AudioObjectPropertyElement, Bool) -> Bool
+    let deviceUID: (AudioDeviceID) -> String?
+    let deviceID: (String) -> AudioDeviceID?
+}
+
+/// Elements this app muted, persisted by stable device UID so a crash
+/// between mute and restore cannot strand a silent Mac.
+struct OutputMuteRecord: Codable {
+    struct Entry: Codable {
+        var uid: String
+        var element: UInt32
+    }
+    var entries: [Entry]
 }
 
 @MainActor
 final class SystemOutputMuter {
     private let client: SystemOutputClient
+    private let recordURL: URL?
     private var muted: [(AudioDeviceID, AudioObjectPropertyElement)] = []
 
-    init(client: SystemOutputClient = .live) {
+    init(client: SystemOutputClient = .live, recordURL: URL? = nil) {
         self.client = client
+        self.recordURL = recordURL
     }
 
     func mute() {
@@ -27,6 +41,7 @@ final class SystemOutputMuter {
         for element in client.muteElements(device)
         where client.isMuted(device, element) == false && client.setMuted(device, element, true) {
             muted.append((device, element))
+            persistRecord()
         }
     }
 
@@ -34,13 +49,48 @@ final class SystemOutputMuter {
         // An unmute that fails (e.g. the output dropped mid-take) stays pending
         // so the next restore retries it instead of leaving the Mac muted.
         muted = muted.filter { device, element in !client.setMuted(device, element, false) }
+        persistRecord()
+    }
+
+    /// Unmutes elements a previous crashed run recorded, then clears the
+    /// record. Only listed elements are touched; a user mute is never undone.
+    func restorePersistedMute() {
+        guard let recordURL, let data = try? Data(contentsOf: recordURL) else { return }
+        defer { try? FileManager.default.removeItem(at: recordURL) }
+        guard let record = try? JSONDecoder().decode(OutputMuteRecord.self, from: data) else { return }
+        for entry in record.entries {
+            guard let device = client.deviceID(entry.uid) else { continue }
+            let element = AudioObjectPropertyElement(entry.element)
+            if client.isMuted(device, element) == true {
+                _ = client.setMuted(device, element, false)
+            }
+        }
+    }
+
+    private func persistRecord() {
+        guard let recordURL else { return }
+        if muted.isEmpty {
+            try? FileManager.default.removeItem(at: recordURL)
+            return
+        }
+        let entries = muted.compactMap { device, element in
+            client.deviceUID(device).map { OutputMuteRecord.Entry(uid: $0, element: element) }
+        }
+        guard !entries.isEmpty, let data = try? JSONEncoder().encode(OutputMuteRecord(entries: entries))
+        else { return }
+        try? FileManager.default.createDirectory(at: recordURL.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        try? data.write(to: recordURL, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: recordURL.path)
     }
 }
 
 extension SystemOutputClient {
     static var live: Self {
         Self(defaultOutputDevice: SystemOutputHardware.defaultOutputID, muteElements: SystemOutputHardware.muteElements,
-             isMuted: SystemOutputHardware.isMuted, setMuted: SystemOutputHardware.setMuted)
+             isMuted: SystemOutputHardware.isMuted, setMuted: SystemOutputHardware.setMuted,
+             deviceUID: SystemOutputHardware.deviceUID, deviceID: SystemOutputHardware.deviceID(forUID:))
     }
 }
 
@@ -77,6 +127,31 @@ enum SystemOutputHardware {
         var address = muteAddress(element)
         var value: UInt32 = muted ? 1 : 0
         return AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &value) == noErr
+    }
+
+    static func deviceUID(_ device: AudioDeviceID) -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceUID,
+                                                 mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr,
+              let uid = value?.takeRetainedValue() as String?, !uid.isEmpty else { return nil }
+        return uid
+    }
+
+    static func deviceID(forUID uid: String) -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+                                                 mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr,
+              size > 0, size <= 1_048_576, size % UInt32(MemoryLayout<AudioDeviceID>.stride) == 0 else { return nil }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.stride)
+        let status = ids.withUnsafeMutableBytes {
+            AudioObjectGetPropertyData(system, &address, 0, nil, &size, $0.baseAddress!)
+        }
+        guard status == noErr else { return nil }
+        return ids.first { deviceUID($0) == uid }
     }
 
     private static func muteAddress(_ element: AudioObjectPropertyElement) -> AudioObjectPropertyAddress {

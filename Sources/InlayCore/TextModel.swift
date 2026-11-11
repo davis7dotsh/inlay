@@ -42,23 +42,14 @@ public struct TextModel: Sendable {
         return SHA256.hash(data: Data(manifest.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    public static let qwen: TextModel = {
-        let base = URL(string: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/")!
-        let entries: [(String, Int64, String)] = [
-            ("model.safetensors", 2_263_022_417, "2a73c6c248601ab904e035548abd8e6abb65ea27dcb5f342fb0a8910eb44173f"),
-            ("config.json", 938, "574349e5a343236546fda55e4744a76e181f534182d7dc60ff1bad7e7a502849"),
-            ("tokenizer.json", 11_422_654, "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"),
-            ("tokenizer_config.json", 5_440, "4397cc477eb6d79715ccd2000accd6b3531928f30029665832fa1b255f24d2b9"),
-            ("generation_config.json", 238, "835fffe355c9438e7a25be099b3fccaa98350b83451f9fd2d99512e74f1ade48"),
-            ("chat_template.jinja", 4_040, "40c21f34cf67d8c760ef72f8ad3ae5afad514299d4b06e91dd9a8d705af7b541"),
-        ]
-        return TextModel(
-            id: "qwen3-4b-instruct-2507-mlx-4bit", name: "Qwen3 4B Instruct (MLX)",
-            filename: "Qwen3-4B-Instruct-2507-MLX-4bit",
-            files: entries.map { File(filename: $0.0, byteCount: $0.1, sha256: $0.2,
-                                      downloadURL: base.appendingPathComponent($0.0)) }
-        )
-    }()
+    public static let qwen = TextModel(
+        id: GeneratedModelPins.textID, name: GeneratedModelPins.textName,
+        filename: GeneratedModelPins.textDirectory,
+        files: GeneratedModelPins.textFiles.map {
+            File(filename: $0.filename, byteCount: $0.byteCount, sha256: $0.sha256,
+                 downloadURL: URL(string: $0.url)!)
+        }
+    )
 
     public func verify(_ directory: URL) -> Result<Void, ModelIntegrityError> {
         let descriptor = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)

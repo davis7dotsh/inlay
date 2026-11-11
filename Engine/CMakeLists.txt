@@ -8,7 +8,7 @@ if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "Inlay's server supports macOS and Linux.")
 endif()
 
-# Keep Whisper's ggml independent from the text helper's version.
+# Keep the speech runtime's ggml independent from the text helper's version.
 option(INLAY_CUDA "Use CUDA for Linux inference" OFF)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -29,6 +29,12 @@ else()
     set(GGML_ACCELERATE OFF CACHE BOOL "" FORCE)
     set(GGML_BLAS OFF CACHE BOOL "" FORCE)
     set(GGML_CUDA ${INLAY_CUDA} CACHE BOOL "" FORCE)
+    # Static cudart/cublas so the tarball does not need /usr/local/cuda.
+    # libcuda.so.1 still comes from the host driver. Do not pull in NCCL.
+    if(INLAY_CUDA)
+        set(GGML_STATIC ON CACHE BOOL "" FORCE)
+        set(GGML_CUDA_NCCL OFF CACHE BOOL "" FORCE)
+    endif()
 endif()
 find_package(Threads REQUIRED)
 
@@ -42,6 +48,6 @@ add_executable(inlay-engine worker.cpp)
 target_compile_features(inlay-engine PRIVATE cxx_std_17)
 target_compile_options(inlay-engine PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(inlay-engine SYSTEM PRIVATE "${WHISPER_SOURCE}/examples")
-target_link_libraries(inlay-engine PRIVATE whisper Threads::Threads)
+target_link_libraries(inlay-engine PRIVATE parakeet whisper Threads::Threads)
 set_target_properties(inlay-engine PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Engine")

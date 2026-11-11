@@ -8,22 +8,32 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public var activationMode: String
     public var launchAtLogin: Bool
     public var muteOutputWhileRecording: Bool
+    public var dictationSoundsEnabled: Bool
+    public var customTriggerKeyCode: Int?
+    public var preserveClipboard: Bool
     public var microphones: MicrophonePreferences
 
+    public static var defaultHoldKey: String { InlayBuild.current.isDevelopment ? "rightOption" : "fn" }
     public static let `default` = InlayConfiguration()
 
-    public init(holdKey: String = "rightOption", activationMode: String = "hold", launchAtLogin: Bool = false,
-                muteOutputWhileRecording: Bool = false, microphones: MicrophonePreferences = MicrophonePreferences()) {
+    public init(holdKey: String = InlayConfiguration.defaultHoldKey, activationMode: String = "hold", launchAtLogin: Bool = true,
+                muteOutputWhileRecording: Bool = false, dictationSoundsEnabled: Bool = true,
+                customTriggerKeyCode: Int? = nil, preserveClipboard: Bool = false,
+                microphones: MicrophonePreferences = MicrophonePreferences()) {
         schemaVersion = 1
         self.holdKey = holdKey
         self.activationMode = activationMode
         self.launchAtLogin = launchAtLogin
         self.muteOutputWhileRecording = muteOutputWhileRecording
+        self.dictationSoundsEnabled = dictationSoundsEnabled
+        self.customTriggerKeyCode = customTriggerKeyCode
+        self.preserveClipboard = preserveClipboard
         self.microphones = microphones
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording, microphones
+        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording
+        case dictationSoundsEnabled, customTriggerKeyCode, preserveClipboard, microphones
     }
 
     public init(from decoder: Decoder) throws {
@@ -32,18 +42,27 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
         guard version == 1 else {
             throw values.invalid(.schemaVersion, "Only schemaVersion 1 is supported.")
         }
-        let holdKey = try values.value(String.self, for: .holdKey, default: "rightOption")
-        guard ["rightOption", "rightControl", "fn"].contains(holdKey) else {
-            throw values.invalid(.holdKey, "Use rightOption, rightControl, or fn.")
+        let holdKey = try values.value(String.self, for: .holdKey, default: Self.defaultHoldKey)
+        guard ["rightOption", "rightControl", "fn", "leftOption", "leftControl"].contains(holdKey) else {
+            throw values.invalid(.holdKey, "Use rightOption, rightControl, fn, leftOption, or leftControl.")
         }
         let activationMode = try values.value(String.self, for: .activationMode, default: "hold")
-        guard ["hold", "doubleTap"].contains(activationMode) else {
-            throw values.invalid(.activationMode, "Use hold or doubleTap.")
+        guard ["hold", "doubleTap", "tapToggle"].contains(activationMode) else {
+            throw values.invalid(.activationMode, "Use hold, doubleTap, or tapToggle.")
+        }
+        let customTriggerKeyCode = try values.decodeIfPresent(Int.self, forKey: .customTriggerKeyCode)
+        // F1-F20 virtual key codes; keep in sync with HoldKey.recordableKeyTitles.
+        let recordableKeyCodes: Set<Int> = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90]
+        if let customTriggerKeyCode, !recordableKeyCodes.contains(customTriggerKeyCode) {
+            throw values.invalid(.customTriggerKeyCode, "Record a function key (F1-F20).")
         }
         self.init(holdKey: holdKey,
                   activationMode: activationMode,
-                  launchAtLogin: try values.value(Bool.self, for: .launchAtLogin, default: false),
+                  launchAtLogin: try values.value(Bool.self, for: .launchAtLogin, default: true),
                   muteOutputWhileRecording: try values.value(Bool.self, for: .muteOutputWhileRecording, default: false),
+                  dictationSoundsEnabled: try values.value(Bool.self, for: .dictationSoundsEnabled, default: true),
+                  customTriggerKeyCode: customTriggerKeyCode,
+                  preserveClipboard: try values.value(Bool.self, for: .preserveClipboard, default: false),
                   microphones: values.contains(.microphones)
                     ? try values.decode(StrictMicrophones.self, forKey: .microphones).preferences
                     : MicrophonePreferences())

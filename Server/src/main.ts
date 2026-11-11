@@ -1,7 +1,13 @@
 import { acquireDataDirectoryLock } from "./data-lock.ts";
-import { parseConfiguration, usage, type ServerConfiguration } from "./configuration.ts";
+import {
+  isLoopbackHost,
+  parseConfiguration,
+  usage,
+  type ServerConfiguration,
+} from "./configuration.ts";
 import { createHTTPServer } from "./http-server.ts";
 import { GenerationService, defaultProofreadingPrompt } from "./generation-service.ts";
+import { logError, logInfo, logWarn } from "./log.ts";
 import { NativeInference } from "./inference/native-inference.ts";
 
 export async function startServer(configuration: ServerConfiguration) {
@@ -9,12 +15,22 @@ export async function startServer(configuration: ServerConfiguration) {
   let service: GenerationService | undefined;
   try {
     service = await GenerationService.open(
-      configuration,
+      {
+        dataDirectory: configuration.dataDirectory,
+        development: configuration.development,
+        adminToken: configuration.token,
+      },
       new NativeInference(configuration.inference),
     );
-    const app = createHTTPServer(service, configuration.token);
+    const app = createHTTPServer(service);
     service.start();
     const address = await app.listen({ host: configuration.host, port: configuration.port });
+    if (!isLoopbackHost(configuration.host))
+      logWarn("plain_http_non_loopback", {
+        host: configuration.host,
+        message:
+          "Plain HTTP on a non-loopback bind leaves tokens, audio, and transcripts unencrypted. Use a Tailscale address or an HTTPS reverse proxy.",
+      });
     let closing: Promise<void> | undefined;
     const close = () =>
       (closing ??= (async () => {
@@ -45,8 +61,11 @@ if (import.meta.main) {
     else if (process.argv.includes("--print-default-proofreading-prompt"))
       console.log(defaultProofreadingPrompt);
     else {
-      const server = await startServer(await parseConfiguration());
-      console.log(`Inlay server listening at ${server.address}`);
+      const configuration = await parseConfiguration();
+      const server = await startServer(configuration);
+      if (configuration.adminTokenCreated)
+        logInfo("admin_token_created", { file: configuration.adminTokenFile });
+      logInfo("server_listening", { address: server.address });
       const stop = () => {
         void server.close().then(
           () => process.exit(0),
@@ -57,7 +76,7 @@ if (import.meta.main) {
       process.once("SIGINT", stop);
     }
   } catch (error) {
-    console.error(error instanceof Error ? error.message : "The server could not start.");
+    logError("server_start_failed", error);
     process.exitCode = 1;
   }
 }

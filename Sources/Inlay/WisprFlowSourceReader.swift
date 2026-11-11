@@ -147,7 +147,7 @@ final class WisprFlowSourceReader: @unchecked Sendable {
     init(sourceURLs: [URL]? = nil) throws {
         let selected = sourceURLs ?? Self.discoverSourceURLs()
         guard !selected.isEmpty else { throw WisprFlowSourceReaderError.noSources }
-        let directory = FileManager.default.temporaryDirectory
+        let directory = InlayTemporaryDirectory.url
             .appendingPathComponent("Inlay-WisprFlow-import-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
                                                 attributes: [.posixPermissions: 0o700])

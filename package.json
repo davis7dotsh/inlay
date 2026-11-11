@@ -13,7 +13,7 @@
     "fmt": "prettier --write .",
     "fmt:check": "prettier --check .",
     "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives Server",
-    "check": "bun run --cwd Server typecheck && bun run generate:api --check --typescript-only"
+    "check": "bun run --cwd Server typecheck && bun run generate:api --check --typescript-only && bun Server/scripts/check-parity.ts"
   },
   "devDependencies": {
     "oxlint": "1.85.0",
