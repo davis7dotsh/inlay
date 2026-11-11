@@ -200,7 +200,10 @@ public enum ScreenContext {
             let characters = Array(segment)
             guard characters.count >= 12 else { return false }
             let letters = characters.filter(\.isLetter)
-            if Double(letters.filter { "aeiouAEIOU".contains($0) }.count) < 0.15 * Double(letters.count) { return true }
+            // ASCII vowel frequency says nothing about names in other scripts.
+            // Vendor prefixes, length/shape and word-coverage checks still apply.
+            if letters.allSatisfy({ $0.asciiValue != nil }),
+               Double(letters.filter { "aeiouAEIOU".contains($0) }.count) < 0.15 * Double(letters.count) { return true }
             guard characters.count >= 16 else { return false }
             let pairs = zip(characters, characters.dropFirst())
             if characters.count >= 24, !pairs.contains(where: { $0.isLowercase && $1.isUppercase }) { return true }
