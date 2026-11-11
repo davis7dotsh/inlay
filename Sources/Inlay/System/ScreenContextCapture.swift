@@ -69,7 +69,7 @@ final class ScreenContextCapture {
         // NSSpellChecker is not documented as thread-safe, so ranking stays on the main
         // actor; the per-word cache bounds it to one check per distinct word.
         let checker = NSSpellChecker.shared
-        return ScreenContext.terms(fromLines: lines) { word in
+        return await ScreenContext.terms(fromLines: lines) { word in
             var count = 0
             return checker.checkSpelling(of: word, startingAt: 0, language: spellingLanguage, wrap: false,
                                          inSpellDocumentWithTag: 0, wordCount: &count).location == NSNotFound

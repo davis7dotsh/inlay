@@ -36,8 +36,9 @@ public enum ScreenContext {
     /// their capitalized form is known; other known words are kept only when
     /// capitalized mid-sentence and repeated. Emails, paths, web addresses, and long
     /// numbers are never returned, nor is anything shaped like a credential.
+    @MainActor
     public static func terms(fromLines lines: [String], isKnownWord: (String) -> Bool,
-                             limit: Int = maximumTerms) -> [String] {
+                             limit: Int = maximumTerms) async -> [String] {
         struct Candidate {
             var spellings: [String: Int] = [:]
             var count = 0
@@ -56,6 +57,7 @@ public enum ScreenContext {
         var known: [String: Bool] = [:]
         func knownWord(_ word: String) -> Bool {
             if let cached = known[word] { return cached }
+            guard !Task.isCancelled else { return false }
             let result = isKnownWord(word)
             known[word] = result
             return result
@@ -69,10 +71,18 @@ public enum ScreenContext {
         lines: for line in lines {
             var sentenceStart = true
             for chunk in line.split(whereSeparator: \.isWhitespace) {
+                // Yield between bounded tokens so the finish deadline and app controls
+                // can cancel ranking even on a dense window. Spell checks stay on
+                // the caller's main actor; one token's work has its own check budget.
+                await Task.yield()
+                guard !Task.isCancelled else { return [] }
+                guard chunk.utf8.count <= 512 else { continue }
                 defer { sentenceStart = chunk.last.map { ".!?:".contains($0) } ?? false }
                 // Skip emails, URLs, domains, and paths whole rather than leaking their parts.
                 guard !chunk.contains(where: { "@/\\".contains($0) }), !isWebAddress(chunk) else { continue }
                 for (index, match) in chunk.matches(of: tokenPattern).enumerated() {
+                    await Task.yield()
+                    guard !Task.isCancelled else { return [] }
                     remaining -= 1
                     if remaining < 0 { break lines }
                     guard let token = normalized(String(match.output), isKnownWord: segmentWord),

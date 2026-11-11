@@ -1,6 +1,6 @@
 # Architecture
 
-Inlay's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use the same OpenAPI v1 contract whether they run on one machine or across the network.
+Inlay's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use API version 4. The contract is `Server/api/openapi.yaml` (OpenAPI 3.1). HTTP paths stay under `/v1`, and the client requires `apiVersion` 4 before dictation. The same contract applies on one machine or across the network.
 
 ## Code map
 
@@ -59,7 +59,7 @@ The regular app uses `~/Library/Application Support/Inlay`; Dev uses `~/Library/
 
 ## Storage
 
-The server's `--data-dir` (normally `.local/server` in development) contains:
+The server's `--data-dir` contains the layout below. `./scripts/run-dev.sh` uses `.local/server`. `bun run dev` uses `.local/dev-server/data` and ignores an inherited `INLAY_SERVER_DATA_DIR`. An installed Linux service uses `/var/lib/inlay`.
 
 ```text
 preferences.json
@@ -79,3 +79,5 @@ All clients read shared, paginated history. Deleting an inactive generation dele
 Only one server may own a data directory. Back up preferences and generation directories together. Inlay does not add filesystem encryption; protect this directory as you would the recordings it contains. Authentication and remote transport are described in the [server guide](../Server/README.md#remote-access).
 
 See the [HTTP contract](client-server-contract.md) for request details and [text correction](text-correction.md) for behavior and limitations.
+
+Screen hints are attached at Finish. If combined with capture-time proofreading, earlier committed windows proceed without those hints; late terms must never rewrite committed text. Providing hints to future windows requires a bounded, take-owned context snapshot rather than reading whichever window is focused later.

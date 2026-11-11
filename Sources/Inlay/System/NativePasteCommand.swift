@@ -13,7 +13,7 @@ struct NativePasteCommand: @unchecked Sendable {
     }
 
     nonisolated static func find(for pid: pid_t) -> Self? {
-        let deadline = ProcessInfo.processInfo.systemUptime + 0.3
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.75
         guard pid > 0, !Task.isCancelled, AXIsProcessTrusted(),
               let menu = NativePasteAX.menuBar(for: pid) else { return nil }
         let discovery = NativePasteCommandDiscovery<AXUIElement>(
@@ -27,7 +27,10 @@ struct NativePasteCommand: @unchecked Sendable {
             now: { ProcessInfo.processInfo.systemUptime },
             isCancelled: { Task.isCancelled }
         )
-        guard let element = discovery.find(in: menu, deadline: deadline) else { return nil }
+        // Paste is an item of a top-level menu: menu bar (0), menu bar item
+        // (1), menu (2), item (3). Submenus such as Open Recent or Services
+        // are often slow or built lazily and are not searched.
+        guard let element = discovery.find(in: menu, deadline: deadline, maximumDepth: 3) else { return nil }
         return Self(element: element)
     }
 
@@ -83,7 +86,7 @@ struct NativePasteCommandDiscovery<Element> {
     let now: () -> TimeInterval
     let isCancelled: () -> Bool
 
-    func find(in root: Element, deadline: TimeInterval, maximumNodes: Int = 128, maximumDepth: Int = 8) -> Element? {
+    func find(in root: Element, deadline: TimeInterval, maximumNodes: Int = 512, maximumDepth: Int = 8) -> Element? {
         guard maximumNodes > 0, maximumDepth >= 0 else { return nil }
         var queue = [(root, 0)]
         var visited: [Element] = []
@@ -105,13 +108,19 @@ struct NativePasteCommandDiscovery<Element> {
                 }
             }
             guard !isCancelled(), now() < deadline else { return nil }
+            if depth >= maximumDepth { continue }
             let remaining = maximumNodes - visited.count - queue.count
-            guard remaining >= 0, let descendants = children(element, remaining),
-                  descendants.count <= remaining,
-                  descendants.isEmpty || depth < maximumDepth else { return nil }
+            guard remaining >= 0 else { return nil }
+            guard let descendants = children(element, remaining), descendants.count <= remaining else {
+                // One slow or oversized menu (History, Bookmarks, ...) must not
+                // hide Edit > Paste. Only an unreadable menu bar ends the search.
+                if depth == 0 { return nil }
+                continue
+            }
             queue.append(contentsOf: descendants.map { ($0, depth + 1) })
         }
-        // A candidate found before a timeout/truncated branch is not unique.
+        // A candidate found before a timeout is not unique. Skipped menus were
+        // never read, so uniqueness covers only the menus that were.
         guard !isCancelled(), now() < deadline else { return nil }
         return candidate
     }
