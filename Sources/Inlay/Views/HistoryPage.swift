@@ -8,6 +8,7 @@ struct HistoryPage: View {
     @State private var deviceID = "all"
     @State private var confirmingDeleteAudio = false
     @State private var confirmingDelete = false
+    @State private var confirmingCancelRecording = false
     @State private var copiedID: UUID?
     @State private var showingWisprFlowImport = false
 
@@ -57,8 +58,10 @@ struct HistoryPage: View {
                 HStack {
                     Text("Saved recording · \(Int(capture.seconds)) seconds")
                     Spacer()
-                    Button("Finish in History") { controller.finishLocalCapture(capture) }
-                        .disabled(controller.recoveringCaptures.contains(capture.id))
+                    if capture.seconds >= 0.25 {
+                        Button("Finish in History") { controller.finishLocalCapture(capture) }
+                            .disabled(controller.recoveringCaptures.contains(capture.id))
+                    }
                     Button("Discard saved audio", role: .destructive) { controller.discardLocalCapture(capture) }
                         .disabled(controller.recoveringCaptures.contains(capture.id))
                 }
@@ -102,6 +105,14 @@ struct HistoryPage: View {
         .sheet(isPresented: $showingWisprFlowImport) {
             WisprFlowImportSheet(controller: controller, driver: controller.wisprImport)
                 .onDisappear { controller.wisprImport.closeWisprFlowImportSheet() }
+        }
+        .confirmationDialog("Cancel this unfinished recording?", isPresented: $confirmingCancelRecording) {
+            if let record = controller.generationDetail, record.id == selectedID {
+                Button("Cancel recording", role: .destructive) { controller.cancelUnfinishedGeneration(record) }
+            }
+            Button("Keep recording", role: .cancel) {}
+        } message: {
+            Text("Its uploaded audio will be removed. You can then delete the cancelled entry from History.")
         }
         .confirmationDialog("Delete this dictation from the server?", isPresented: $confirmingDelete) {
             if let selected {
@@ -180,6 +191,9 @@ struct HistoryPage: View {
                 HStack {
                     Text(selected.createdAt, format: .dateTime.month(.wide).day().hour().minute()).font(.headline)
                     Spacer()
+                    if controller.canCancelUnfinishedGeneration(selected) {
+                        Button("Cancel recording", role: .destructive) { confirmingCancelRecording = true }
+                    }
                     Button {
                         NSPasteboard.general.clearContents()
                         if NSPasteboard.general.setString(selected.finalText, forType: .string) { copiedID = selected.id }

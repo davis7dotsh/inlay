@@ -6,8 +6,10 @@ import InlayAPI
 /// grows a PCM queue in memory. Recovery replays byte-identical upload batches.
 final class AudioChunkPipe: @unchecked Sendable, Identifiable {
     private struct Manifest: Codable {
-        var version = 1
-        let record: GenerationRecord
+        var version = 2
+        // Version 1 embedded this immutable snapshot in every checkpoint.
+        // Version 2 keeps it once in record.json, outside the audio writer's hot path.
+        var record: GenerationRecord?
         let endpoint: URL
         let deviceID: String
         var chunks = 0
@@ -23,6 +25,7 @@ final class AudioChunkPipe: @unchecked Sendable, Identifiable {
     }
     let directory: URL
     private let lock = NSRecursiveLock()
+    private let generation: GenerationRecord
     private var manifest: Manifest
     private var pending: [Chunk] = []
     private var pendingBytes = 0
@@ -31,8 +34,8 @@ final class AudioChunkPipe: @unchecked Sendable, Identifiable {
     private var failure: Error?
     private let onFailure: (@Sendable (Error) -> Void)?
 
-    var id: UUID { lock.withLock { manifest.record.id } }
-    var record: GenerationRecord { lock.withLock { manifest.record } }
+    var id: UUID { generation.id }
+    var record: GenerationRecord { generation }
     var endpoint: URL { lock.withLock { manifest.endpoint } }
     var deviceID: String { lock.withLock { manifest.deviceID } }
     var isSealed: Bool { lock.withLock { manifest.sealed } }
@@ -41,13 +44,15 @@ final class AudioChunkPipe: @unchecked Sendable, Identifiable {
     init(root: URL, record: GenerationRecord, endpoint: URL, deviceID: String,
          onFailure: (@Sendable (Error) -> Void)? = nil) throws {
         directory = root.appendingPathComponent(record.id.uuidString, isDirectory: true)
-        manifest = Manifest(record: record, endpoint: endpoint, deviceID: deviceID)
+        generation = record
+        manifest = Manifest(record: nil, endpoint: endpoint, deviceID: deviceID)
         self.onFailure = onFailure
         guard !FileManager.default.fileExists(atPath: directory.path), endpoint.user == nil,
               endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil else {
             throw ServerClientError.invalidEndpoint
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try durableWrite(InlayAPI.encoder().encode(record), to: directory.appendingPathComponent("record.json"))
         try save()
         try syncDirectory(root)
         try syncDirectory(root.deletingLastPathComponent())
@@ -57,9 +62,21 @@ final class AudioChunkPipe: @unchecked Sendable, Identifiable {
         self.directory = directory
         onFailure = nil
         manifest = try InlayAPI.decoder().decode(Manifest.self, from: Data(contentsOf: directory.appendingPathComponent("manifest.json")))
-        guard manifest.version == 1, manifest.chunks >= 0, manifest.chunks <= 10_000_000,
+        if manifest.version == 1, let record = manifest.record { generation = record }
+        else {
+            generation = try InlayAPI.decoder().decode(GenerationRecord.self, from: Data(contentsOf: directory.appendingPathComponent("record.json")))
+        }
+        guard [1, 2].contains(manifest.version), manifest.chunks >= 0, manifest.chunks <= 10_000_000,
               manifest.inferenceFrames >= 0, manifest.originalFrames >= 0,
-              manifest.record.id.uuidString == directory.lastPathComponent else { throw ServerClientError.invalidResponse }
+              generation.id.uuidString == directory.lastPathComponent else { throw ServerClientError.invalidResponse }
+        if manifest.version == 1 {
+            // Commit the immutable record before removing it from the manifest;
+            // either checkpoint remains readable if migration is interrupted.
+            try durableWrite(InlayAPI.encoder().encode(generation), to: directory.appendingPathComponent("record.json"))
+            manifest.version = 2
+            manifest.record = nil
+            try save()
+        }
         // An uncommitted suffix was never made available to the uploader.
         for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
             if file.pathExtension == "chunk", let index = Int(file.deletingPathExtension().lastPathComponent), index >= manifest.chunks {

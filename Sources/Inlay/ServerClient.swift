@@ -177,6 +177,28 @@ extension ServerClient {
             return record
         }.value
     }
+    /// Bind the existing take before sending audio. Replays use the same
+    /// request ID and body throughout the upload path's transient retry budget.
+    func bindContinuation(_ value: CreateGenerationRequest, to id: UUID) async throws {
+        let body = try Self.encode(value)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        var delay: Duration = .milliseconds(500)
+        while true {
+            try Task.checkCancellation()
+            do {
+                let record: GenerationRecord = try await json(path: "v1/generations", method: "POST", body: body)
+                try Task.checkCancellation()
+                guard record.id == id, record.status == .receiving else { throw ServerClientError.invalidResponse }
+                return
+            } catch {
+                try Task.checkCancellation()
+                let remaining = ContinuousClock.now.duration(to: deadline)
+                guard Self.isTransient(error), remaining > .zero else { throw error }
+                try await Task.sleep(for: min(delay, remaining))
+                delay = min(delay * 2, .seconds(8))
+            }
+        }
+    }
     func finish(_ id: UUID, value: FinishGenerationRequest) async throws -> GenerationRecord {
         let body = try Self.encode(value)
         var failures = 0

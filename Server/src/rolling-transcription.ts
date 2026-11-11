@@ -44,7 +44,9 @@ interface Session {
   speech?: Promise<void>;
   proof?: Promise<void>;
   error?: unknown;
+  captureRetries: number;
   mutation: Promise<unknown>;
+  finishing?: Promise<unknown>;
 }
 
 /** Durable source offsets, independent FIFO helpers, and no guessed token seams.
@@ -57,7 +59,11 @@ export class RollingTranscription {
   constructor(
     private readonly root: string,
     private readonly inference: InferenceBackend,
-    private readonly stage: <T>(kind: "speech" | "proof", work: () => Promise<T>) => Promise<T>,
+    private readonly stage: <T>(
+      kind: "speech" | "proof",
+      work: () => Promise<T>,
+      signal?: AbortSignal,
+    ) => Promise<T>,
   ) {}
 
   private directory(id: string) {
@@ -121,9 +127,14 @@ export class RollingTranscription {
           final: false,
           controller: new AbortController(),
           mutation: Promise.resolve(),
+          captureRetries: 0,
         } satisfies Session;
       })();
       this.sessions.set(id, pending);
+      const initializing = pending;
+      void pending.catch(() => {
+        if (this.sessions.get(id) === initializing) this.sessions.delete(id);
+      });
     }
     return pending;
   }
@@ -143,7 +154,15 @@ export class RollingTranscription {
   async notify(id: string, frames: number, settings: ServerPreferences) {
     const session = await this.session(id, settings);
     session.available = Math.max(session.available, frames);
-    if (!session.error && !session.controller.signal.aborted) this.startSpeech(id, session);
+    if (session.controller.signal.aborted || session.final) return;
+    // A later upload can retry one transient capture-time failure from its
+    // durable cursor. Persistent failures wait for explicit Finish/Retry.
+    if (session.error && !session.speech && !session.proof && session.captureRetries < 1) {
+      session.captureRetries++;
+      session.error = undefined;
+      this.startProof(id, session);
+    }
+    if (!session.error) this.startSpeech(id, session);
   }
 
   private startSpeech(id: string, session: Session) {
@@ -238,9 +257,14 @@ export class RollingTranscription {
       const count = Math.min(cap, session.available - first);
       if (!count || (!session.final && count < target + rate / 4)) return;
       const bytes = await this.readAudio(id, first, count);
-      const cut = this.cut(bytes, session.final);
+      const last = session.final && first + count === session.available;
+      const cut = this.cut(bytes, last);
       if (cut === undefined) return;
-      const audio = bytes.subarray(0, cut * 4);
+      // Parakeet requires at least 0.2 s. Padding belongs only to the
+      // inference WAV; the durable cursor always advances real source frames.
+      const inferenceFrames = Math.max(cut, rate / 5);
+      const audio = Buffer.alloc(inferenceFrames * 4);
+      bytes.copy(audio, 0, 0, cut * 4);
       const header = Buffer.alloc(44);
       header.write("RIFF");
       header.writeUInt32LE(audio.length + 36, 4);
@@ -258,15 +282,18 @@ export class RollingTranscription {
       await atomicPrivateWrite(path, Buffer.concat([header, audio]));
       let speech: SpeechInferenceResult;
       try {
-        speech = await this.stage("speech", () =>
-          this.inference.transcribe(
-            path,
-            session.settings.language,
-            [],
-            undefined,
-            signal,
-            cut / rate,
-          ),
+        speech = await this.stage(
+          "speech",
+          () =>
+            this.inference.transcribe(
+              path,
+              session.settings.language,
+              [],
+              undefined,
+              signal,
+              inferenceFrames / rate,
+            ),
+          signal,
         );
       } finally {
         await rm(path, { force: true });
@@ -301,14 +328,17 @@ export class RollingTranscription {
           )
         ).toString(),
       ) as SpeechWindow;
-      const text = await this.stage("proof", () =>
-        processLongRecordingTextWindow(
-          structuredClone(session.checkpoint.text),
-          window.speech.text,
-          session.settings,
-          this.inference,
-          signal,
-        ),
+      const text = await this.stage(
+        "proof",
+        () =>
+          processLongRecordingTextWindow(
+            structuredClone(session.checkpoint.text),
+            window.speech.text,
+            session.settings,
+            this.inference,
+            signal,
+          ),
+        signal,
       );
       const spans = drainLongRecordingTextSpans(text);
       await this.mutate(session, async () => {
@@ -334,6 +364,23 @@ export class RollingTranscription {
     screenContextTerms: string[] = [],
   ) {
     const session = await this.session(id, settings);
+    const task = this.finishSession(id, frames, settings, signal, screenContextTerms, session);
+    session.finishing = task;
+    try {
+      return await task;
+    } finally {
+      if (session.finishing === task) session.finishing = undefined;
+    }
+  }
+
+  private async finishSession(
+    id: string,
+    frames: number,
+    settings: ServerPreferences,
+    signal: AbortSignal,
+    screenContextTerms: string[],
+    session: Session,
+  ) {
     const abort = () => session.controller.abort();
     signal.addEventListener("abort", abort, { once: true });
     try {
@@ -358,15 +405,19 @@ export class RollingTranscription {
       )
         throw new Error("Recording processing has not drained its acknowledged audio.");
       if (!session.checkpoint.text.finalized) {
-        const text = await this.stage("proof", () =>
-          finalizeLongRecordingText(
-            structuredClone(session.checkpoint.text),
-            settings,
-            this.inference,
-            signal,
-            screenContextTerms,
-          ),
+        const text = await this.stage(
+          "proof",
+          () =>
+            finalizeLongRecordingText(
+              structuredClone(session.checkpoint.text),
+              settings,
+              this.inference,
+              session.controller.signal,
+              screenContextTerms,
+            ),
+          session.controller.signal,
         );
+        session.controller.signal.throwIfAborted();
         const spans = drainLongRecordingTextSpans(text);
         await atomicPrivateWrite(
           join(this.directory(id), "final-proof.json"),
@@ -458,22 +509,31 @@ export class RollingTranscription {
   /** Release only live tasks; durable cursors survive an explicit Retry. */
   async release(id: string) {
     const pending = this.sessions.get(id);
-    if (pending) {
-      const session = await pending;
-      session.controller.abort();
-      await session.speech;
-      await session.proof;
-      await session.mutation;
+    try {
+      // Initialization may have failed before a Session existed. It must not
+      // prevent Cancel/Delete/Retry from releasing the cached promise.
+      const session = await pending?.catch(() => undefined);
+      if (session) {
+        session.controller.abort();
+        // Queued stages settle promptly on abort. Active stages and all file
+        // writes must finish before callers remove or reuse this directory.
+        await Promise.allSettled([session.speech, session.proof, session.finishing]);
+        await session.mutation;
+      }
+    } finally {
+      if (this.sessions.get(id) === pending) this.sessions.delete(id);
     }
-    this.sessions.delete(id);
   }
   async stop() {
-    const sessions = await Promise.all(this.sessions.values());
+    const initialized = await Promise.allSettled(this.sessions.values());
+    const sessions = initialized.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
     for (const session of sessions) session.controller.abort();
     await Promise.allSettled(
       sessions
-        .flatMap((session) => [session.speech, session.proof])
-        .filter((task): task is Promise<void> => task !== undefined),
+        .flatMap((session) => [session.speech, session.proof, session.finishing, session.mutation])
+        .filter((task): task is Promise<unknown> => task !== undefined),
     );
   }
 }

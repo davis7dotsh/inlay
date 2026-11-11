@@ -116,12 +116,13 @@ function splitBoundary(text: string, limit: number) {
 
 function protectedBoundary(text: string, proposed: number, settings: ServerPreferences) {
   const guard = tailUnits(settings);
-  const offset = scalarBoundary(text, Math.max(0, proposed - guard));
+  let offset = scalarBoundary(text, Math.max(0, proposed - guard));
+  // The guard may start inside a word. A short correction neighborhood can
+  // fall back to that start, so retain the entire word rather than split it.
+  if (offset && /\S/u.test(text[offset] ?? ""))
+    offset -= text.slice(0, offset).match(/\S+$/u)?.[0].length ?? 0;
   text = text.slice(offset, Math.min(text.length, proposed + guard));
-  let cut = proposed - offset;
-  for (const range of spokenListBoundaryRanges(text)) {
-    if (range.start < cut && range.end > cut) cut = range.start;
-  }
+  const ranges = [...spokenListBoundaryRanges(text)];
   // Match the dictionary's full Unicode fold while retaining source offsets.
   const boundaries = new Map<number, number>([[0, 0]]);
   const parts: string[] = [];
@@ -144,7 +145,7 @@ function protectedBoundary(text: string, proposed: number, settings: ServerPrefe
     for (const match of parts.join("").matchAll(pattern)) {
       const start = boundaries.get(match.index);
       const end = boundaries.get(match.index + match[0].length);
-      if (start !== undefined && end !== undefined && start < cut && end > cut) cut = start;
+      if (start !== undefined && end !== undefined) ranges.push({ start, end });
     }
   }
   // A repair may abandon up to eight nearby words. Keep its complete neighborhood.
@@ -153,8 +154,15 @@ function protectedBoundary(text: string, proposed: number, settings: ServerPrefe
     const start = words.at(-8)?.index ?? 0;
     const after = [...text.slice(match.index + match[0].length).matchAll(/\S+/gu)].at(8);
     const end = after ? match.index + match[0].length + after.index : text.length;
-    if (start < cut && end > cut) cut = start;
+    ranges.push({ start, end });
   }
+  let cut = proposed - offset;
+  let previous: number;
+  do {
+    previous = cut;
+    for (const range of ranges) if (range.start < cut && range.end > cut) cut = range.start;
+    // Moving out of one protected span may enter an earlier overlapping span.
+  } while (cut < previous);
   return cut + offset;
 }
 

@@ -203,7 +203,11 @@ final class InlayController: ObservableObject {
             do {
                 // Acknowledge Cancel before deleting the only local recovery copy.
                 // Otherwise an offline discard can strand a receiving server slot.
-                _ = try await connection.cancel(pipe.id)
+                do { _ = try await connection.cancel(pipe.id) }
+                catch ServerClientError.rejected(404, _, "not_found") {
+                    // An authenticated missing-record response also proves
+                    // there is no live server upload left to cancel.
+                }
                 try pipe.discard()
                 removePendingEntry(pipe.id)
                 refreshHistory()
@@ -212,7 +216,7 @@ final class InlayController: ObservableObject {
     }
 
     func finishLocalCapture(_ pipe: AudioChunkPipe) {
-        guard !recoveringCaptures.contains(pipe.id), let connection = try? client(), connection.endpoint == pipe.endpoint else { return }
+        guard pipe.seconds >= 0.25, !recoveringCaptures.contains(pipe.id), let connection = try? client(), connection.endpoint == pipe.endpoint else { return }
         recoveringCaptures.insert(pipe.id)
         pipe.resume()
         Task { [weak self] in
@@ -238,6 +242,10 @@ final class InlayController: ObservableObject {
                 try pipe.discard()
                 removePendingEntry(pipe.id)
                 refreshHistory()
+            } catch ServerClientError.rejected(404, _, "not_found") {
+                // Finish never silently deletes the only remaining audio.
+                // Discard is an explicit, available action even for a missing record.
+                errorMessage = "This server no longer has this recording. Audio remains saved on this Mac; use Discard to remove the local copy."
             } catch { errorMessage = "Audio remains saved on this Mac. " + error.localizedDescription }
         }
     }
@@ -631,6 +639,29 @@ final class InlayController: ObservableObject {
         }
     }
 
+    func canCancelUnfinishedGeneration(_ record: GenerationRecord) -> Bool {
+        record.status == .receiving && record.device.id == preferences.deviceID &&
+            activeGenerationID != record.id && !pendingDictations.contains(where: { $0.id == record.id }) &&
+            !recoveringCaptures.contains(record.id) &&
+            !FileManager.default.fileExists(atPath: captureRoot.appendingPathComponent(record.id.uuidString).path)
+    }
+
+    func cancelUnfinishedGeneration(_ record: GenerationRecord) {
+        guard canCancelUnfinishedGeneration(record), let connection = try? client() else { return }
+        recoveringCaptures.insert(record.id)
+        Task { [weak self] in
+            guard let self else { return }
+            defer { recoveringCaptures.remove(record.id) }
+            do {
+                try await connection.cancel(record.id)
+                guard (try? client().endpoint) == connection.endpoint else { return }
+                if generationDetail?.id == record.id { generationDetail = nil; loadGenerationDetail(record.id) }
+                removePendingEntry(record.id)
+                refreshHistory()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
     func openGenerationAudio(_ generation: GenerationRecord, kind: AudioKind) {
         Task { [weak self] in
             guard let self else { return }
@@ -704,9 +735,26 @@ final class InlayController: ObservableObject {
     private func discardCapture() {
         let generation = activeGenerationID
         let connection = activeClient
-        try? uploadPipe?.discard()
+        let pipe = uploadPipe
+        pipe?.cancel()
+        try? pipe?.finish()
+        if let generation { recoveringCaptures.insert(generation) }
         resetSession()
-        if let generation, let connection { Task { try? await connection.cancel(generation) } }
+        if let generation, let connection {
+            Task { [weak self] in
+                guard let self else { return }
+                defer { recoveringCaptures.remove(generation); refreshLocalCaptures(); refreshHistory() }
+                do {
+                    do { _ = try await connection.cancel(generation) }
+                    catch ServerClientError.rejected(404, _, "not_found") {}
+                    try pipe?.discard()
+                    removePendingEntry(generation)
+                } catch {
+                    // Keep the synced audio until Cancel is acknowledged.
+                    // History can retry Finish or Discard after reconnection.
+                }
+            }
+        } else if let generation { recoveringCaptures.remove(generation) }
         let remaining = pendingDictations.last
         if let remaining { showEarlierDictation(remaining) }
         else {
@@ -715,6 +763,7 @@ final class InlayController: ObservableObject {
             onHUDVisibility?(false)
         }
         refreshServer()
+        refreshLocalCaptures()
     }
 
     func undoCancellation() {
@@ -799,11 +848,9 @@ final class InlayController: ObservableObject {
     }
 
     private func failSession(_ message: String, cancelServer: Bool) {
-        let generation = activeGenerationID
-        let connection = activeClient
-        resetSession()
+        if cancelServer { discardCapture() }
+        else { resetSession() }
         showError(message)
-        if cancelServer, let generation, let connection { Task { try? await connection.cancel(generation) } }
         refreshHistory()
     }
 
@@ -917,14 +964,21 @@ final class InlayController: ObservableObject {
                     ? DeliveryReceipt(status: "cancelled", message: "Saved to history. Not pasted.") : nil) {
                     do {
                         try await connection.delivery(entry.id, receipt: receipt)
-                        if isCurrent(entry) { removePendingEntry(entry.id); refreshHistory() }
+                        if isCurrent(entry) {
+                            discardSettledLocalCapture(entry.id)
+                            removePendingEntry(entry.id); refreshHistory()
+                        }
                     } catch {}
                 } else if record.delivery == nil {
                     if !undeliveredResults.contains(where: { $0.id == record.id }) {
                         undeliveredResults.append(record)
                     }
-                } else { removePendingEntry(entry.id) }
+                } else {
+                    discardSettledLocalCapture(entry.id)
+                    removePendingEntry(entry.id)
+                }
             case .failed, .cancelled:
+                if record.status == .cancelled { discardSettledLocalCapture(entry.id) }
                 removePendingEntry(entry.id)
             case .receiving:
                 if FileManager.default.fileExists(atPath: captureRoot.appendingPathComponent(entry.id.uuidString).path) { continue }
@@ -943,6 +997,17 @@ final class InlayController: ObservableObject {
             case .queued, .transcribing, .proofreading:
                 break
             }
+        }
+    }
+
+    private func discardSettledLocalCapture(_ id: UUID) {
+        // Reconciliation never owns a live or actively recovered capture.
+        guard !pendingDictations.contains(where: { $0.id == id }), activeGenerationID != id,
+              !recoveringCaptures.contains(id) else { return }
+        refreshLocalCaptures()
+        if let pipe = localCaptures.first(where: { $0.id == id }) {
+            try? pipe.discard()
+            refreshLocalCaptures()
         }
     }
 
@@ -1130,8 +1195,8 @@ final class InlayController: ObservableObject {
                         }
                         if let self, !sharesEarlierAnchor,
                            let continuationID = anchor.flatMap({ self.continuation(for: $0)?.generationID }) {
-                            _ = try await connection.create(.init(requestID: current,
-                                device: created.device, mode: created.mode, continuationID: continuationID))
+                            try await connection.bindContinuation(.init(requestID: current,
+                                device: created.device, mode: created.mode, continuationID: continuationID), to: created.id)
                         }
                         let outcome = try await connection.upload(pipe.stream, to: created.id, preserveOriginal: created.settings.preferences.keepOriginalAudio)
                         if let self, !outcome.complete, sessionID == current, isCapturing, !Task.isCancelled {

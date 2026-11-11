@@ -1,4 +1,5 @@
 import { RollingTranscription } from "./rolling-transcription.ts";
+import { appendUploadReceipt, recoverUploads, type Upload } from "./upload-journal.ts";
 import { constants } from "node:fs";
 import { access, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -67,6 +68,9 @@ import { evaluateCorrectionInWorker } from "./domain/correction-runtime.ts";
 import { maxInputCharacters, modelHints, processingRecord } from "./domain/correction.ts";
 
 const MAX_ACTIVE_GENERATIONS = 12;
+// This leases processing capacity, not the audio archive. Offline captures stay
+// resumable indefinitely; an upload can reacquire a free capture-time slot.
+const CAPTURE_IDLE_MS = 5 * 60_000;
 // Event streams repeat the latest record on every tick unless a line went out
 // within the last half interval, so subscribers see a line at least every ~3 s.
 const HEARTBEAT_MS = 2_000;
@@ -193,11 +197,6 @@ const validDeviceLabel = (text: string) =>
 // comfortably inside the router and HTTP request-line limits.
 const validDeviceID = (text: string) =>
   validDeviceLabel(text) && text.length <= 2_048 && Buffer.byteLength(text) <= 4_096;
-interface Upload {
-  format: AudioStreamFormat;
-  chunks: { offset: number; count: number }[];
-  bytes: number;
-}
 interface Watcher {
   queue: GenerationRecord[];
   wake?: () => void;
@@ -213,6 +212,7 @@ export class GenerationService {
   private readonly rolling: RollingTranscription;
   private records = new Map<string, GenerationRecord>();
   private uploads = new Map<string, Partial<Record<AudioKind, Upload>>>();
+  private captureActivity = new Map<string, number>();
   private processingControllers = new Map<string, AbortController>();
   private speechStageQueue: Promise<unknown> = Promise.resolve();
   private proofStageQueue: Promise<unknown> = Promise.resolve();
@@ -244,7 +244,7 @@ export class GenerationService {
     this.rolling = new RollingTranscription(
       join(configuration.dataDirectory, "generations"),
       inference,
-      (stage, work) => this.withStage(stage, work),
+      (stage, work, signal) => this.withStage(stage, work, signal),
     );
     this.imports = new WisprFlowImports({
       dataDirectory: configuration.dataDirectory,
@@ -286,13 +286,71 @@ export class GenerationService {
     return result;
   }
   /** One job per helper at a time; speech of take N+1 overlaps proof of take N. */
-  private withStage<T>(stage: "speech" | "proof", operation: () => Promise<T> | T): Promise<T> {
+  private withStage<T>(
+    stage: "speech" | "proof",
+    operation: () => Promise<T> | T,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const queue = stage === "speech" ? this.speechStageQueue : this.proofStageQueue;
-    const result = queue.then(operation);
-    const tail = result.catch(() => {});
+    let started = false;
+    let cancelled = false;
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason: unknown) => void;
+    const result = new Promise<T>((success, failure) => {
+      resolve = success;
+      reject = failure;
+    });
+    const abort = () => {
+      if (started) return;
+      cancelled = true;
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason ?? new DOMException("Recording cancelled.", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    const tail = queue.then(async () => {
+      if (cancelled) return; // Never touch a queued job's now-released files.
+      started = true;
+      signal?.removeEventListener("abort", abort);
+      try {
+        signal?.throwIfAborted();
+        resolve(await operation());
+      } catch (error) {
+        reject(error);
+      }
+    });
+    // An active operation settles only after its helper and cleanup return.
+    // Aborting a queued operation settles result now, but leaves a FIFO no-op.
     if (stage === "speech") this.speechStageQueue = tail;
     else this.proofStageQueue = tail;
     return result;
+  }
+  private activeGenerationCount() {
+    const cutoff = Date.now() - CAPTURE_IDLE_MS;
+    return (
+      [...this.records.values()].filter(
+        (record) => !terminal(record) && record.status !== "receiving",
+      ).length +
+      [...this.captureActivity].filter(
+        ([id, activity]) =>
+          activity > cutoff &&
+          (!this.records.has(id) || this.records.get(id)?.status === "receiving"),
+      ).length
+    );
+  }
+  private activateCapture(id: string) {
+    const active = (this.captureActivity.get(id) ?? 0) > Date.now() - CAPTURE_IDLE_MS;
+    if (!active && this.activeGenerationCount() >= MAX_ACTIVE_GENERATIONS) return false;
+    this.captureActivity.set(id, Date.now());
+    return true;
+  }
+  private notifyCapture(record: GenerationRecord, upload: Upload) {
+    // Capacity pressure may defer inference until Finish; it must never reject
+    // durable PCM from a previously accepted, offline recording.
+    if (!this.stopping && this.activateCapture(record.id))
+      void this.rolling
+        .notify(record.id, upload.bytes / 4, record.settings.preferences)
+        .catch((error: unknown) => logError("rolling_capture_failed", error, { id: record.id }));
   }
   private directory(id: string) {
     return join(this.configuration.dataDirectory, "generations", id);
@@ -404,12 +462,10 @@ export class GenerationService {
           throw new ServiceError(500, "invalid_archive", "A generation has invalid metadata.");
         record.id = id;
         if (record.status === "receiving") {
-          const streams = await this.recoverUploads(id);
+          const streams = await recoverUploads(this.directory(id));
           this.uploads.set(id, streams);
-          if (streams.inference)
-            void this.rolling
-              .notify(id, streams.inference.bytes / 4, record.settings.preferences)
-              .catch((error: unknown) => logError("rolling_recovery_failed", error, { id }));
+          // Restarted captures are inactive until an upload resumes them. Do
+          // not fill helper queues with orphaned/offline receiving records.
           this.records.set(id, record);
           continue;
         }
@@ -512,6 +568,14 @@ export class GenerationService {
     });
     // Receiving audio is durable and may be paused/offline. Only an explicit
     // Finish, Cancel, or delete closes it; wall time is not capture duration.
+    for (const [id, activity] of this.captureActivity) {
+      if (activity > Date.now() - CAPTURE_IDLE_MS) continue;
+      await this.withGenerationLock(id, async () => {
+        if ((this.captureActivity.get(id) ?? 0) > Date.now() - CAPTURE_IDLE_MS) return;
+        if (this.records.get(id)?.status === "receiving") await this.rolling.release(id);
+        this.captureActivity.delete(id);
+      });
+    }
     if (Date.now() - this.lastRetentionSweep >= 86_400_000) {
       this.lastRetentionSweep = Date.now();
       await this.sweepAudioRetention();
@@ -530,9 +594,8 @@ export class GenerationService {
         Boolean(task),
       ),
     );
-    // Sealed work survives shutdown as queued; only unsealed receiving
-    // sessions are cancelled. This runs after the queue drains so the
-    // queued state is the final write.
+    // Sealed work survives shutdown as queued, and unsealed captures remain
+    // resumable. Run after the queue drains so queued is the final write.
     for (const snapshot of this.records.values()) {
       await this.withGenerationLock(snapshot.id, async () => {
         const record = this.records.get(snapshot.id);
@@ -718,8 +781,7 @@ export class GenerationService {
           return copy(record);
         });
       }
-      const active = [...this.records.values()].filter((record) => !terminal(record)).length;
-      if (active >= MAX_ACTIVE_GENERATIONS)
+      if (this.activeGenerationCount() >= MAX_ACTIVE_GENERATIONS)
         throw new ServiceError(
           429,
           "server_busy",
@@ -744,17 +806,26 @@ export class GenerationService {
         request.mode,
         now(),
       );
-      await mkdir(this.directory(record.id), { mode: 0o700 });
-      await atomicPrivateWrite(
-        join(this.directory(record.id), "capture-context.json"),
-        JSON.stringify({
-          previous: this.continuation(request.continuationID, record),
-        }),
-      );
-      await this.save(record);
-      await syncDirectory(dirname(this.directory(record.id)));
-      this.uploads.set(record.id, {});
-      return copy(record);
+      // Reserve synchronously before filesystem awaits, including against
+      // uploads that resume while Create is saving its record.
+      if (!this.activateCapture(record.id))
+        throw new ServiceError(429, "server_busy", "The server is busy. Try again shortly.");
+      try {
+        await mkdir(this.directory(record.id), { mode: 0o700 });
+        await atomicPrivateWrite(
+          join(this.directory(record.id), "capture-context.json"),
+          JSON.stringify({
+            previous: this.continuation(request.continuationID, record),
+          }),
+        );
+        await this.save(record);
+        await syncDirectory(dirname(this.directory(record.id)));
+        this.uploads.set(record.id, {});
+        return copy(record);
+      } catch (error) {
+        this.captureActivity.delete(record.id);
+        throw error;
+      }
     });
   }
   private newRecord(
@@ -842,7 +913,7 @@ export class GenerationService {
             "invalid_samples",
             "Audio must contain finite float32 samples.",
           );
-      const streams = copy(this.uploads.get(id) ?? {});
+      const streams = this.uploads.get(id) ?? {};
       const upload = streams[kind] ?? { format: copy(format), chunks: [], bytes: 0 };
       if (
         upload.format.sampleRate !== format.sampleRate ||
@@ -882,6 +953,7 @@ export class GenerationService {
         }
         record.updatedAt = now();
         this.records.set(id, record);
+        if (kind === "inference") this.notifyCapture(record, upload);
         return {
           nextSequence: upload.chunks.length,
           frameCount: upload.bytes / (format.channels * 4),
@@ -925,17 +997,14 @@ export class GenerationService {
       } finally {
         await file.close();
       }
+      // Never advance the in-memory cursor on a failed receipt write.
+      // Raw PCM is already synced; a lost ACK can replay exact source bytes.
+      await appendUploadReceipt(this.directory(id), kind, upload, bytes.length);
       upload.chunks.push({ offset: upload.bytes, count: bytes.length });
       upload.bytes = nextBytes;
       streams[kind] = upload;
-      // Raw PCM is synced before its receipt journal; a lost ACK can replay
-      // exactly the same chunk after either process restarts.
-      await atomicPrivateWrite(join(this.directory(id), "uploads.json"), JSON.stringify(streams));
       this.uploads.set(id, streams);
-      if (kind === "inference")
-        void this.rolling
-          .notify(id, upload.bytes / 4, record.settings.preferences)
-          .catch((error: unknown) => logError("rolling_capture_failed", error, { id }));
+      if (kind === "inference") this.notifyCapture(record, upload);
       record.updatedAt = now();
       this.records.set(id, record);
       return {
@@ -1059,6 +1128,7 @@ export class GenerationService {
         await this.cleanSealPartials(id);
         throw new ServiceError(500, "audio_storage_failed", record.error);
       }
+      this.captureActivity.delete(id);
       this.uploads.delete(id);
       this.enqueueProcessing(id, previous);
       return copy(record);
@@ -1465,72 +1535,6 @@ export class GenerationService {
   archiveWisprFlowDictionary(data: Uint8Array) {
     return this.withImportQueue(() => this.imports.archiveWisprFlowDictionary(data));
   }
-  private async recoverUploads(id: string): Promise<Partial<Record<AudioKind, Upload>>> {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(
-        (
-          await readRegularFile(join(this.directory(id), "uploads.json"), 32 * 1_048_576)
-        ).toString(),
-      );
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return {};
-      throw error;
-    }
-    if (!raw || typeof raw !== "object") throw new Error("Invalid upload journal.");
-    const streams = raw as Partial<Record<AudioKind, Upload>>;
-    for (const [kind, upload] of Object.entries(streams)) {
-      if (
-        !["inference", "original"].includes(kind) ||
-        !upload ||
-        !upload.format ||
-        !Array.isArray(upload.chunks) ||
-        upload.chunks.length > 1_000_000 ||
-        !Number.isSafeInteger(upload.bytes) ||
-        upload.bytes < 0 ||
-        upload.bytes > 0xffff_ff00 ||
-        !Number.isInteger(upload.format.sampleRate) ||
-        upload.format.sampleRate < 8_000 ||
-        upload.format.sampleRate > 192_000 ||
-        !Number.isInteger(upload.format.channels) ||
-        upload.format.channels < 1 ||
-        upload.format.channels > 8 ||
-        (kind === "inference" &&
-          (upload.format.sampleRate !== 16_000 || upload.format.channels !== 1))
-      )
-        throw new Error("Invalid durable upload format.");
-      let offset = 0;
-      for (const chunk of upload.chunks) {
-        if (
-          chunk.offset !== offset ||
-          !Number.isSafeInteger(chunk.count) ||
-          chunk.count <= 0 ||
-          chunk.count > MAXIMUM_CHUNK_BYTES ||
-          chunk.count % (upload.format.channels * 4)
-        )
-          throw new Error("Invalid durable upload sequence.");
-        offset += chunk.count;
-      }
-      if (offset !== upload.bytes) throw new Error("Invalid durable upload length.");
-      const file = await open(
-        join(this.directory(id), `${kind}.raw`),
-        constants.O_RDWR | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-      );
-      try {
-        const info = await file.stat();
-        if (!info.isFile() || info.size < upload.bytes)
-          throw new Error("Acknowledged audio is missing.");
-        if (info.size > upload.bytes) {
-          await file.truncate(upload.bytes);
-          await file.sync();
-        }
-      } finally {
-        await file.close();
-      }
-    }
-    return streams;
-  }
-
   private async seal(id: string, kind: AudioKind, upload: Upload): Promise<AudioArtifact> {
     const directory = this.directory(id);
     await requireRegularDirectory(directory);
@@ -1626,8 +1630,8 @@ export class GenerationService {
     const enqueuedAt = performance.now();
     const controller = new AbortController();
     this.processingControllers.set(id, controller);
-    // Jobs run concurrently; withStage serializes each helper's stage, so
-    // completion order still equals seal order on both FIFO stages.
+    // Jobs run concurrently. Each helper has its own FIFO; rolling windows
+    // can start before Finish, so completion order need not equal seal order.
     const task = (async () => {
       if (!this.stopping && !controller.signal.aborted)
         await this.process(id, previous, controller.signal, enqueuedAt);
@@ -1654,15 +1658,26 @@ export class GenerationService {
     try {
       // Every new API-6 capture has durable upload receipts. Older sealed
       // generations retain the existing batch path and its continuation behavior.
-      const hasReceipts = await access(join(this.directory(id), "uploads.json")).then(
-        () => true,
-        () => false,
-      );
+      const hasReceipts = (
+        await Promise.all(
+          ["uploads.json", "inference.uploads"].map((name) =>
+            access(join(this.directory(id), name)).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        )
+      ).some(Boolean);
       if (hasReceipts && recordDuration(this.getInternal(id)) > 40) {
-        const record = copy(this.getInternal(id));
-        if (terminal(record)) return;
-        record.status = "transcribing";
-        await this.withGenerationLock(id, () => this.save(record));
+        const record = await this.withGenerationLock(id, async () => {
+          signal.throwIfAborted();
+          const current = this.getInternal(id);
+          if (terminal(current)) return undefined;
+          current.status = "transcribing";
+          await this.save(current);
+          return current;
+        });
+        if (!record) return;
         const result = await this.rolling.finish(
           id,
           record.inferenceAudio!.frameCount,
@@ -1719,117 +1734,125 @@ export class GenerationService {
         ) as { previous?: DictationContinuation };
         previous = finished.previous;
       }
-      const speechResult = await this.withStage("speech", async () => {
-        startedAt = performance.now();
-        let record = await this.withGenerationLock(id, async () => {
-          const record = this.getInternal(id);
+      const speechResult = await this.withStage(
+        "speech",
+        async () => {
+          startedAt = performance.now();
+          let record = await this.withGenerationLock(id, async () => {
+            const record = this.getInternal(id);
+            signal.throwIfAborted();
+            if (terminal(record)) return undefined;
+            record.status = "transcribing";
+            await this.save(record);
+            return record;
+          });
+          if (!record) return undefined;
+          const settings = record.settings.preferences;
+          const transcribeStartedAt = performance.now();
+          const speech = await this.inference.transcribe(
+            join(this.directory(id), "inference.wav"),
+            settings.language,
+            // Parakeet has no vocabulary prompt; dictionary rules apply after recognition.
+            [],
+            (value) => {
+              this.progress(id, value);
+            },
+            signal,
+            record.inferenceAudio ? record.inferenceAudio.frameCount / 16000 : undefined,
+          );
+          transcribeMs = Math.round(performance.now() - transcribeStartedAt);
           signal.throwIfAborted();
-          if (terminal(record)) return undefined;
-          record.status = "transcribing";
-          await this.save(record);
-          return record;
-        });
-        if (!record) return undefined;
-        const settings = record.settings.preferences;
-        const transcribeStartedAt = performance.now();
-        const speech = await this.inference.transcribe(
-          join(this.directory(id), "inference.wav"),
-          settings.language,
-          // Parakeet has no vocabulary prompt; dictionary rules apply after recognition.
-          [],
-          (value) => {
-            this.progress(id, value);
-          },
-          signal,
-          record.inferenceAudio ? record.inferenceAudio.frameCount / 16000 : undefined,
-        );
-        transcribeMs = Math.round(performance.now() - transcribeStartedAt);
-        signal.throwIfAborted();
-        record.rawText = speech.text;
-        record.detectedLanguage = speech.language === "auto" ? undefined : speech.language;
-        record.recognitionHints = speech.hints;
-        record.speech = {
-          modelID: "parakeet-tdt-0.6b-v3",
-          modelSHA256: speech.modelSHA256,
-          backend: this.speechBackend,
-          engineVersion: speech.engineVersion,
-          processingSeconds: speech.processingSeconds,
-        };
-        const cleaned = cleanTranscript(speech.text);
-        const transcript = applyDictionary(settings.dictionary, cleaned, 24 * 1024);
-        const structured = formatSpokenList(transcript, previous?.list);
-        record.formattingRejectionReason = structured.formattingRejectionReason;
-        record.consumedListControls = structured.consumedControls;
-        return { record, settings, speech, cleaned, transcript, structured };
-      });
+          record.rawText = speech.text;
+          record.detectedLanguage = speech.language === "auto" ? undefined : speech.language;
+          record.recognitionHints = speech.hints;
+          record.speech = {
+            modelID: "parakeet-tdt-0.6b-v3",
+            modelSHA256: speech.modelSHA256,
+            backend: this.speechBackend,
+            engineVersion: speech.engineVersion,
+            processingSeconds: speech.processingSeconds,
+          };
+          const cleaned = cleanTranscript(speech.text);
+          const transcript = applyDictionary(settings.dictionary, cleaned, 24 * 1024);
+          const structured = formatSpokenList(transcript, previous?.list);
+          record.formattingRejectionReason = structured.formattingRejectionReason;
+          record.consumedListControls = structured.consumedControls;
+          return { record, settings, speech, cleaned, transcript, structured };
+        },
+        signal,
+      );
       if (!speechResult) return;
       const { settings, speech, cleaned, transcript, structured } = speechResult;
       const record = speechResult.record;
-      await this.withStage("proof", async () => {
-        if (settings.textCorrectionEnabled && structured.text) {
-          const updated = await this.withGenerationLock(id, async () => {
-            signal.throwIfAborted();
-            if (terminal(this.getInternal(id))) return false;
-            record.status = "proofreading";
-            delete record.progress;
-            await this.save(record);
-            return true;
-          });
-          if (!updated) return;
-        }
-        const proofStartedAt = performance.now();
-        const processing = await this.proofread(
-          structured.text,
-          settings,
-          record.screenContextTerms,
-          cleaned !== transcript,
-          speech.language === "auto" ? settings.language : speech.language,
-          signal,
-        );
-        proofMs = Math.round(performance.now() - proofStartedAt);
-        signal.throwIfAborted();
-        record.textProcessing = processing;
-        if (["applied", "unchanged", "rejected"].includes(processing.status)) {
-          const all = proofreadingTerms(settings.dictionary, record.screenContextTerms),
-            included = modelHints(all);
-          record.proofreadingHints = {
-            includedTerms: included,
-            omittedTerms: all.filter((term) => !included.includes(term)),
-          };
-        }
-        if (settings.textCorrectionEnabled)
-          record.proofreading = {
-            modelID: "Qwen3-4B-Instruct-2507",
-            modelSHA256: processing.modelSHA256,
-            backend: this.proofBackend,
-            engineVersion: processing.engineVersion,
-            processingSeconds: processing.processingSeconds,
-          };
-        const formatted = { ...structured, text: processing.outputText };
-        const composition = composeDictation(formatted, previous);
-        record.finalText = formatted.text;
-        record.insertionText = composition.insertion;
-        record.previewText = composition.preview;
-        record.continuation = composition.continuation;
-        record.status = "completed";
-        record.updatedAt = now();
-        record.progress = 1;
-        await this.withGenerationLock(id, async () => {
+      await this.withStage(
+        "proof",
+        async () => {
+          if (settings.textCorrectionEnabled && structured.text) {
+            const updated = await this.withGenerationLock(id, async () => {
+              signal.throwIfAborted();
+              if (terminal(this.getInternal(id))) return false;
+              record.status = "proofreading";
+              delete record.progress;
+              await this.save(record);
+              return true;
+            });
+            if (!updated) return;
+          }
+          const proofStartedAt = performance.now();
+          const processing = await this.proofread(
+            structured.text,
+            settings,
+            record.screenContextTerms,
+            cleaned !== transcript,
+            speech.language === "auto" ? settings.language : speech.language,
+            signal,
+          );
+          proofMs = Math.round(performance.now() - proofStartedAt);
           signal.throwIfAborted();
-          if (terminal(this.getInternal(id))) return;
-          await atomicPrivateWrite(join(this.directory(id), "transcript.txt"), record.finalText);
-          await this.save(record);
-        });
-        await this.cleanPartial(id);
-        logInfo("generation_processed", {
-          id,
-          queueWaitMs: Math.round(startedAt - enqueuedAt),
-          transcribeMs,
-          proofMs,
-          totalMs: Math.round(performance.now() - startedAt),
-          status: "completed",
-        });
-      });
+          record.textProcessing = processing;
+          if (["applied", "unchanged", "rejected"].includes(processing.status)) {
+            const all = proofreadingTerms(settings.dictionary, record.screenContextTerms),
+              included = modelHints(all);
+            record.proofreadingHints = {
+              includedTerms: included,
+              omittedTerms: all.filter((term) => !included.includes(term)),
+            };
+          }
+          if (settings.textCorrectionEnabled)
+            record.proofreading = {
+              modelID: "Qwen3-4B-Instruct-2507",
+              modelSHA256: processing.modelSHA256,
+              backend: this.proofBackend,
+              engineVersion: processing.engineVersion,
+              processingSeconds: processing.processingSeconds,
+            };
+          const formatted = { ...structured, text: processing.outputText };
+          const composition = composeDictation(formatted, previous);
+          record.finalText = formatted.text;
+          record.insertionText = composition.insertion;
+          record.previewText = composition.preview;
+          record.continuation = composition.continuation;
+          record.status = "completed";
+          record.updatedAt = now();
+          record.progress = 1;
+          await this.withGenerationLock(id, async () => {
+            signal.throwIfAborted();
+            if (terminal(this.getInternal(id))) return;
+            await atomicPrivateWrite(join(this.directory(id), "transcript.txt"), record.finalText);
+            await this.save(record);
+          });
+          await this.cleanPartial(id);
+          logInfo("generation_processed", {
+            id,
+            queueWaitMs: Math.round(startedAt - enqueuedAt),
+            transcribeMs,
+            proofMs,
+            totalMs: Math.round(performance.now() - startedAt),
+            status: "completed",
+          });
+        },
+        signal,
+      );
     } catch (error) {
       if (!signal.aborted)
         logError("generation_failed", error, {
@@ -1940,7 +1963,7 @@ export class GenerationService {
       throw new ServiceError(
         413,
         "metadata_too_large",
-        "The generation metadata exceeded its 1 MiB storage limit.",
+        "The generation metadata exceeded its 8 MiB storage limit.",
       );
     await atomicPrivateWrite(join(this.directory(record.id), "metadata.json"), data);
     this.publish(record);
@@ -1999,6 +2022,7 @@ export class GenerationService {
       await rm(join(this.directory(id), name), { force: true }).catch(() => {});
   }
   private async cleanPartial(id: string) {
+    this.captureActivity.delete(id);
     this.uploads.delete(id);
     for (const name of [
       "inference.raw",
