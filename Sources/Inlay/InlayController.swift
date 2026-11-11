@@ -1094,7 +1094,9 @@ final class InlayController: ObservableObject {
             defer { if sessionID == current { microphoneStartTask = nil } }
             do {
                 let connection = try client()
-                let initialDestination = isTest ? nil : await destinationTask?.value
+                // Field preparation can take seconds in a newly opened app. It
+                // must never delay the microphone; bind only an available snapshot.
+                let initialDestination = isTest ? nil : insertionDestination
                 try Task.checkCancellation()
                 guard sessionID == current, activity == .starting else { return }
                 let anchor: DictationDestination? = isTest ? .test : initialDestination?.target.map(DictationDestination.field)
