@@ -566,7 +566,10 @@ export interface components {
       /** Format: int64 */
       originalFrames?: number;
       continuationID?: components["schemas"]["UUID"];
+      screenContextTerms?: components["schemas"]["ScreenContextTerms"];
     };
+    /** @description Unusual words the client read from the window being dictated into. They follow dictionary names as Qwen proofreading hints within the shared hint budget; the window image and its recognized text stay on the client. */
+    ScreenContextTerms: string[];
     AudioArtifact: {
       filename: string;
       sampleRate: number;
@@ -709,6 +712,7 @@ export interface components {
       speech?: components["schemas"]["ModelProvenance"];
       proofreading?: components["schemas"]["ModelProvenance"];
       textProcessing?: components["schemas"]["TextProcessingRecord"];
+      screenContextTerms?: components["schemas"]["ScreenContextTerms"];
       recognitionHints?: components["schemas"]["ModelHintUsage"];
       proofreadingHints?: components["schemas"]["ModelHintUsage"];
       formattingRejectionReason?: string;

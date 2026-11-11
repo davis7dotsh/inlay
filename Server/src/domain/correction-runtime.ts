@@ -18,15 +18,17 @@ const validEvaluation = (value: unknown): value is Evaluation =>
 export function evaluateCorrectionInWorker(
   original: string,
   candidate: string,
-  preferredTerms: string[],
+  dictionaryTerms: string[],
+  screenTerms: string[],
   signal?: AbortSignal,
 ): Promise<Evaluation> {
   signal?.throwIfAborted();
   if (
     Buffer.byteLength(original) > 131_072 ||
     Buffer.byteLength(candidate) > 131_072 ||
-    preferredTerms.length > 500 ||
-    preferredTerms.some((term) => Buffer.byteLength(term) > 16_384)
+    dictionaryTerms.length > 500 ||
+    screenTerms.length > 40 ||
+    [...dictionaryTerms, ...screenTerms].some((term) => Buffer.byteLength(term) > 16_384)
   )
     return Promise.reject(
       new ServiceError(400, "correction_limit", "The correction evaluation exceeded its limits."),
@@ -64,6 +66,6 @@ export function evaluateCorrectionInWorker(
         ? finish(event.data)
         : finish(undefined, new Error("Correction evaluation returned invalid output."));
     worker.onerror = () => finish(undefined, new Error("Correction evaluation failed."));
-    worker.postMessage({ original, candidate, preferredTerms });
+    worker.postMessage({ original, candidate, dictionaryTerms, screenTerms });
   });
 }

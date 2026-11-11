@@ -81,6 +81,13 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.preserveClipboard = preserveClipboard } }
         }
     }
+    @Published var useScreenContext = false {
+        didSet {
+            guard useScreenContext != oldValue else { return }
+            if !applyingConfiguration { configuration.update { $0.useScreenContext = useScreenContext } }
+            if useScreenContext, hasInitialized, !applyingConfiguration, !permissions.screenRecording { requestScreenRecording() }
+        }
+    }
     @Published var statusMessage = "Connecting to server…"
     @Published private(set) var hudProgressText: String?
     @Published private(set) var serverHealth: ServerHealth?
@@ -187,6 +194,7 @@ final class InlayController: ObservableObject {
         let upload: Task<UploadOutcome, Error>
         let pipe: AudioChunkPipe
         let destination: InsertionDestinationCapture?
+        let screenContext: ScreenContextCapture?
         let salvaged: Bool
         var task: Task<Void, Never>?
         var sealed = false
@@ -195,17 +203,19 @@ final class InlayController: ObservableObject {
         var target: (destination: InsertionDestination, anchor: DictationDestination?)?
 
         init(session: UUID, id: UUID, client: ServerClient, upload: Task<UploadOutcome, Error>,
-             pipe: AudioChunkPipe, destination: InsertionDestinationCapture?, salvaged: Bool = false) {
+             pipe: AudioChunkPipe, destination: InsertionDestinationCapture?, screenContext: ScreenContextCapture?,
+             salvaged: Bool = false) {
             self.session = session; self.id = id; self.client = client; self.upload = upload
-            self.pipe = pipe; self.destination = destination; self.salvaged = salvaged
+            self.pipe = pipe; self.destination = destination; self.screenContext = screenContext; self.salvaged = salvaged
         }
 
         func cancel() {
-            task?.cancel(); upload.cancel(); pipe.cancel(); destination?.cancel()
+            task?.cancel(); upload.cancel(); pipe.cancel(); destination?.cancel(); screenContext?.cancel()
         }
     }
     @Published private var insertionDestination: InsertionDestination?
     private var destinationTask: InsertionDestinationCapture?
+    private var screenContextTask: ScreenContextCapture?
     private var recordingClipboardChangeCount = 0
     private struct ContinuationAnchor {
         let destination: DictationDestination
@@ -278,6 +288,7 @@ final class InlayController: ObservableObject {
         if dictationSoundsEnabled != settings.dictationSoundsEnabled { dictationSoundsEnabled = settings.dictationSoundsEnabled }
         if customTriggerKeyCode != settings.customTriggerKeyCode { customTriggerKeyCode = settings.customTriggerKeyCode }
         if preserveClipboard != settings.preserveClipboard { preserveClipboard = settings.preserveClipboard }
+        if useScreenContext != settings.useScreenContext { useScreenContext = settings.useScreenContext }
         applyingConfiguration = false
     }
 
@@ -637,6 +648,7 @@ final class InlayController: ObservableObject {
         uploadPipe?.cancel(); uploadPipe = nil
         uploadTask?.cancel(); uploadTask = nil
         destinationTask?.cancel(); destinationTask = nil
+        screenContextTask?.cancel(); screenContextTask = nil
         stopRecordingTimer()
         recorder.cancel()
         outputMuter.restore()
@@ -855,6 +867,13 @@ final class InlayController: ObservableObject {
         statusMessage = "Connecting recording…"
         onHUDVisibility?(true)
         if muteOutputWhileRecording { outputMuter.mute() }
+        // Screen terms only become Qwen hints, so skip capture when the last-known
+        // shared settings have proofreading off. The capture applies its own guards.
+        if !isTest, useScreenContext, permissions.screenRecording,
+           sharedPreferences?.preferences.textCorrectionEnabled != false {
+            screenContextTask = ScreenContextCapture(
+                spellingLanguage: ScreenContextCapture.spellingLanguage(for: sharedPreferences?.preferences.language))
+        }
         if !isTest, !sessionClipboardOnly {
             let capture = TextInserter.beginDestinationCapture()
             destinationTask = capture
@@ -964,13 +983,14 @@ final class InlayController: ObservableObject {
         let capturedDestination = insertionDestination
         let clipboardCount = recordingClipboardChangeCount
         let pending = PendingDictation(session: current, id: id, client: connection, upload: uploadTask,
-                                       pipe: uploadPipe, destination: destinationTask, salvaged: salvaged)
+                                       pipe: uploadPipe, destination: destinationTask, screenContext: screenContextTask,
+                                       salvaged: salvaged)
         // Usually known at release, so a later take can continue a list in another field.
         let knownDestination: InsertionDestination? = test || salvaged || sessionClipboardOnly ? .clipboard : capturedDestination
         pending.target = knownDestination.map { Self.resolve($0, isTest: test, releasedAt: releasedAt) }
         pendingDictations.append(pending)
         activeGenerationID = nil; activeClient = nil; self.uploadTask = nil; self.uploadPipe = nil
-        destinationTask = nil; insertionDestination = nil; recordingListHint = nil; recordingInputName = nil
+        destinationTask = nil; screenContextTask = nil; insertionDestination = nil; recordingListHint = nil; recordingInputName = nil
         recorder.onChunk = nil
         let stopped = recorder.stopCapture()
         recorderStopTask = stopped
@@ -1027,6 +1047,11 @@ final class InlayController: ObservableObject {
                     .contains { earlier in earlier.target.map { $0.anchor == anchor } ?? true }
                 finish.continuationID = sharesEarlierAnchor ? nil : anchor.flatMap { self.continuation(for: $0)?.generationID }
                 fallback?.continuationID = finish.continuationID
+                // Usually ready by now; a capture still running sends no terms.
+                if let terms = await pending.screenContext?.value(waitingAtMost: .milliseconds(500)), !terms.isEmpty {
+                    finish.screenContextTerms = terms
+                    fallback?.screenContextTerms = terms
+                }
                 try Task.checkCancellation()
                 pending.sealed = true // The server may accept a seal whose response is interrupted.
                 addPendingEntry(id: id, finish: finish, fallback: fallback, isTest: test)
@@ -1088,7 +1113,7 @@ final class InlayController: ObservableObject {
                 pending.resolved = true
                 refreshServer()
             } catch {
-                pending.upload.cancel(); pending.pipe.cancel(); pending.destination?.cancel()
+                pending.upload.cancel(); pending.pipe.cancel(); pending.destination?.cancel(); pending.screenContext?.cancel()
                 if !pending.sealed {
                     pending.resolved = true
                     Task { try? await connection.cancel(id) }
@@ -1327,6 +1352,12 @@ final class InlayController: ObservableObject {
             _ = await PermissionManager.requestMicrophone()
             refreshPermissions()
         }
+    }
+
+    func requestScreenRecording() {
+        if permissions.screenRecording { PermissionManager.openScreenRecordingSettings() }
+        else { PermissionManager.requestScreenRecording() }
+        retryPermissions()
     }
 
     func requestAccessibility() {
