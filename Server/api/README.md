@@ -1,4 +1,4 @@
-# Sotto API contract
+# Inlay API contract
 
 `openapi.yaml` is the transport contract for the TypeScript server and Swift client,
 including JSON models, float32 audio chunks, artifact uploads/downloads, Wispr Flow
@@ -23,7 +23,7 @@ TypeScript transport types live in `Server/src/generated/api.ts` and are generat
 with the repository's Prettier configuration so formatting does not change the
 generation drift check. The public aliases
 in `Server/src/api.ts` make defaults required after archive/request normalization.
-Swift transport types live in `Sources/SottoAPIWire`; `SottoAPI.APIWireModel` bridges
+Swift transport types live in `Sources/InlayAPIWire`; `InlayAPI.APIWireModel` bridges
 them to the existing public Swift models while retaining dictionary validation,
 default preferences, and conveniences used by the app. The client retains its
 existing URLSession transport and bounded NDJSON parser.

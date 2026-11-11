@@ -10,6 +10,11 @@ export function standaloneBuildSettings(
     entrypoints: [entrypoint, resolve(import.meta.dirname, "../src/domain/correction-worker.ts")],
     minify: true,
     sourcemap: "inline" as const,
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
+    define: {
+      "process.env.NODE_ENV": JSON.stringify("production"),
+      "process.env.INLAY_SERVER_VERSION": JSON.stringify(
+        process.env.INLAY_SERVER_VERSION ?? "0.0.0-dev",
+      ),
+    },
   };
 }

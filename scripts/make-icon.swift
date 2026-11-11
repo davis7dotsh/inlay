@@ -4,28 +4,18 @@ import Foundation
 let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
 
-// The Sotto ribbon icon, drawn directly with Core Graphics.
-// Keep these normalized ribbon curves in sync with SottoBrand.ribbonPath(in:).
-func ribbonPath() -> CGPath {
+// Three fitted strokes form an inset I, matching Resources/Inlay.svg.
+// Keep this geometry in sync with InlayBrand.logoPath(in:).
+func logoPath() -> CGPath {
     let path = CGMutablePath()
-    path.move(to: CGPoint(x: 102, y: 18))
-    path.addLine(to: CGPoint(x: 62, y: 18))
-    path.addCurve(to: CGPoint(x: 22, y: 50), control1: CGPoint(x: 38, y: 18), control2: CGPoint(x: 22, y: 31))
-    path.addCurve(to: CGPoint(x: 49, y: 81), control1: CGPoint(x: 22, y: 67), control2: CGPoint(x: 33, y: 76))
-    path.addLine(to: CGPoint(x: 60, y: 59))
-    path.addCurve(to: CGPoint(x: 47, y: 48), control1: CGPoint(x: 50, y: 56), control2: CGPoint(x: 47, y: 53))
-    path.addCurve(to: CGPoint(x: 63, y: 40), control1: CGPoint(x: 47, y: 43), control2: CGPoint(x: 53, y: 40))
-    path.addLine(to: CGPoint(x: 102, y: 40))
-    path.closeSubpath()
-    path.move(to: CGPoint(x: 26, y: 110))
-    path.addLine(to: CGPoint(x: 66, y: 110))
-    path.addCurve(to: CGPoint(x: 106, y: 78), control1: CGPoint(x: 90, y: 110), control2: CGPoint(x: 106, y: 97))
-    path.addCurve(to: CGPoint(x: 79, y: 47), control1: CGPoint(x: 106, y: 61), control2: CGPoint(x: 95, y: 52))
-    path.addLine(to: CGPoint(x: 68, y: 69))
-    path.addCurve(to: CGPoint(x: 81, y: 80), control1: CGPoint(x: 78, y: 72), control2: CGPoint(x: 81, y: 75))
-    path.addCurve(to: CGPoint(x: 65, y: 88), control1: CGPoint(x: 81, y: 85), control2: CGPoint(x: 75, y: 88))
-    path.addLine(to: CGPoint(x: 26, y: 88))
-    path.closeSubpath()
+    let strokes = [
+        CGRect(x: 20, y: 20, width: 88, height: 16),
+        CGRect(x: 56, y: 44, width: 16, height: 40),
+        CGRect(x: 20, y: 92, width: 88, height: 16),
+    ]
+    for stroke in strokes {
+        path.addRoundedRect(in: stroke, cornerWidth: 8, cornerHeight: 8)
+    }
     return path
 }
 
@@ -74,7 +64,7 @@ func makeIcon(pixels: Int) -> Data {
     graphics.translateBy(x: 83, y: 83)
     graphics.scaleBy(x: 2.7, y: 2.7)
     graphics.setFillColor(color(0x352D3A))
-    graphics.addPath(ribbonPath())
+    graphics.addPath(logoPath())
     graphics.fillPath()
     NSGraphicsContext.restoreGraphicsState()
     return bitmap.representation(using: .png, properties: [:])!

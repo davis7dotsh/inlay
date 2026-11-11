@@ -1,38 +1,36 @@
-# Whisper helper
+# Parakeet helper
 
-`sotto-engine` is the server's persistent whisper.cpp process. It reads audio files supplied by the server; it never opens a microphone or network connection. Builds use Metal on macOS and CPU or CUDA on Linux. See [server setup](../Server/README.md) for packaging and models.
+`inlay-engine` is the server's persistent Parakeet TDT 0.6B v3 process, using the Parakeet implementation in vendored whisper.cpp. It reads audio files supplied by the server; it never opens a microphone or network connection. Builds use Metal on macOS and CPU or CUDA on Linux. See [server setup](../Server/README.md) for packaging and pinned FP16 model weights.
 
 ## Protocol
 
-After loading Whisper and Silero VAD, the helper emits a `ready` JSON object with an `engineVersion`. Send one UTF-8 JSON object per line on stdin; replies are flushed JSON lines on stdout. Diagnostics go to stderr without transcript text.
+After loading Parakeet and Silero VAD, the helper emits a `ready` JSON object with a `parakeet.cpp/` engine version. Send one UTF-8 JSON object per line on stdin; replies are flushed JSON lines on stdout. Diagnostics go to stderr without transcript text.
 
 ```json
-{"type":"transcribe","id":"request-1","path":"/absolute/path/to/recording.wav","language":"en","vocabularyTerms":["Sotto","SwiftUI","Metal"]}
+{
+  "type": "transcribe",
+  "id": "request-1",
+  "path": "/absolute/path/to/recording.wav",
+  "language": "en",
+  "vocabularyTerms": ["Inlay", "SwiftUI", "Metal"]
+}
 ```
 
-- `language` defaults to `en`; `auto` enables language detection.
-- `vocabularyTerms` is an ordered list of recognition hints. Whole terms are fitted into the loaded model's token budget. Responses report `includedTerms`, `omittedTerms`, `tokenCount`, and `tokenBudget`.
-- WAV input must be mono 16 kHz PCM16 or float32, 0.2–180 seconds long and at most 32 MiB. These are per-processing-window bounds, not the long-recording session duration. The legacy HTTP server uses a 0.25-second minimum.
-- Progress: `{"type":"progress","id":"request-1","value":0.5}`.
-- Results contain `type: "result"`, `id`, `text`, audio `duration`, processing `elapsed`, detected `language`, `spans`, `segmentSpans`, and hint diagnostics. Each span has exact `text` plus request-relative `startSeconds` and `endSeconds`. Joining either span array's text and trimming the outside must reproduce `text` exactly. BPE pieces that split a Unicode codepoint are joined into one valid UTF-8 span. `segmentSpans` retain whole decoder utterances for source checkpoints.
-- Acoustic preflight: `{"type":"boundary","id":"request-1","path":"/absolute/path/to/window.wav"}` returns `duration` and an optional `boundarySeconds`. The last nonspeech gap after 30 seconds is preferred. Speech segments have 100 ms padding on each side and must leave at least another 200 ms of quiet; the cut is their gap's midpoint. This uses CPU Silero, tolerates noise, and resets detector state per request.
+- `language` defaults to `en`. Accepts `auto` and the model's 25 supported language codes: `bg`, `hr`, `cs`, `da`, `nl`, `en`, `et`, `fi`, `fr`, `de`, `el`, `hu`, `it`, `lv`, `lt`, `mt`, `pl`, `pt`, `ro`, `sk`, `sl`, `es`, `sv`, `ru`, `uk`. Legacy preferences `ja`, `zh`, `ko`, `hi`, and `ar` also remain accepted for proofreading; they do not expand speech recognition support. Recognition always chooses the spoken language automatically. Results return `language: "auto"` because this runtime exposes no language ID. The server omits detected-language metadata and uses the preference only for Qwen proofreading.
+- `vocabularyTerms` remains accepted and validated for protocol compatibility. Parakeet has no vocabulary prompting API: `includedTerms` is empty, `omittedTerms` contains every supplied term, and `tokenCount` / `tokenBudget` are zero. Dictionary replacements and Qwen hints remain available after recognition.
+- WAV input must be mono 16 kHz PCM16 or float32, 0.2–180 seconds long. The HTTP server uses a 0.25-second minimum.
+- Progress: `{"type":"progress","id":"request-1","value":0.5}`. Updates depend on the upstream callback; large encodes can spend time without intermediate progress.
+- Results contain `type: "result"`, `id`, `text`, audio `duration`, processing `elapsed`, `language`, and hint diagnostics.
 - Errors contain `type: "error"`, `message`, and a request `id` when available. Requests are processed sequentially.
 
-Requests are bounded to 1 MiB. Vocabulary allows at most 8,192 terms, 16 KiB per term, and 384 KiB total; actual model hints usually fit much less. Silence returns a successful empty transcript.
+Requests are bounded to 1 MiB. Vocabulary allows at most 8,192 terms, 16 KiB per term, and 384 KiB total. Silence returns a successful empty transcript.
 
 ## Decoding and lifecycle
 
-A CPU Silero pass rejects nonspeech (threshold 0.5, minimum speech segment 120 ms). If speech is detected, Whisper receives the complete window. Decoding uses beam search 5, temperature 0, and token timestamps; the returned transcript remains plain text. Segments above Whisper's no-speech threshold are excluded. Token timestamps are acoustic estimates, not exact word boundaries. When upstream word estimates become unavailable or nonmonotonic, the helper preserves all text in conservative segment envelopes rather than inventing corrected word timing. The coordinator then prefers a fresh bounded decode over an unsupported overlap match. Silence returns `spans: []`. This remains probabilistic and can miss quiet speech.
+A CPU Silero pass rejects nonspeech (threshold 0.5, minimum speech segment 120 ms). If speech is detected, Parakeet receives the complete recording through `parakeet_full`, with greedy TDT decoding and request state reset. The output includes punctuation and capitalization. The full API supports recordings longer than the model's nominal context; memory use grows with recording length. Speech detection remains probabilistic and can miss quiet speech.
 
-The TypeScript coordinator selects bounded 45-second windows from canonical audio, preferring conservative Silero nonspeech gaps and then sustained near-zero amplitude after 30 seconds. These cuts do not remove any captured silence. With no safe quiet cut, timing-capable backends use two seconds of overlap. Checkpoints retain whole decoder utterances around an eight-second provisional tail, including at quiet cuts: speech recognition can autocomplete a phrase whose actual ending is in the next window. The next pass freshly decodes the complete provisional source interval (at most 90 seconds), replacing only provisional evidence while preserving the committed prefix. This avoids joining an autocompleted quote to its actual spoken continuation. Other overlap reconciliation requires matching text pieces at matching acoustic times; it never removes a repeated phrase by text alone. Invalid or failed replacement coverage stays incomplete. Backends without timing use nonoverlapping windows and preserve every returned phrase.
-
-The server keeps the model warm. Terminating the helper cancels active work. `{"type":"quit"}`, stdin EOF, or parent death releases it. Native dependencies and Metal source are embedded in the speech executable.
+The server keeps the model warm. Terminating the helper cancels active work. `{"type":"quit"}`, stdin EOF, or parent death releases it. Native dependencies and Metal source are embedded in the speech executable. whisper.cpp remains linked for Silero; no Whisper recognition model is loaded.
 
 ## Verify
 
-```sh
-./scripts/build-server.sh
-python3 scripts/test-engine.py --help
-```
-
-The test harness exercises protocol bounds, public sample recordings, vocabulary, passage retention, and process lifetime. For the full API path, use `scripts/smoke-test.sh` against an idle Dev server.
+Build with `./scripts/build-server.sh`, then use **Inlay Dev** to record speech and inspect progress, transcripts, and the unavailable recognition-vocabulary status in history. Verify cancellation and subsequent recordings interactively when changing helper lifecycle behavior. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.

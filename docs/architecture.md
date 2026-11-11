@@ -1,22 +1,21 @@
 # Architecture
 
-Sotto's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. HTTP uses the shared OpenAPI contract; long recordings use the versioned v2 recording routes and `sotto.recording.v1` WebSocket protocol on localhost or a remote server. Existing v1 generations remain readable.
+Inlay's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use API version 4. The contract is `Server/api/openapi.yaml` (OpenAPI 3.1). HTTP paths stay under `/v1`, and the client requires `apiVersion` 4 before dictation. The same contract applies on one machine or across the network.
 
 ## Code map
 
-| Component | Responsibility |
-| --- | --- |
-| `Sources/Sotto` | SwiftUI/AppKit app, device settings, HTTP client, capture, and guarded delivery. |
-| `Sources/SottoCore` | Mac configuration, audio metering, microphone selection, and model manifests. |
-| `Sources/SottoAPI` | Shared wire types and limits. |
-| `Sources/SottoAPIWire` | Generated Swift transport types used through the API facade. |
-| `Server/api/openapi.yaml` | Language-neutral HTTP and wire-model contract. |
-| `Server/src` | Packaged TypeScript HTTP server, durable coordinator, text pipeline, and helper management. |
-| `Sources/SottoDomain` | Dictionary, list formatting, rewrite validation, and composition. |
-| `Sources/SottoServerKit` | Reference Swift server retained for migration parity tests. |
-| `Sources/SottoServer` | Reference Swift server command-line entry point. |
-| `Engine` | Persistent whisper.cpp speech helper; Metal on Mac, CPU/CUDA on Linux. |
-| `TextEngine` | Persistent Qwen helper; Swift MLX on Mac, llama.cpp on Linux. |
+| Component                 | Responsibility                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------- |
+| `Sources/Inlay`           | SwiftUI/AppKit app, device settings, HTTP client, capture, and guarded delivery.            |
+| `Sources/InlayCore`       | Mac configuration, audio metering, microphone selection, and model manifests.               |
+| `Sources/InlayAPI`        | Shared wire types and limits.                                                               |
+| `Sources/InlayAPIWire`    | Generated Swift transport types used through the API facade.                                |
+| `Server/api/openapi.yaml` | Language-neutral HTTP and wire-model contract.                                              |
+| `Server/src`              | Packaged TypeScript HTTP server, durable coordinator, text pipeline, and helper management. |
+| `Sources/InlayDomain`     | Dictionary and record-embedded wire types shared with the client.                           |
+| `Sources/InlayServer`     | Reference Swift server command-line entry point.                                            |
+| `Engine`                  | Persistent Parakeet speech helper (vendored whisper.cpp); Metal on Mac, CPU/CUDA on Linux.  |
+| `TextEngine`              | Persistent Qwen helper; Swift MLX on Mac, llama.cpp on Linux.                               |
 
 The server talks to helpers over bounded JSON-lines pipes. Models warm at startup and stay loaded. The client contains no model helpers; it never starts or stops the server. The application has no Python runtime dependency.
 
@@ -24,14 +23,15 @@ Bun manages all JavaScript dependencies and compiles the coordinator plus its co
 
 ## A recording
 
-1. The client negotiates recording capability and asks the online server for durable admission with its device identity. The server freezes shared settings before microphone capture starts.
-2. The client pins its microphone and saves small PCM batches to a persistent local spool. Inference audio is mono 16 kHz float32; optional original audio keeps the microphone rate/channels as float32. An independent uploader transfers committed batches over an authenticated, endpoint-pinned WebSocket.
-3. The server acknowledges only recoverable audio and receipts. Reconnect snapshots reconcile exact per-run positions; connection epochs fence obsolete sockets. Network failures leave capture running against bounded local storage.
-4. During capture, the server runs bounded Whisper windows with timed spans and acoustic overlap. Completed windows and bounded text/list/correction state are journaled. Dictionary and optional Qwen cleanup operate on text windows; rejected proofreading retains deterministic text. Legacy and recording work share a serialized model queue.
-5. Stop drains capture and persists exact per-run endpoints. The server waits for contiguous durable audio, finishes pending speech/text tails, and assembles one result. There is no whole-session model request or mandatory WAV copy.
-6. Compact WebSocket snapshots carry transfer/processing progress. The client fetches the final transcript, verifies focus/caret safety, persists one delivery attempt, and reports its outcome separately from inference completion.
+1. The client asks the server to create a generation with its device identity. The server freezes shared settings and accepts independent uploads from any connected client. Offline or unavailable speech recognition prevents capture; other recordings do not.
+2. The client pins its microphone and uploads acknowledged, sequenced PCM chunks while recording. Inference audio is mono 16 kHz float32; optional original audio keeps the microphone rate/channels as float32.
+3. Release stops capture, drains uploads, and sends final frame counts. The microphone is available for the next take while earlier uploads finish. The server checks the complete intervals and seals WAV files. Recordings must be 0.25–180 seconds.
+4. Sealed recordings enter a FIFO processing queue. Jobs run concurrently, but each helper stage is serialized: one job at a time runs Parakeet, mechanical cleanup, dictionary rules, and list formatting, and one job at a time proofreads, so speech for one take can overlap proofreading for another. Optional Qwen output passes through dictionary rules and deterministic rewrite checks. Rejection or proofreading failure retains the pre-proofreading text. Cancelling one upload or queued job does not interrupt another.
+5. NDJSON events carry progress and the saved final result for each generation. Each pending client take retains its original server connection and destination. The client serializes delivery attempts, verifies focus/caret safety, and reports each outcome separately from inference completion.
 
-Admitted audio survives network outages, app interruptions, and server restarts. Stopped sessions recover transfer and processing automatically; recovery and history never paste an old result. Explicit discard removes audio, unlike interruption. New capture still requires online admission. Legacy v1 generations retain their original lifecycle and limits; the reference Swift server does not advertise v2 recording support.
+Interrupted partial uploads expire; a complete upload can finish after the client disconnects. Pending takes recover interrupted event streams by checking their saved generation and reconnecting. Opening history never pastes an old result. Restarting the server requeues unfinished generations whose sealed inference audio is present and marks the rest failed; completed history is retained. The client retries each chunk upload within a nominal 60-second window, and pending generations persist across relaunch. There is no offline capture queue.
+
+Cancelling usable capture seals the audio and continues inference without insertion. The client immediately persists a no-paste disposition, even before final frame counts are known, and offers **Undo cancel** for eight seconds. Undo permits the captured portion to be delivered only to its original verified field and known selection; it does not resume capture. A new accepted take closes the old opportunity. Delivery becomes irreversible only at the final synchronous write guard, and confirmation/receipt bookkeeping continues after that point. The server receives one final receipt after the decision settles and processing completes. Relaunch reconciles these receipts without automatic insertion or clipboard writes; the detailed History view uses the existing delivery receipt to label kept results **Not pasted**. The API-4 summary contract remains unchanged.
 
 ## Text delivery
 
@@ -39,46 +39,43 @@ Only the new `insertionText` can be inserted; `previewText` may include earlier 
 
 The Mac rechecks destination, selection, protected fields, modifiers, and clipboard state before delivery. Unsafe destinations use clipboard or preview fallback. Only confirmed insertion advances cursor-based continuation. Editor text and Accessibility handles stay on the Mac.
 
-Microphone capture uses input-only Core Audio without changing system routing or playback volume. A bounded writer queue and missing-frame watchdog stop safely on capture/storage failure and preserve the committed prefix. A scoped power assertion prevents idle system sleep during active capture. Real sleep, device loss, lock, and app quit preserve interrupted audio; resumed capture uses a new run and records the gap.
+Pasting stages the transcript on the clipboard temporarily and restores the previous contents once insertion is confirmed. When insertion cannot be confirmed, or no editable field is found, the transcript stays on the clipboard as a backup. With **Never leave transcripts on the clipboard** enabled under **This Mac**, Inlay never keeps that backup: unconfirmed words stay in the app to copy, and the previous clipboard returns once insertion is confirmed or after 1.5 seconds. An app that reads the paste later than that inserts the previous clipboard instead.
+
+Microphone capture uses input-only Core Audio without changing system routing or playback volume. Route changes apply to the next take. Release, cancellation, sleep/lock, or device loss ends capture.
+
+With **Mute system audio while recording** enabled under **This Mac**, the default output device is muted when a take starts and restored when capture ends. Only mute controls Inlay changed are restored, so output that was already muted stays muted. A client crash during a take can leave output muted.
 
 ## Settings
 
-| Scope | Where to edit | What it owns |
-| --- | --- | --- |
-| This Mac | **This Mac** and **Microphone** | Endpoint/token, device name, shortcut, launch at login, microphone priority/selection. |
-| Shared server | **Server preferences** | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention. |
-| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md). |
+| Scope          | Where to edit                    | What it owns                                                                                                                                  |
+| -------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, clipboard preservation, microphone priority/selection. |
+| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                              |
+| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                  |
 
 Shared saves use revisions to reject stale concurrent edits. Settings are snapshotted when the server accepts a take; changes affect future recordings. Update shared settings through the UI/API rather than editing files while the server runs.
 
-The regular app uses `~/Library/Application Support/Sotto`; Dev uses `~/Library/Application Support/Sotto Dev`. `SOTTO_CLIENT_DATA_DIR` overrides either, and the dev runner selects `.local/client`. `config.json` stores shortcut/microphone settings; `client.json` stores endpoint/device identity. Tokens live in separate release/Dev Keychain services, scoped to the endpoint and client directory. `SOTTO_SERVER_URL` overrides the saved endpoint for a run. Valid manual `config.json` edits are reloaded; invalid files leave the last good configuration active.
+The regular app uses `~/Library/Application Support/Inlay`; Dev uses `~/Library/Application Support/Inlay Dev`. `INLAY_CLIENT_DATA_DIR` overrides either, and the dev runner selects `.local/client`. `config.json` stores shortcut/microphone settings; `client.json` stores endpoint/device identity. Tokens live in separate release/Dev Keychain services, `dev.davis.inlay.server` and `dev.davis.inlay.dev.server`, scoped to the endpoint and client directory. `INLAY_SERVER_URL` overrides the saved endpoint for a run. Valid manual `config.json` edits are reloaded; invalid files leave the last good configuration active. See [upgrade guidance](../README.md#upgrade-an-existing-installation) when moving from an earlier app identity.
 
 ## Storage
 
-The server's `--data-dir` (normally `.local/server` in development) contains:
+The server's `--data-dir` contains the layout below. `./scripts/run-dev.sh` uses `.local/server`. `bun run dev` uses `.local/dev-server/data` and ignores an inherited `INLAY_SERVER_DATA_DIR`. An installed Linux service uses `/var/lib/inlay`.
 
 ```text
 preferences.json
+devices.json
+admin-token (only when auto-created)
 generations/<UUID>/
   metadata.json
   transcript.txt
   inference.wav
   original.wav
-sessions/<UUID>/
-  manifest.json
-  <runID>/<kind>/<sequence>.pcm
-  <runID>/<kind>/<sequence>.json
-  windows/<sequence>.json
-  result.json
-  transcript.txt
 ```
 
-Metadata includes device identity, settings snapshot, raw/final text, insertion/preview text, model and processing details, and any delivery receipt. `transcript.txt` contains the current take's final text. Inference audio is always retained for completed takes; original audio is optional and defaults on. The retention toggle does not remove existing files, and there is no automatic history expiry.
+Metadata includes device identity, settings snapshot, raw/final text, insertion/preview text, model and processing details, and any delivery receipt. `transcript.txt` contains the current take's final text. Text and metadata are kept forever. Recording audio auto-deletes after the shared `audioRetentionDays` cap (default 90 days; 0 keeps it forever) via a boot/daily sweep, and can be purged on demand from Server preferences; original audio is optional and defaults on for future takes. Cancelled and failed takes keep their audio under the same cap, labeled in History, until it expires or is deleted per record.
 
-All clients read shared, paginated history. V2 history uses compact snapshots and fetches full results on demand. PCM batches are the canonical v2 archive; WAV exports stream on demand and reject sizes beyond RIFF limits. Original runs with different formats can be downloaded separately. Inference audio remains available when original retention is disabled.
+All clients read shared, paginated history. Deleting an inactive generation deletes its server artifacts. Failed and cancelled takes retain metadata and sealed audio (labeled, deletable per record); partial upload files are internal and cannot be downloaded. Client audio copies are temporary.
 
-Client spools live under `Recordings/` in the client data directory until server finalization or explicit discard. Credentials stay in Keychain. Capture batches coalesce up to 250 ms per stream and publish an atomic, aligned original/inference checkpoint. An abrupt process/power loss can additionally lose the bounded writer queue and converter tail. Orderly interruptions drain them. Server startup reconciles receipt and window journals, resumes pending work, and preserves acknowledged audio.
-
-Only one server may own a data directory. Back up preferences, generation directories, and session directories together. Sotto does not add filesystem encryption; protect this directory as you would the recordings it contains. Authentication and remote transport are described in the [server guide](../Server/README.md#remote-access).
+Only one server may own a data directory. Back up preferences and generation directories together. Inlay does not add filesystem encryption; protect this directory as you would the recordings it contains. Authentication and remote transport are described in the [server guide](../Server/README.md#remote-access).
 
 See the [HTTP contract](client-server-contract.md) for request details and [text correction](text-correction.md) for behavior and limitations.

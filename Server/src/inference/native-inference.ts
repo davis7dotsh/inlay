@@ -6,7 +6,11 @@ import type { ModelHintUsage } from "../api";
 import { HelperProcess, type HelperResponse } from "./helper-process";
 import { checkCancellation, InferenceError } from "./inference-error";
 import { ModelVerifier, type ModelPin } from "./model-verification";
-import { linuxProofModelPin, macProofManifestSHA256, speechModelPin } from "./model-pins";
+import {
+  linuxProofModelPin,
+  macProofManifestSHA256,
+  speechModelPin,
+} from "../generated/model-pins.ts";
 
 export { InferenceError } from "./inference-error";
 
@@ -40,6 +44,12 @@ function deadline(value: number | undefined, fallback: number) {
     : fallback;
 }
 
+function speechDeadline(base: number, audioSeconds?: number) {
+  if (audioSeconds === undefined || !Number.isFinite(audioSeconds) || audioSeconds <= 0)
+    return base;
+  return Math.min(900, Math.max(base, Math.ceil(60 + 2 * audioSeconds)));
+}
+
 export function createInferenceConfiguration(input: ConfigurationInput): InferenceConfiguration {
   const threads = input.threads ?? Math.min(8, Math.max(2, Math.floor(availableParallelism() / 2)));
   return {
@@ -67,16 +77,6 @@ export interface SpeechInferenceResult {
   engineVersion?: string;
   modelSHA256?: string;
   hints?: ModelHintUsage;
-  /** Exact text pieces with request-relative acoustic timestamps, in order. */
-  spans?: SpeechSpan[];
-  /** Whole decoder segments, used for stable source checkpoints. */
-  segmentSpans?: SpeechSpan[];
-}
-
-export interface SpeechSpan {
-  text: string;
-  startSeconds: number;
-  endSeconds: number;
 }
 
 export interface ProofInferenceResult {
@@ -87,8 +87,6 @@ export interface ProofInferenceResult {
 }
 
 export interface InferenceBackend {
-  readonly timedSpeechSpans?: boolean;
-  findSpeechBoundary?(audioPath: string, signal?: AbortSignal): Promise<number | undefined>;
   readiness(proofreadingEnabled?: boolean): Promise<InferenceReadiness>;
   warmUp(proofreadingEnabled?: boolean, signal?: AbortSignal): Promise<void>;
   transcribe(
@@ -97,6 +95,7 @@ export interface InferenceBackend {
     vocabularyTerms: string[],
     onProgress?: (value: number) => void,
     signal?: AbortSignal,
+    audioSeconds?: number,
   ): Promise<SpeechInferenceResult>;
   correct(
     text: string,
@@ -117,34 +116,6 @@ function validLanguage(language: string) {
   return language.length > 0 && bytes(language) <= 32 && !language.includes("\0");
 }
 
-export function validSpeechSpans(spans: SpeechSpan[] | undefined, duration: number, text: string) {
-  if (!spans || !Number.isFinite(duration) || duration < 0 || spans.length > 65_536) return false;
-  let start = 0;
-  let end = 0;
-  for (const span of spans) {
-    if (
-      !span.text.length ||
-      span.text.includes("\0") ||
-      !Number.isFinite(span.startSeconds) ||
-      !Number.isFinite(span.endSeconds) ||
-      span.startSeconds < start ||
-      span.endSeconds < end ||
-      span.endSeconds < span.startSeconds ||
-      span.endSeconds > duration ||
-      span.startSeconds < 0
-    )
-      return false;
-    start = span.startSeconds;
-    end = span.endSeconds;
-  }
-  return (
-    spans
-      .map((span) => span.text)
-      .join("")
-      .trim() === text
-  );
-}
-
 function vocabularyDiagnostics(
   response: HelperResponse,
   terms: string[],
@@ -163,7 +134,8 @@ function vocabularyDiagnostics(
     tokenCount !== undefined &&
     tokenBudget !== undefined &&
     tokenCount >= 0 &&
-    tokenBudget > 0 &&
+    tokenBudget >= 0 &&
+    (tokenBudget > 0 || included.length === 0) &&
     tokenCount <= tokenBudget &&
     included.length + omitted.length === terms.length
   ) {
@@ -180,12 +152,11 @@ function vocabularyDiagnostics(
       return { includedTerms: included, omittedTerms: omitted, tokenCount, tokenBudget };
     }
   }
-  throw new InferenceError("invalidResponse", "Whisper returned invalid vocabulary diagnostics.");
+  throw new InferenceError("invalidResponse", "Parakeet returned invalid vocabulary diagnostics.");
 }
 
 /** The helper executables own inference; the server owns paths, deadlines and pins. */
 export class NativeInference implements InferenceBackend {
-  readonly timedSpeechSpans = true;
   private readonly configuration: InferenceConfiguration;
   private readonly speech: HelperProcess;
   private readonly proof: HelperProcess;
@@ -194,24 +165,14 @@ export class NativeInference implements InferenceBackend {
   private readonly proofPin?: ModelPin;
   private readonly proofManifestSHA256?: string;
 
-  constructor(
-    configuration: ConfigurationInput,
-    fixturePins?: { speech?: ModelPin; proof?: ModelPin },
-  ) {
+  constructor(configuration: ConfigurationInput) {
     this.configuration = createInferenceConfiguration(configuration);
-    // Constructor-only fixture injection is never exposed by server configuration
-    // or the CLI. Production always enforces the immutable native-model pins.
-    this.speechPin = fixturePins ? fixturePins.speech : speechModelPin;
-    this.proofPin = fixturePins
-      ? fixturePins.proof
-      : process.platform === "darwin"
-        ? undefined
-        : linuxProofModelPin;
-    this.proofManifestSHA256 =
-      !fixturePins && process.platform === "darwin" ? macProofManifestSHA256 : undefined;
+    this.speechPin = speechModelPin;
+    this.proofPin = process.platform === "darwin" ? undefined : linuxProofModelPin;
+    this.proofManifestSHA256 = process.platform === "darwin" ? macProofManifestSHA256 : undefined;
     const config = this.configuration;
     this.speech = new HelperProcess({
-      name: "Whisper",
+      name: "Parakeet",
       executable: config.speechHelper,
       arguments: [
         "--model",
@@ -279,12 +240,32 @@ export class NativeInference implements InferenceBackend {
   }
 
   async warmUp(proofreadingEnabled = true, signal?: AbortSignal) {
-    await this.verifier.verify(this.configuration.speechModel, this.speechPin, signal);
-    await this.speech.ensureLoaded(signal);
-    if (proofreadingEnabled) {
+    const loadSpeech = async () => {
+      try {
+        await this.verifier.verify(this.configuration.speechModel, this.speechPin, signal);
+      } catch (error) {
+        // A readable file that fails the pin is usually an earlier install's Whisper weights.
+        const readable = await access(this.configuration.speechModel, constants.R_OK).then(
+          () => true,
+          () => false,
+        );
+        if (error instanceof InferenceError && error.code === "unavailable" && readable)
+          throw new InferenceError(
+            "unavailable",
+            "The speech model must be Parakeet v3. Run scripts/download-model.sh.",
+          );
+        throw error;
+      }
+      await this.speech.ensureLoaded(signal);
+    };
+    const loadProof = async () => {
+      if (!proofreadingEnabled) return;
       await this.verifier.verify(this.configuration.proofModel, this.proofPin, signal);
       await this.proof.ensureLoaded(signal);
-    }
+    };
+    const [speech, proof] = await Promise.allSettled([loadSpeech(), loadProof()]);
+    if (speech.status === "rejected") throw speech.reason;
+    if (proof.status === "rejected") throw proof.reason;
   }
 
   async transcribe(
@@ -293,6 +274,7 @@ export class NativeInference implements InferenceBackend {
     vocabularyTerms: string[],
     onProgress?: (value: number) => void,
     signal?: AbortSignal,
+    audioSeconds?: number,
   ): Promise<SpeechInferenceResult> {
     checkCancellation(signal);
     let readable = true;
@@ -314,10 +296,10 @@ export class NativeInference implements InferenceBackend {
       ) ||
       vocabularyTerms.reduce((total, term) => total + bytes(term), 0) > 384 * 1024
     ) {
-      throw new InferenceError("invalidRequest", "Audio, language, or Whisper prompt is invalid.");
+      throw new InferenceError("invalidRequest", "Audio, language, or Parakeet prompt is invalid.");
     }
     if (new Set(vocabularyTerms).size !== vocabularyTerms.length)
-      throw new InferenceError("invalidRequest", "Whisper vocabulary terms must be unique.");
+      throw new InferenceError("invalidRequest", "Parakeet vocabulary terms must be unique.");
     const digest = await this.verifier.verify(
       this.configuration.speechModel,
       this.speechPin,
@@ -335,7 +317,7 @@ export class NativeInference implements InferenceBackend {
     const response = await this.speech.request(
       request,
       request.id,
-      this.configuration.speechTimeout,
+      speechDeadline(this.configuration.speechTimeout, audioSeconds),
       onProgress,
       signal,
     );
@@ -353,24 +335,18 @@ export class NativeInference implements InferenceBackend {
       !response.language.length ||
       bytes(response.language) > 32
     ) {
-      this.speech.shutdown();
-      throw new InferenceError("invalidResponse", "Whisper returned an invalid transcript.");
+      this.speech.discard(
+        new InferenceError("invalidResponse", "Parakeet returned an invalid transcript."),
+      );
+      throw new InferenceError("invalidResponse", "Parakeet returned an invalid transcript.");
     }
     let hints: ModelHintUsage | undefined;
     try {
       hints = vocabularyDiagnostics(response, vocabularyTerms);
-      if (!validSpeechSpans(response.spans, response.duration, response.text))
-        throw new InferenceError(
-          "invalidResponse",
-          "Whisper returned missing or invalid timed speech spans. Rebuild the speech helper to match this server.",
-        );
-      if (!validSpeechSpans(response.segmentSpans, response.duration, response.text))
-        throw new InferenceError(
-          "invalidResponse",
-          "Whisper returned invalid whole-segment coverage.",
-        );
     } catch (error) {
-      this.speech.shutdown();
+      this.speech.discard(
+        new InferenceError("invalidResponse", "Parakeet returned invalid vocabulary diagnostics."),
+      );
       throw error;
     }
     const state = this.speech.snapshot();
@@ -379,39 +355,10 @@ export class NativeInference implements InferenceBackend {
       audioSeconds: response.duration,
       processingSeconds: response.elapsed,
       language: response.language,
-      spans: response.spans,
-      segmentSpans: response.segmentSpans,
       ...(state.engineVersion !== undefined ? { engineVersion: state.engineVersion } : {}),
       ...(digest !== undefined ? { modelSHA256: digest } : {}),
       ...(hints !== undefined ? { hints } : {}),
     };
-  }
-
-  async findSpeechBoundary(audioPath: string, signal?: AbortSignal) {
-    checkCancellation(signal);
-    await this.verifier.verify(this.configuration.speechModel, this.speechPin, signal);
-    const id = randomUUID();
-    const response = await this.speech.request(
-      { type: "boundary", id, path: audioPath },
-      id,
-      this.configuration.speechTimeout,
-      undefined,
-      signal,
-    );
-    if (
-      response.duration === undefined ||
-      !Number.isFinite(response.duration) ||
-      response.duration < 0.2 ||
-      response.duration > 180 ||
-      (response.boundarySeconds !== undefined &&
-        (!Number.isFinite(response.boundarySeconds) ||
-          response.boundarySeconds < 30 ||
-          response.boundarySeconds > response.duration - 0.1))
-    ) {
-      await this.speech.shutdown();
-      throw new InferenceError("invalidResponse", "Whisper returned an invalid acoustic boundary.");
-    }
-    return response.boundarySeconds;
   }
 
   async correct(
@@ -459,7 +406,9 @@ export class NativeInference implements InferenceBackend {
       !Number.isFinite(response.elapsed) ||
       response.elapsed < 0
     ) {
-      this.proof.shutdown();
+      this.proof.discard(
+        new InferenceError("invalidResponse", "Qwen returned an invalid correction."),
+      );
       throw new InferenceError("invalidResponse", "Qwen returned an invalid correction.");
     }
     const state = this.proof.snapshot();

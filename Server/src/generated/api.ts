@@ -1,4 +1,20 @@
 export interface paths {
+  "/v1/liveness": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["getLiveness"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/health": {
     parameters: {
       query?: never;
@@ -25,6 +41,102 @@ export interface paths {
     get: operations["getPreferences"];
     put: operations["updatePreferences"];
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/devices/enroll": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["enrollDevice"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/devices": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["listDevices"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/devices/close-legacy-enrollment": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["closeLegacyEnrollment"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/devices/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations["revokeDevice"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/storage": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["getStorageUsage"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/storage/purge-audio": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["purgeAudio"];
     delete?: never;
     options?: never;
     head?: never;
@@ -111,6 +223,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/generations/{id}/reprocess": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["reprocessGeneration"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/generations/{id}/delivery": {
     parameters: {
       query?: never;
@@ -122,6 +250,22 @@ export interface paths {
     put?: never;
     post: operations["recordDelivery"];
     delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/generations/{id}/audio": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations["deleteGenerationAudio"];
     options?: never;
     head?: never;
     patch?: never;
@@ -256,151 +400,6 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/v2/recordings/capabilities": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get: operations["getRecordingCapabilities"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/v2/recordings": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get: operations["listRecordings"];
-    put?: never;
-    post: operations["createRecording"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/v2/recordings/{id}": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get: operations["getRecording"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/v2/recordings/{id}/transcript": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get: operations["getRecordingTranscript"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/v2/recordings/{id}/audio/{kind}": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get: operations["getRecordingAudio"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/v2/recordings/{id}/discard": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    post: operations["discardRecording"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/v2/recordings/{id}/delivery": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    post: operations["recordRecordingDelivery"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/v2/recordings/{id}/stream": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /** @description Upgrade to WebSocket subprotocol sotto.recording.v1. Binary audio is UInt32BE JSON header length, UTF8 RecordingAudioHeader, then little-endian float32 PCM. Text controls resume, context, pause, stop and ping; server sends snapshots, acknowledgments, progress and errors. See docs/recording-protocol.md for durable ACK, fencing and resume semantics. */
-    get: operations["streamRecording"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/v2/recordings/{id}/audio/{kind}/{runID}": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get: operations["getRecordingRunAudio"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -449,12 +448,54 @@ export interface components {
     PersonalDictionary: {
       lists: components["schemas"]["DictionaryList"][];
     };
+    StorageUsage: {
+      generationCount: number;
+      audioByteCount: number;
+      inferenceByteCount: number;
+      originalByteCount: number;
+      /** Format: date-time */
+      oldestAudioAt?: string;
+      freeByteCount: number;
+      audioRetentionDays: number;
+    };
+    PurgeAudioRequest: {
+      olderThanDays?: number;
+      kind?: components["schemas"]["AudioKind"];
+    };
+    PurgeAudioResult: {
+      purgedRecordCount: number;
+      freedByteCount: number;
+    };
+    DeviceSummary: {
+      id: string;
+      name: string;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      lastSeenAt?: string;
+      /** Format: date-time */
+      revokedAt?: string;
+    };
+    DeviceList: {
+      devices: components["schemas"]["DeviceSummary"][];
+      legacyEnrollmentClosed: boolean;
+    };
+    EnrollDeviceRequest: {
+      device: components["schemas"]["DeviceIdentity"];
+    };
+    EnrollDeviceResponse: {
+      device: components["schemas"]["DeviceSummary"];
+      token: string;
+    };
     DeviceIdentity: {
       id: string;
       name: string;
     };
     ServerPreferences: {
-      /** @enum {string} */
+      /**
+       * @description Proofreading language hint. Parakeet recognizes speech automatically; legacy codes remain accepted for stored history.
+       * @enum {string}
+       */
       language:
         | "en"
         | "auto"
@@ -480,6 +521,8 @@ export interface components {
       dictionary: components["schemas"]["PersonalDictionary"];
       textCorrectionEnabled: boolean;
       keepOriginalAudio: boolean;
+      /** @description Days to keep recording audio; 0 keeps it forever. Missing values use 90. */
+      audioRetentionDays?: number;
     };
     PreferencesSnapshot: {
       revision: number;
@@ -490,6 +533,9 @@ export interface components {
       backend: string;
       ready: boolean;
       message?: string;
+    };
+    LivenessResponse: {
+      status: string;
     };
     ServerHealth: {
       apiVersion: number;
@@ -654,6 +700,7 @@ export interface components {
       settings: components["schemas"]["PreferencesSnapshot"];
       inferenceAudio?: components["schemas"]["AudioArtifact"];
       originalAudio?: components["schemas"]["AudioArtifact"];
+      originalAudioOmittedReason?: string;
       rawText: string;
       finalText: string;
       insertionText: string;
@@ -670,10 +717,25 @@ export interface components {
       delivery?: components["schemas"]["DeliveryReceipt"];
       error?: string;
       progress?: number;
+      queuePosition?: number;
+      importedSource?: components["schemas"]["ImportedSource"];
+    };
+    GenerationSummary: {
+      id: components["schemas"]["UUID"];
+      device: components["schemas"]["DeviceIdentity"];
+      mode: components["schemas"]["GenerationMode"];
+      status: components["schemas"]["GenerationStatus"];
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      updatedAt: string;
+      previewText: string;
+      queuePosition?: number;
+      originalAudioOmittedReason?: string;
       importedSource?: components["schemas"]["ImportedSource"];
     };
     GenerationPage: {
-      items: components["schemas"]["GenerationRecord"][];
+      items: components["schemas"]["GenerationSummary"][];
       nextCursor?: string;
     };
     WisprFlowImportResult: {
@@ -684,106 +746,6 @@ export interface components {
     APIErrorResponse: {
       code: string;
       message: string;
-    };
-    RecordingCapabilities: {
-      /** @enum {string} */
-      protocol: "sotto.recording.v1";
-      maximumPCMBytes: number;
-    };
-    RecordingRunEndpoint: {
-      runID: components["schemas"]["UUID"];
-      inferenceFrames: number;
-      originalFrames?: number;
-    };
-    RecordingStreamCheckpoint: {
-      runID: components["schemas"]["UUID"];
-      kind: components["schemas"]["AudioKind"];
-      format: components["schemas"]["AudioStreamFormat"];
-      nextSequence: number;
-      frameCount: number;
-    };
-    RecordingSnapshot: {
-      id: components["schemas"]["UUID"];
-      requestID: components["schemas"]["UUID"];
-      device: components["schemas"]["DeviceIdentity"];
-      mode: components["schemas"]["GenerationMode"];
-      settings: components["schemas"]["PreferencesSnapshot"];
-      /** Format: date-time */
-      createdAt: string;
-      revision: number;
-      /** @enum {string} */
-      captureState: "recording" | "interrupted" | "stopped" | "discarded";
-      /** @enum {string} */
-      processingState: "queued" | "processing" | "completed" | "failed";
-      uploadedFrames: number;
-      transcribedFrames: number;
-      proofreadFrames: number;
-      streams: components["schemas"]["RecordingStreamCheckpoint"][];
-      epoch: number;
-      stopRuns?: components["schemas"]["RecordingRunEndpoint"][];
-      error?: string;
-      previewText: string;
-      continuationID?: components["schemas"]["UUID"];
-      closedRuns?: components["schemas"]["RecordingRunEndpoint"][];
-      runTimings?: components["schemas"]["RecordingRunTiming"][];
-    };
-    RecordingDetail: {
-      snapshot: components["schemas"]["RecordingSnapshot"];
-      result?: components["schemas"]["GenerationRecord"];
-    };
-    RecordingPage: {
-      items: components["schemas"]["RecordingSnapshot"][];
-      nextCursor?: string;
-    };
-    RecordingAudioHeader: {
-      /** @enum {string} */
-      type: "audio";
-      epoch: number;
-      runID: components["schemas"]["UUID"];
-      kind: components["schemas"]["AudioKind"];
-      sequence: number;
-      firstFrame: number;
-      format: components["schemas"]["AudioStreamFormat"];
-      frameCount: number;
-      sha256: string;
-    };
-    RecordingStopRequest: {
-      /** @enum {string} */
-      type: "stop";
-      epoch: number;
-      runs: components["schemas"]["RecordingRunEndpoint"][];
-      runTimings?: components["schemas"]["RecordingRunTiming"][];
-    };
-    RecordingAck: {
-      /** @enum {string} */
-      type: "ack";
-      runID: components["schemas"]["UUID"];
-      kind: components["schemas"]["AudioKind"];
-      nextSequence: number;
-      frameCount: number;
-      revision: number;
-    };
-    RecordingContextRequest: {
-      /** @enum {string} */
-      type: "context";
-      epoch: number;
-      continuationID: components["schemas"]["UUID"];
-    };
-    RecordingRunTiming: {
-      runID: components["schemas"]["UUID"];
-      /** Format: date-time */
-      startedAt: string;
-      /** Format: date-time */
-      endedAt?: string;
-      gapBeforeMilliseconds?: number;
-    };
-    RecordingPauseRequest: {
-      /** @enum {string} */
-      type: "pause";
-      epoch: number;
-      runs: components["schemas"]["RecordingRunEndpoint"][];
-      runTimings: components["schemas"]["RecordingRunTiming"][];
-      interruption?: string;
     };
   };
   responses: {
@@ -804,6 +766,27 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  getLiveness: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Success */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["LivenessResponse"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
   getHealth: {
     parameters: {
       query?: never;
@@ -871,12 +854,155 @@ export interface operations {
       default: components["responses"]["APIError"];
     };
   };
+  enrollDevice: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["EnrollDeviceRequest"];
+      };
+    };
+    responses: {
+      /** @description Device credential rotated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EnrollDeviceResponse"];
+        };
+      };
+      /** @description Device enrolled */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EnrollDeviceResponse"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
+  listDevices: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Success */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DeviceList"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
+  closeLegacyEnrollment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Success */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DeviceList"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
+  revokeDevice: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Device revoked */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
+  getStorageUsage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Success */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["StorageUsage"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
+  purgeAudio: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PurgeAudioRequest"];
+      };
+    };
+    responses: {
+      /** @description Success */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PurgeAudioResult"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
   listGenerations: {
     parameters: {
       query?: {
         limit?: number;
         before?: string;
-        source?: "sotto" | "wispr-flow";
+        source?: "inlay" | "wispr-flow";
       };
       header?: never;
       path?: never;
@@ -1048,6 +1174,29 @@ export interface operations {
       default: components["responses"]["APIError"];
     };
   };
+  reprocessGeneration: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components["schemas"]["UUID"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Success */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["GenerationRecord"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
   recordDelivery: {
     parameters: {
       query?: never;
@@ -1071,6 +1220,27 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["GenerationRecord"];
         };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
+  deleteGenerationAudio: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components["schemas"]["UUID"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Audio deleted */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       default: components["responses"]["APIError"];
     };
@@ -1282,242 +1452,6 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
-      };
-      default: components["responses"]["APIError"];
-    };
-  };
-  getRecordingCapabilities: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Success */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["RecordingCapabilities"];
-        };
-      };
-      default: components["responses"]["APIError"];
-    };
-  };
-  listRecordings: {
-    parameters: {
-      query?: {
-        limit?: number;
-        before?: string;
-      };
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Success */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["RecordingPage"];
-        };
-      };
-      default: components["responses"]["APIError"];
-    };
-  };
-  createRecording: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["CreateGenerationRequest"];
-      };
-    };
-    responses: {
-      /** @description Success */
-      201: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["RecordingSnapshot"];
-        };
-      };
-      default: components["responses"]["APIError"];
-    };
-  };
-  getRecording: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: components["schemas"]["UUID"];
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Success */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["RecordingDetail"];
-        };
-      };
-      default: components["responses"]["APIError"];
-    };
-  };
-  getRecordingTranscript: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: components["schemas"]["UUID"];
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Success */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "text/plain": string;
-        };
-      };
-      default: components["responses"]["APIError"];
-    };
-  };
-  getRecordingAudio: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: components["schemas"]["UUID"];
-        kind: components["schemas"]["AudioKind"];
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Success */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "audio/wav": string;
-        };
-      };
-      default: components["responses"]["APIError"];
-    };
-  };
-  discardRecording: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: components["schemas"]["UUID"];
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Success */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["RecordingSnapshot"];
-        };
-      };
-      default: components["responses"]["APIError"];
-    };
-  };
-  recordRecordingDelivery: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: components["schemas"]["UUID"];
-      };
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["DeliveryReceipt"];
-      };
-    };
-    responses: {
-      /** @description Success */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["GenerationRecord"];
-        };
-      };
-      default: components["responses"]["APIError"];
-    };
-  };
-  streamRecording: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: components["schemas"]["UUID"];
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description WebSocket upgrade */
-      101: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-      default: components["responses"]["APIError"];
-    };
-  };
-  getRecordingRunAudio: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: components["schemas"]["UUID"];
-        kind: components["schemas"]["AudioKind"];
-        runID: components["schemas"]["UUID"];
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Success */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "audio/wav": string;
-        };
       };
       default: components["responses"]["APIError"];
     };

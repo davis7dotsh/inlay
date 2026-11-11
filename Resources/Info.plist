@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>Sotto</string>
+	<string>Inlay</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.davis.murmur</string>
+	<string>dev.davis.inlay</string>
 	<key>CFBundleName</key>
-	<string>Sotto</string>
+	<string>Inlay</string>
 	<key>CFBundleDisplayName</key>
-	<string>Sotto</string>
+	<string>Inlay</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -17,7 +17,7 @@
 	<key>CFBundleVersion</key>
 	<string>28</string>
 	<key>CFBundleIconFile</key>
-	<string>Sotto</string>
+	<string>Inlay</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
@@ -25,9 +25,9 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Sotto records your microphone only while you dictate and sends audio to your configured Sotto server for transcription and shared history.</string>
+	<string>Inlay records your microphone only while you dictate and sends audio to your configured Inlay server for transcription and shared history.</string>
 	<key>NSInputMonitoringUsageDescription</key>
-	<string>Sotto listens for your chosen hold-to-dictate key. It does not store your keystrokes.</string>
+	<string>Inlay listens for your chosen hold-to-dictate key. It does not store your keystrokes.</string>
 	<!-- HTTP is validated in ServerEndpoint and limited to loopback/Tailscale IPs. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
@@ -35,8 +35,8 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Sotto connects to your Sotto server to process dictation and display shared history.</string>
-	<key>SottoDevelopmentBuild</key>
+	<string>Inlay connects to your Inlay server to process dictation and display shared history.</string>
+	<key>InlayDevelopmentBuild</key>
 	<false/>
 </dict>
 </plist>

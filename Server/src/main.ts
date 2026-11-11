@@ -1,47 +1,41 @@
 import { acquireDataDirectoryLock } from "./data-lock.ts";
-import { parseConfiguration, usage, type ServerConfiguration } from "./configuration.ts";
+import {
+  isLoopbackHost,
+  parseConfiguration,
+  usage,
+  type ServerConfiguration,
+} from "./configuration.ts";
 import { createHTTPServer } from "./http-server.ts";
 import { GenerationService, defaultProofreadingPrompt } from "./generation-service.ts";
-import { NativeInference, type InferenceBackend } from "./inference/native-inference.ts";
-import { InferenceScheduler } from "./inference/serialized-inference.ts";
-import { RecordingService } from "./recording-service.ts";
-import { ServiceError } from "./errors.ts";
+import { logError, logInfo, logWarn } from "./log.ts";
+import { NativeInference } from "./inference/native-inference.ts";
 
-export async function startServer(configuration: ServerConfiguration, backend?: InferenceBackend) {
+export async function startServer(configuration: ServerConfiguration) {
   const lock = acquireDataDirectoryLock(configuration.dataDirectory);
-  const inference = new InferenceScheduler(backend ?? new NativeInference(configuration.inference));
   let service: GenerationService | undefined;
-  let recordings: RecordingService | undefined;
-  const stopServices = async () => {
-    // Abort both owners before waiting: either can be queued behind the other.
-    const stopped = await Promise.allSettled([recordings?.shutdown(), service?.shutdown()]);
-    await inference.shutdown();
-    for (const result of stopped) if (result.status === "rejected") throw result.reason;
-  };
   try {
-    service = await GenerationService.open(configuration, inference.scope());
-    const legacy = service;
-    recordings = await RecordingService.open(configuration, inference.scope(), {
-      getPreferences: () => legacy.getPreferences(),
-      resolveContinuation: (id, snapshot) => legacy.resolveRecordingContinuation(id, snapshot),
-      admit: async () => {
-        const health = await legacy.health();
-        if (!health.ready)
-          throw new ServiceError(
-            503,
-            "server_unavailable",
-            health.message ?? "The server is not ready to start recording.",
-          );
+    service = await GenerationService.open(
+      {
+        dataDirectory: configuration.dataDirectory,
+        development: configuration.development,
+        adminToken: configuration.token,
       },
-    });
-    const app = createHTTPServer(service, configuration.token, recordings);
-    await service.start();
+      new NativeInference(configuration.inference),
+    );
+    const app = createHTTPServer(service);
+    service.start();
     const address = await app.listen({ host: configuration.host, port: configuration.port });
+    if (!isLoopbackHost(configuration.host))
+      logWarn("plain_http_non_loopback", {
+        host: configuration.host,
+        message:
+          "Plain HTTP on a non-loopback bind leaves tokens, audio, and transcripts unencrypted. Use a Tailscale address or an HTTPS reverse proxy.",
+      });
     let closing: Promise<void> | undefined;
     const close = () =>
       (closing ??= (async () => {
         try {
-          await stopServices();
+          await service!.shutdown();
         } finally {
           try {
             await app.close();
@@ -50,10 +44,10 @@ export async function startServer(configuration: ServerConfiguration, backend?: 
           }
         }
       })());
-    return { app, service, recordings, address, close };
+    return { app, service, address, close };
   } catch (error) {
     try {
-      await stopServices();
+      await service?.shutdown();
     } finally {
       lock.release();
     }
@@ -67,8 +61,11 @@ if (import.meta.main) {
     else if (process.argv.includes("--print-default-proofreading-prompt"))
       console.log(defaultProofreadingPrompt);
     else {
-      const server = await startServer(await parseConfiguration());
-      console.log(`Sotto server listening at ${server.address}`);
+      const configuration = await parseConfiguration();
+      const server = await startServer(configuration);
+      if (configuration.adminTokenCreated)
+        logInfo("admin_token_created", { file: configuration.adminTokenFile });
+      logInfo("server_listening", { address: server.address });
       const stop = () => {
         void server.close().then(
           () => process.exit(0),
@@ -79,7 +76,7 @@ if (import.meta.main) {
       process.once("SIGINT", stop);
     }
   } catch (error) {
-    console.error(error instanceof Error ? error.message : "The server could not start.");
+    logError("server_start_failed", error);
     process.exitCode = 1;
   }
 }

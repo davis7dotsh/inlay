@@ -74,7 +74,7 @@ for (const dependency of dependencyNames(root.dependencies))
   await visit(dependency, serverDirectory);
 
 const notices = [
-  "Sotto server JavaScript runtime dependency licenses",
+  "Inlay server JavaScript runtime dependency licenses",
   "Installed versions are pinned by bun.lock. Development-only packages are excluded.",
 ];
 for (const package_ of [...packages.values()].sort(

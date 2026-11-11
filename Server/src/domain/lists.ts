@@ -6,10 +6,6 @@ export interface FormattedDictation {
   containsList: boolean;
   endsWithList: boolean;
   continuesPreviousList: boolean;
-  /** A bounded streaming prefix already emitted this item's list marker. */
-  continuesPreviousItem?: boolean;
-  /** Distinguishes an emitted item tail from a trailing marker awaiting a body. */
-  endsWithOpenItem?: boolean;
   endedList: boolean;
   isControlOnly: boolean;
   consumedControls: ListControlSpan[];
@@ -510,11 +506,6 @@ function scan(text: string): Event[] {
   return events;
 }
 
-/** Keep a complete spoken control/number marker on one side of a stream cut. */
-export function spokenListBoundaryRanges(text: string) {
-  return scan(text).map(({ range }) => range);
-}
-
 const contentTokens = (text: string) =>
   tokenize(text)
     .map((token) => token.value)
@@ -724,7 +715,6 @@ function sourceContentTokens(
 export function formatSpokenList(
   text: string,
   initialContext?: SpokenListContext,
-  options: { continuePreviousItem?: boolean; keepTailPunctuation?: boolean } = {},
 ): FormattedDictation {
   const empty = (value: string, reason?: string): FormattedDictation => ({
     text: value,
@@ -756,9 +746,7 @@ export function formatSpokenList(
   const numberMarkers: { range: Range; number: number }[] = [];
   const emittedContent: string[] = [];
   let pendingSourceNumber: number | undefined;
-  let continuingItem = options.continuePreviousItem === true && initialContext !== undefined;
-  let continuesPreviousItem = false;
-  const flush = (finalTail = false) => {
+  const flush = () => {
     const value = body.trim();
     body = "";
     awaitingMarkedItem = false;
@@ -768,15 +756,11 @@ export function formatSpokenList(
       emittedContent.push(...contentTokens(value));
       return;
     }
-    const item = finalTail && options.keepTailPunctuation ? value : itemText(value);
+    const item = itemText(value);
     if (!item) return;
     if (!pieces.length && usesOriginalContext && initialContext?.style === context.style)
       continuesPreviousList = true;
-    if (continuingItem) {
-      pieces.push({ text: item, isList: true });
-      continuesPreviousItem = true;
-      continuingItem = false;
-    } else if (context.style === "numbered") {
+    if (context.style === "numbered") {
       pieces.push({ text: `${context.nextNumber}. ${item}`, isList: true });
       if (pendingSourceNumber !== undefined) emittedContent.push(numberToken(context.nextNumber));
       context = {
@@ -819,7 +803,6 @@ export function formatSpokenList(
         continue;
       }
       flush();
-      continuingItem = false;
       if (action.marker.kind === "number") {
         context = { style: "numbered", nextNumber: action.marker.number };
         numberMarkers.push({ range: event.range, number: action.marker.number });
@@ -836,7 +819,6 @@ export function formatSpokenList(
       bodyStart = event.range.end;
     } else if (action.kind === "start") {
       flush();
-      continuingItem = false;
       context = { style: action.style ?? "numbered", nextNumber: 1 };
       usesOriginalContext = false;
       consumedControl = true;
@@ -850,7 +832,6 @@ export function formatSpokenList(
         body = removing(removed, text, range);
       }
       flush();
-      continuingItem = false;
       if (action.style !== undefined && action.style !== context?.style) {
         context = { style: action.style, nextNumber: 1 };
         usesOriginalContext = false;
@@ -860,7 +841,6 @@ export function formatSpokenList(
       bodyStart = event.range.end;
     } else {
       flush();
-      continuingItem = false;
       context = undefined;
       usesOriginalContext = false;
       endedList = true;
@@ -870,8 +850,7 @@ export function formatSpokenList(
     }
   }
   body += text.slice(cursor);
-  const endsWithOpenItem = context !== undefined && body.trim().length > 0;
-  flush(true);
+  flush();
   if (!consumedControl && initialContext === undefined)
     return { ...empty(text), context: undefined };
   const output = pieces
@@ -903,8 +882,6 @@ export function formatSpokenList(
     containsList,
     endsWithList: pieces.at(-1)?.isList === true,
     continuesPreviousList,
-    continuesPreviousItem,
-    endsWithOpenItem,
     endedList,
     isControlOnly: consumedControl && !output,
     consumedControls: controls.map(({ start, end }) => ({ location: start, length: end - start })),
