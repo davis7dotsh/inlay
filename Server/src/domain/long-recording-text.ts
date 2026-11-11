@@ -8,7 +8,12 @@ import type { InferenceBackend } from "../inference/native-inference.ts";
 import { cleanTranscript } from "./cleaner.ts";
 import { modelHints, processingRecord } from "./correction.ts";
 import { evaluateCorrectionInWorker } from "./correction-runtime.ts";
-import { applyDictionary, dictionaryKey, dictionaryVocabularyTerms } from "./dictionary.ts";
+import {
+  applyDictionary,
+  dictionaryKey,
+  dictionaryVocabularyTerms,
+  proofreadingTerms,
+} from "./dictionary.ts";
 import { formatSpokenList, spokenListBoundaryRanges, type FormattedDictation } from "./lists.ts";
 
 const maximumWindowUnits = 2_400;
@@ -184,10 +189,13 @@ async function proofreadPart(
   inference: InferenceBackend,
   signal?: AbortSignal,
   depth = 0,
+  screenContextTerms: string[] = [],
 ): Promise<{ text: string; processing: TextProcessingRecord[] }> {
   signal?.throwIfAborted();
   const started = performance.now();
   const terms = dictionaryVocabularyTerms(settings.dictionary);
+  const allTerms = proofreadingTerms(settings.dictionary, screenContextTerms);
+  const screenTerms = allTerms.slice(terms.length);
   const record = (
     status: TextProcessingRecord["status"],
     extra: Partial<TextProcessingRecord> = {},
@@ -206,14 +214,20 @@ async function proofreadPart(
   try {
     const proof = await inference.correct(
       text,
-      modelHints(terms),
+      modelHints(allTerms),
       settings.language,
       settings.proofreadingPrompt,
       signal,
     );
     signal?.throwIfAborted();
-    const candidate = applyDictionary(settings.dictionary, proof.text.trim());
-    const evaluation = await evaluateCorrectionInWorker(text, candidate, terms, signal);
+    const candidate = applyDictionary(settings.dictionary, proof.text.trim(), 24 * 1024);
+    const evaluation = await evaluateCorrectionInWorker(
+      text,
+      candidate,
+      terms,
+      screenTerms,
+      signal,
+    );
     signal?.throwIfAborted();
     const accepted = evaluation.rejectionReason === undefined;
     const output = accepted ? candidate : text;
@@ -247,8 +261,22 @@ async function proofreadPart(
         const leftBody = leftSource.trimEnd();
         const rightBody = rightSource.trimStart();
         if (leftBody && rightBody) {
-          const left = await proofreadPart(leftBody, settings, inference, signal, depth + 1);
-          const right = await proofreadPart(rightBody, settings, inference, signal, depth + 1);
+          const left = await proofreadPart(
+            leftBody,
+            settings,
+            inference,
+            signal,
+            depth + 1,
+            screenContextTerms,
+          );
+          const right = await proofreadPart(
+            rightBody,
+            settings,
+            inference,
+            signal,
+            depth + 1,
+            screenContextTerms,
+          );
           const separator =
             leftSource.slice(leftBody.length) +
             rightSource.slice(0, rightSource.length - rightBody.length);
@@ -275,6 +303,7 @@ async function proofreadBounded(
   settings: ServerPreferences,
   inference: InferenceBackend,
   signal?: AbortSignal,
+  screenContextTerms: string[] = [],
 ) {
   const output: string[] = [];
   const processing: TextProcessingRecord[] = [];
@@ -294,7 +323,7 @@ async function proofreadBounded(
       output.push(source);
       continue;
     }
-    const result = await proofreadPart(body, settings, inference, signal);
+    const result = await proofreadPart(body, settings, inference, signal, 0, screenContextTerms);
     output.push(prefix, result.text, suffix);
     processing.push(...result.processing);
   }
@@ -308,15 +337,22 @@ async function commitPrefix(
   inference: InferenceBackend,
   final: boolean,
   signal?: AbortSignal,
+  screenContextTerms: string[] = [],
 ) {
   const rawText = state.pendingText.slice(0, count);
   const clean = cleanTranscript(rawText);
-  const dictionaryText = applyDictionary(settings.dictionary, clean);
+  const dictionaryText = applyDictionary(settings.dictionary, clean, 24 * 1024);
   const formatted = formatSpokenList(dictionaryText, state.listContext, {
     continuePreviousItem: state.openListItem,
     keepTailPunctuation: !final,
   });
-  const corrected = await proofreadBounded(formatted.text, settings, inference, signal);
+  const corrected = await proofreadBounded(
+    formatted.text,
+    settings,
+    inference,
+    signal,
+    screenContextTerms,
+  );
   let separator = "";
   if (corrected.text && state.hasOutput) {
     separator = formatted.continuesPreviousItem
@@ -389,6 +425,7 @@ export async function finalizeLongRecordingText(
   settings: ServerPreferences,
   inference: InferenceBackend,
   signal?: AbortSignal,
+  screenContextTerms: string[] = [],
 ) {
   if (state.finalized) return structuredClone(state);
   const next = structuredClone(state);
@@ -405,6 +442,7 @@ export async function finalizeLongRecordingText(
       inference,
       boundary === next.pendingText.length,
       signal,
+      screenContextTerms,
     );
   }
   next.finalized = true;

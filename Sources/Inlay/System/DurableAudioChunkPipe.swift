@@ -116,6 +116,10 @@ final class AudioChunkPipe: @unchecked Sendable, Identifiable {
 
     private func flush() throws {
         guard !pending.isEmpty else { return }
+        if let free = try FileManager.default.attributesOfFileSystem(forPath: directory.path)[.systemFreeSize] as? NSNumber,
+           free.int64Value < Int64(100 * 1_048_576 + pendingBytes * 2) {
+            throw CocoaError(.fileWriteOutOfSpace)
+        }
         var next = manifest
         // One durable batch per checkpoint, rather than one file and fsync per
         // microphone callback. Its internal chunk boundaries stay immutable.

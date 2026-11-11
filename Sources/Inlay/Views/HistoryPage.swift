@@ -60,6 +60,7 @@ struct HistoryPage: View {
                     Button("Finish in History") { controller.finishLocalCapture(capture) }
                         .disabled(controller.recoveringCaptures.contains(capture.id))
                     Button("Discard saved audio", role: .destructive) { controller.discardLocalCapture(capture) }
+                        .disabled(controller.recoveringCaptures.contains(capture.id))
                 }
             }
             HSplitView {
@@ -254,6 +255,15 @@ struct HistoryPage: View {
                                     Text(proposed).font(.callout).textSelection(.enabled)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
+                            }
+                        }
+                        if let terms = selected.screenContextTerms, !terms.isEmpty {
+                            DisclosureGroup("Screen hints: \(terms.count) \(terms.count == 1 ? "term" : "terms")") {
+                                Text(terms.joined(separator: ", "))
+                                    .font(.caption)
+                                    .foregroundStyle(InlayPalette.muted)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                         // Parakeet takes no vocabulary prompt; its takes report a zero budget.

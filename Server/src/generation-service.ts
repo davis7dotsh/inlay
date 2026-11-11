@@ -57,6 +57,8 @@ import {
   defaultDictionary,
   dictionaryValidationError,
   dictionaryVocabularyTerms,
+  proofreadingTerms,
+  validScreenContextTerm,
 } from "./domain/dictionary.ts";
 import { cleanTranscript } from "./domain/cleaner.ts";
 import { composeDictation } from "./domain/composition.ts";
@@ -877,7 +879,7 @@ export class GenerationService {
           "recording_limit",
           "This recording reached its duration or WAV storage limit.",
         );
-      if (upload.bytes === 0) await requireDiskSpace(this.configuration.dataDirectory);
+      await requireDiskSpaceFor(this.configuration.dataDirectory, bytes.length);
       const file = await open(
         path,
         constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK | constants.O_CREAT,
@@ -999,6 +1001,14 @@ export class GenerationService {
         this.configuration.dataDirectory,
         speech.bytes + 44 + (sealOriginal ? sealOriginal.bytes + 44 : 0),
       );
+      // Screen terms only follow dictionary names as Qwen proofreading hints, so a
+      // take without text correction keeps none. Drop malformed terms rather than
+      // failing a take over an optional hint.
+      const screenTerms = record.settings.preferences.textCorrectionEnabled
+        ? request.screenContextTerms?.filter(validScreenContextTerm)
+        : undefined;
+      if (screenTerms?.length) record.screenContextTerms = screenTerms;
+      else delete record.screenContextTerms;
       try {
         if (!record.inferenceAudio)
           record.inferenceAudio = await this.seal(id, "inference", speech);
@@ -1622,7 +1632,7 @@ export class GenerationService {
     let transcribeMs = 0;
     let proofMs = 0;
     try {
-      // Every new API-5 capture has durable upload receipts. Older sealed
+      // Every new API-6 capture has durable upload receipts. Older sealed
       // generations retain the existing batch path and its continuation behavior.
       const hasReceipts = await access(join(this.directory(id), "uploads.json")).then(
         () => true,
@@ -1638,6 +1648,7 @@ export class GenerationService {
           record.inferenceAudio!.frameCount,
           record.settings.preferences,
           signal,
+          record.screenContextTerms,
         );
         signal.throwIfAborted();
         const composition = composeDictation(result.formatted, result.previous);
@@ -1750,6 +1761,7 @@ export class GenerationService {
         const processing = await this.proofread(
           structured.text,
           settings,
+          record.screenContextTerms,
           cleaned !== transcript,
           speech.language === "auto" ? settings.language : speech.language,
           signal,
@@ -1758,7 +1770,7 @@ export class GenerationService {
         signal.throwIfAborted();
         record.textProcessing = processing;
         if (["applied", "unchanged", "rejected"].includes(processing.status)) {
-          const all = dictionaryVocabularyTerms(settings.dictionary),
+          const all = proofreadingTerms(settings.dictionary, record.screenContextTerms),
             included = modelHints(all);
           record.proofreadingHints = {
             includedTerms: included,
@@ -1836,18 +1848,23 @@ export class GenerationService {
   private async proofread(
     text: string,
     settings: ServerPreferences,
+    screenContextTerms: string[] | undefined,
     dictionaryChanged: boolean,
     language: string,
     signal: AbortSignal,
   ) {
     const started = performance.now(),
-      terms = dictionaryVocabularyTerms(settings.dictionary);
+      dictionaryTerms = dictionaryVocabularyTerms(settings.dictionary),
+      terms = proofreadingTerms(settings.dictionary, screenContextTerms),
+      // The validator trusts near-spellings of dictionary terms only; screen
+      // terms that are not already dictionary terms get the weaker tier.
+      screenTerms = terms.slice(dictionaryTerms.length);
     const make = (
       status: TextProcessingRecord["status"],
       extra: Partial<TextProcessingRecord> = {},
     ) =>
       processingRecord({
-        dictionaryTerms: terms,
+        dictionaryTerms,
         dictionaryChangedText: dictionaryChanged,
         inputText: text,
         outputText: text,
@@ -1871,7 +1888,13 @@ export class GenerationService {
       );
       signal.throwIfAborted();
       const candidate = applyDictionary(settings.dictionary, proof.text.trim(), 24 * 1024);
-      const evaluation = await evaluateCorrectionInWorker(text, candidate, terms, signal);
+      const evaluation = await evaluateCorrectionInWorker(
+        text,
+        candidate,
+        dictionaryTerms,
+        screenTerms,
+        signal,
+      );
       signal.throwIfAborted();
       const extra = {
         proposedText: candidate,

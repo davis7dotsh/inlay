@@ -1,7 +1,12 @@
 import { constants } from "node:fs";
 import { open, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { ServerPreferences, DictationContinuation, TextProcessingRecord } from "./api.ts";
+import {
+  MAXIMUM_METADATA_BYTES,
+  type ServerPreferences,
+  type DictationContinuation,
+  type TextProcessingRecord,
+} from "./api.ts";
 import type { InferenceBackend, SpeechInferenceResult } from "./inference/native-inference.ts";
 import { atomicPrivateWrite, ensureDirectory, readRegularFile } from "./storage.ts";
 import {
@@ -68,7 +73,10 @@ export class RollingTranscription {
           previous = (
             JSON.parse(
               (
-                await readRegularFile(join(this.root, id, "capture-context.json"), 1_048_576)
+                await readRegularFile(
+                  join(this.root, id, "capture-context.json"),
+                  MAXIMUM_METADATA_BYTES,
+                )
               ).toString(),
             ) as { previous?: DictationContinuation }
           ).previous;
@@ -79,7 +87,10 @@ export class RollingTranscription {
         try {
           checkpoint = JSON.parse(
             (
-              await readRegularFile(join(this.directory(id), "checkpoint.json"), 1_048_576)
+              await readRegularFile(
+                join(this.directory(id), "checkpoint.json"),
+                MAXIMUM_METADATA_BYTES,
+              )
             ).toString(),
           ) as Checkpoint;
           if (
@@ -284,7 +295,10 @@ export class RollingTranscription {
       const index = session.checkpoint.proofCount;
       const window = JSON.parse(
         (
-          await readRegularFile(join(this.directory(id), `speech-${index}.json`), 1_048_576)
+          await readRegularFile(
+            join(this.directory(id), `speech-${index}.json`),
+            MAXIMUM_METADATA_BYTES,
+          )
         ).toString(),
       ) as SpeechWindow;
       const text = await this.stage("proof", () =>
@@ -312,7 +326,13 @@ export class RollingTranscription {
     }
   }
 
-  async finish(id: string, frames: number, settings: ServerPreferences, signal: AbortSignal) {
+  async finish(
+    id: string,
+    frames: number,
+    settings: ServerPreferences,
+    signal: AbortSignal,
+    screenContextTerms: string[] = [],
+  ) {
     const session = await this.session(id, settings);
     const abort = () => session.controller.abort();
     signal.addEventListener("abort", abort, { once: true });
@@ -344,6 +364,7 @@ export class RollingTranscription {
             settings,
             this.inference,
             signal,
+            screenContextTerms,
           ),
         );
         const spans = drainLongRecordingTextSpans(text);
@@ -362,13 +383,19 @@ export class RollingTranscription {
         spans.push(
           ...(JSON.parse(
             (
-              await readRegularFile(join(this.directory(id), `proof-${i}.json`), 1_048_576)
+              await readRegularFile(
+                join(this.directory(id), `proof-${i}.json`),
+                MAXIMUM_METADATA_BYTES,
+              )
             ).toString(),
           ) as LongRecordingTextSpan[]),
         );
         const window = JSON.parse(
           (
-            await readRegularFile(join(this.directory(id), `speech-${i}.json`), 1_048_576)
+            await readRegularFile(
+              join(this.directory(id), `speech-${i}.json`),
+              MAXIMUM_METADATA_BYTES,
+            )
           ).toString(),
         ) as SpeechWindow;
         seconds += window.speech.processingSeconds;
@@ -377,7 +404,10 @@ export class RollingTranscription {
       spans.push(
         ...(JSON.parse(
           (
-            await readRegularFile(join(this.directory(id), "final-proof.json"), 1_048_576)
+            await readRegularFile(
+              join(this.directory(id), "final-proof.json"),
+              MAXIMUM_METADATA_BYTES,
+            )
           ).toString(),
         ) as LongRecordingTextSpan[]),
       );
