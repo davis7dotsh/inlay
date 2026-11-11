@@ -155,11 +155,11 @@ final class LocalServerManager: ObservableObject {
 
     /// The on-disk LaunchAgent is what launchd will run. A marker that still names
     /// Helpers is not enough: the plist may already point at this bundle, or at a
-    /// server the user installed from a checkout.
+    /// server the user installed from a checkout. A missing plist stays missing.
+    /// `install-service.sh --uninstall` removes the agent and leaves the marker,
+    /// so a leftover `serverPath` is not a reason to retarget or reinstall.
     private static func launchAgentNeedsResourcesMove(_ marker: LocalServerMarker) -> Bool {
-        if savedAgentPlist(marker, refersTo: LocalServerPaths.legacyBundledServerDirectory) { return true }
-        let plistMissing = savedAgentPlistText(marker) == nil
-        return plistMissing && LocalServerPaths.refersToLegacyBundledServer(marker.serverPath)
+        savedAgentPlist(marker, refersTo: LocalServerPaths.legacyBundledServerDirectory)
     }
 
     private static func savedAgentPlist(_ marker: LocalServerMarker, refersTo directory: URL) -> Bool {
