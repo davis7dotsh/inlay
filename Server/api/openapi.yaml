@@ -296,7 +296,7 @@ paths:
           schema:
             type: "integer"
             minimum: 0
-            maximum: 4095
+            maximum: 999999
         - name: "sampleRate"
           in: "query"
           required: true

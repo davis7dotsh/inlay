@@ -1094,19 +1094,9 @@ final class InlayController: ObservableObject {
             defer { if sessionID == current { microphoneStartTask = nil } }
             do {
                 let connection = try client()
-                // Field preparation can take seconds in a newly opened app. It
-                // must never delay the microphone; bind only an available snapshot.
-                let initialDestination = isTest ? nil : insertionDestination
-                try Task.checkCancellation()
-                guard sessionID == current, activity == .starting else { return }
-                let anchor: DictationDestination? = isTest ? .test : initialDestination?.target.map(DictationDestination.field)
-                let sharesEarlierAnchor = pendingDictations.contains { earlier in
-                    earlier.target.map { $0.anchor == anchor } ?? true
-                }
-                let continuationID = sharesEarlierAnchor ? nil : anchor.flatMap { self.continuation(for: $0)?.generationID }
+                // Create and microphone startup never wait for field preparation.
                 let created = try await connection.create(.init(requestID: current,
-                    device: .init(id: preferences.deviceID, name: preferences.deviceName), mode: isTest ? .test : .dictation,
-                    continuationID: continuationID))
+                    device: .init(id: preferences.deviceID, name: preferences.deviceName), mode: isTest ? .test : .dictation))
                 guard sessionID == current, activity == .starting, !Task.isCancelled else {
                     Task { try? await connection.cancel(created.id) }; return
                 }
@@ -1125,8 +1115,24 @@ final class InlayController: ObservableObject {
                 }
                 uploadPipe = pipe
                 recorder.onChunk = { pipe.append($0) }
+                let capturedDestinationTask = destinationTask
+                let earlierTakes = pendingDictations
                 uploadTask = Task { [weak self] in
                     do {
+                        // Only transfer waits for destination preparation. Capture
+                        // continues into the durable pipe, with no audio loss. Bind
+                        // context before the first upload can trigger rolling proof.
+                        let destination = await capturedDestinationTask?.value
+                        try Task.checkCancellation()
+                        let anchor: DictationDestination? = isTest ? .test : destination?.target.map(DictationDestination.field)
+                        let sharesEarlierAnchor = earlierTakes.contains { earlier in
+                            earlier.target.map { $0.anchor == anchor } ?? true
+                        }
+                        if let self, !sharesEarlierAnchor,
+                           let continuationID = anchor.flatMap({ self.continuation(for: $0)?.generationID }) {
+                            _ = try await connection.create(.init(requestID: current,
+                                device: created.device, mode: created.mode, continuationID: continuationID))
+                        }
                         let outcome = try await connection.upload(pipe.stream, to: created.id, preserveOriginal: created.settings.preferences.keepOriginalAudio)
                         if let self, !outcome.complete, sessionID == current, isCapturing, !Task.isCancelled {
                             salvageDictation(reason: "The connection was interrupted.")

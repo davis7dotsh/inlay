@@ -697,7 +697,27 @@ export class GenerationService {
           record.requestID.toUpperCase() === request.requestID.toUpperCase() &&
           record.device.id === request.device.id,
       );
-      if (existing) return copy(existing);
+      if (existing) {
+        return this.withGenerationLock(existing.id, async () => {
+          const record = this.getInternal(existing.id);
+          // Destination preparation must not hold up microphone startup. The
+          // owner may bind resolved context by replaying Create before sending
+          // any audio. The generation lock makes freezing atomic with upload.
+          if (
+            request.continuationID &&
+            record.status === "receiving" &&
+            !Object.keys(this.uploads.get(record.id) ?? {}).length
+          ) {
+            await atomicPrivateWrite(
+              join(this.directory(record.id), "capture-context.json"),
+              JSON.stringify({
+                previous: this.continuation(request.continuationID, record),
+              }),
+            );
+          }
+          return copy(record);
+        });
+      }
       const active = [...this.records.values()].filter((record) => !terminal(record)).length;
       if (active >= MAX_ACTIVE_GENERATIONS)
         throw new ServiceError(
