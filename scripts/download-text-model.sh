@@ -4,11 +4,16 @@ set -euo pipefail
 # Verified Qwen text-model download. Pins mirror TextModel.qwen in
 # Sources/InlayCore/TextModel.swift (macOS MLX, six files) and
 # linuxProofModelPin in Server/src/inference/model-pins.ts (Linux GGUF).
-platform=$(uname -s)
+host_platform=$(uname -s)
+platform=$host_platform
 if [[ "${1:-}" == --linux ]]; then platform=Linux; shift; fi
 
 sha_of() { shasum -a 256 "$1" 2>/dev/null | cut -d ' ' -f 1 || sha256sum "$1" | cut -d ' ' -f 1; }
-size_of() { stat -f %z "$1" 2>/dev/null || stat -c %s "$1"; }
+size_of() {
+    # GNU stat can emit filesystem details before rejecting BSD arguments.
+    # Choose the host syntax so failed-command output cannot poison the size.
+    if [[ "$host_platform" == Darwin ]]; then stat -f %z "$1"; else stat -c %s "$1"; fi
+}
 
 verify_file() { # path expected_bytes expected_sha
     [[ -f "$1" ]] || return 1

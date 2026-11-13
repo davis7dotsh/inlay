@@ -8,6 +8,7 @@ struct HistoryPage: View {
     @State private var deviceID = "all"
     @State private var confirmingDeleteAudio = false
     @State private var confirmingDelete = false
+    @State private var confirmingCancelRecording = false
     @State private var copiedID: UUID?
     @State private var showingWisprFlowImport = false
 
@@ -50,9 +51,21 @@ struct HistoryPage: View {
             }
             VStack(spacing: 4) {
                 ServerConnectionStatus(controller: controller)
-                InlayActionMessage(message: controller.errorMessage)
+                InlayActionMessage(message: controller.pendingPersistenceError ?? controller.errorMessage)
             }
 
+            ForEach(controller.localCaptures) { capture in
+                HStack {
+                    Text("Saved recording · \(Int(capture.seconds)) seconds")
+                    Spacer()
+                    if capture.seconds >= 0.25 {
+                        Button("Finish in History") { controller.finishLocalCapture(capture) }
+                            .disabled(controller.recoveringCaptures.contains(capture.id))
+                    }
+                    Button("Discard saved audio", role: .destructive) { controller.discardLocalCapture(capture) }
+                        .disabled(controller.recoveringCaptures.contains(capture.id))
+                }
+            }
             HSplitView {
                 historyList.frame(minWidth: 220, idealWidth: 255, maxWidth: 320)
                 detail.frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -82,7 +95,7 @@ struct HistoryPage: View {
             .frame(height: 28)
         }
         .padding(26)
-        .onAppear { controller.refreshHistory() }
+        .onAppear { controller.refreshHistory(); controller.refreshLocalCaptures() }
         // Summary changes (status, updatedAt) after completion or reprocess refresh the detail too.
         .onChange(of: selected) { _, summary in controller.loadGenerationDetail(summary?.id) }
         .onChange(of: controller.historySourceFilter) { _, _ in
@@ -92,6 +105,14 @@ struct HistoryPage: View {
         .sheet(isPresented: $showingWisprFlowImport) {
             WisprFlowImportSheet(controller: controller, driver: controller.wisprImport)
                 .onDisappear { controller.wisprImport.closeWisprFlowImportSheet() }
+        }
+        .confirmationDialog("Cancel this unfinished recording?", isPresented: $confirmingCancelRecording) {
+            if let record = controller.generationDetail, record.id == selectedID {
+                Button("Cancel recording", role: .destructive) { controller.cancelUnfinishedGeneration(record) }
+            }
+            Button("Keep recording", role: .cancel) {}
+        } message: {
+            Text("Its uploaded audio will be removed. You can then delete the cancelled entry from History.")
         }
         .confirmationDialog("Delete this dictation from the server?", isPresented: $confirmingDelete) {
             if let selected {
@@ -132,6 +153,8 @@ struct HistoryPage: View {
                         } else if generation.status != .completed {
                             Image(systemName: "clock")
                                 .foregroundStyle(InlayPalette.warning)
+                        } else if let label = controller.pendingHistoryLabel(generation.id) {
+                            Text(label).font(.caption).foregroundStyle(InlayPalette.muted)
                         }
                     }
                     Text(summary(generation))
@@ -168,6 +191,9 @@ struct HistoryPage: View {
                 HStack {
                     Text(selected.createdAt, format: .dateTime.month(.wide).day().hour().minute()).font(.headline)
                     Spacer()
+                    if controller.canCancelUnfinishedGeneration(selected) {
+                        Button("Cancel recording", role: .destructive) { confirmingCancelRecording = true }
+                    }
                     Button {
                         NSPasteboard.general.clearContents()
                         if NSPasteboard.general.setString(selected.finalText, forType: .string) { copiedID = selected.id }
@@ -183,7 +209,10 @@ struct HistoryPage: View {
                 HStack(spacing: 12) {
                     Label(sourceLabel(selected),
                           systemImage: selected.importedSource == nil ? "laptopcomputer" : "square.and.arrow.down")
-                    if selected.importedSource == nil { Text(statusLabel(selected.status)) }
+                    if selected.importedSource == nil {
+                        Text(statusLabel(selected.status))
+                        if let label = deliveryLabel(selected.delivery, id: selected.id) { Text(label) }
+                    }
                     if let sourceStatus = selected.importedSource?.sourceStatus, !sourceStatus.isEmpty {
                         Text("Flow status: \(sourceStatus)")
                     }
@@ -240,6 +269,15 @@ struct HistoryPage: View {
                                     Text(proposed).font(.callout).textSelection(.enabled)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
+                            }
+                        }
+                        if let terms = selected.screenContextTerms, !terms.isEmpty {
+                            DisclosureGroup("Screen hints: \(terms.count) \(terms.count == 1 ? "term" : "terms")") {
+                                Text(terms.joined(separator: ", "))
+                                    .font(.caption)
+                                    .foregroundStyle(InlayPalette.muted)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                         // Parakeet takes no vocabulary prompt; its takes report a zero budget.
@@ -329,9 +367,15 @@ struct HistoryPage: View {
     }
 
     private func accessibilityText(_ generation: GenerationSummary) -> String {
-        let base = "\(sourceLabel(generation)), \(summary(generation))"
+        let base = [controller.pendingHistoryLabel(generation.id), sourceLabel(generation), summary(generation)]
+            .compactMap { $0 }.joined(separator: ", ")
         return generation.status == .failed || generation.status == .cancelled
             ? "\(statusLabel(generation.status)), \(base)" : base
+    }
+
+    private func deliveryLabel(_ receipt: DeliveryReceipt?, id: UUID) -> String? {
+        if receipt?.status == "cancelled" { return "Not pasted" }
+        return receipt == nil ? controller.pendingHistoryLabel(id) : nil
     }
 
     private func statusLabel(_ status: GenerationStatus) -> String {

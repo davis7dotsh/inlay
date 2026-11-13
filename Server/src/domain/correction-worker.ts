@@ -1,8 +1,13 @@
 import { evaluateCorrection } from "./correction.ts";
 
 self.onmessage = (
-  event: MessageEvent<{ original: string; candidate: string; preferredTerms: string[] }>,
+  event: MessageEvent<{
+    original: string;
+    candidate: string;
+    dictionaryTerms: string[];
+    screenTerms: string[];
+  }>,
 ) => {
-  const { original, candidate, preferredTerms } = event.data;
-  self.postMessage(evaluateCorrection(original, candidate, preferredTerms));
+  const { original, candidate, dictionaryTerms, screenTerms } = event.data;
+  self.postMessage(evaluateCorrection(original, candidate, dictionaryTerms, screenTerms));
 };

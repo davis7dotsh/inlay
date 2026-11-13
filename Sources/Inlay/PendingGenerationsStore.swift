@@ -1,17 +1,28 @@
 import Foundation
+import InlayAPI
 
-/// One sealed take whose delivery this Mac still owes the user. Frame counts
+enum PendingDeliveryDisposition: String, Codable {
+    case historyOnly, attempted
+}
+
+/// One released take whose delivery this Mac still owes the user. Frame counts
 /// exist only so a finish that failed (for example a full server disk) can be
 /// retried; no transcript text, token, or destination is ever stored here.
 struct PendingGenerationEntry: Codable, Equatable {
     var id: UUID
     var endpoint: String
-    var inferenceFrames: Int64
+    var inferenceFrames: Int64?
     var originalFrames: Int64?
     /// Inference count to seal with if the server holds an unacknowledged chunk.
     var fallbackInferenceFrames: Int64? = nil
     var isTest: Bool
     var sealedAt: Date
+    /// Nil for older copy-only recovery entries. Counts may be absent until the
+    /// upload stops; a cancellation intent must never invent seal counts.
+    var disposition: PendingDeliveryDisposition? = nil
+    /// A conservative attempted receipt before dispatch, then the actual result.
+    /// Retried verbatim until the server acknowledges its immutable receipt.
+    var receipt: DeliveryReceipt? = nil
 }
 
 /// Persists pending generation IDs next to `client.json` so a result that

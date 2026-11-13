@@ -3,6 +3,7 @@ import AVFoundation
 import AudioToolbox
 import CoreAudio
 import InlayCore
+import InlayAPI
 import OSLog
 
 /// Headerless little-endian float32 PCM, emitted on the serial writer queue.
@@ -318,12 +319,12 @@ private final class QueuedAudioHardware: AudioCaptureHardware, @unchecked Sendab
 /// Only the admission gate is shared between the audio callback and the caller.
 /// Converter, file, counters, and errors are confined to the serial writer queue.
 /// Whether a negotiated input format's original copy can be archived.
-/// Mirrors the server caps (192 kHz format ceiling, 256 MiB per stream over
-/// the 180 s limit) in Server/src/generation-service.ts appendAudio.
+/// Mirrors the server caps (192 kHz format ceiling, 32-bit WAV length over
+/// the capture limit) in Server/src/generation-service.ts appendAudio.
 enum OriginalAudioPolicy {
     static func isArchivable(sampleRate: Double, channels: Int) -> Bool {
         sampleRate > 0 && sampleRate <= 192_000
-            && sampleRate * Double(channels) * 4 * 180 <= 268_435_456
+            && sampleRate * Double(channels) * 4 * Double(InlayAPI.maximumRecordingSeconds) < Double(UInt32.max - 256)
     }
 }
 
@@ -490,8 +491,8 @@ final class RecordingWriter: @unchecked Sendable {
             return
         }
         // Bound both files to the same admitted input interval. This also avoids
-        // converting late driver buffers after the three-minute cap is reached.
-        let remainingInputFrames = AVAudioFramePosition(input.format.sampleRate * 180) - inputFrames
+        // converting late driver buffers after the capture cap is reached.
+        let remainingInputFrames = AVAudioFramePosition(input.format.sampleRate * Double(InlayAPI.maximumRecordingSeconds)) - inputFrames
         guard remainingInputFrames > 0 else { return }
         input.frameLength = min(input.frameLength, AVAudioFrameCount(remainingInputFrames))
         do {
@@ -570,9 +571,9 @@ final class RecordingWriter: @unchecked Sendable {
 
     private func write(_ buffer: AVAudioPCMBuffer) throws {
         guard buffer.frameLength > 0, let samples = buffer.floatChannelData?[0], let file else { return }
-        // The controller stops the microphone at 180 seconds, but its timer can
+        // The controller stops the microphone at the recording limit, but its timer can
         // run one callback late. Keep the WAV within the helper's strict limit.
-        let remainingFrames = AVAudioFramePosition(format.sampleRate * 180) - frames
+        let remainingFrames = AVAudioFramePosition(format.sampleRate * Double(InlayAPI.maximumRecordingSeconds)) - frames
         guard remainingFrames > 0 else { return }
         buffer.frameLength = min(buffer.frameLength, AVAudioFrameCount(remainingFrames))
         try file.write(from: buffer)

@@ -932,25 +932,37 @@ extension Components {
             public var device: Components.Schemas.DeviceIdentity
             /// - Remark: Generated from `#/components/schemas/CreateGenerationRequest/mode`.
             public var mode: Components.Schemas.GenerationMode
+            /// - Remark: Generated from `#/components/schemas/CreateGenerationRequest/continuationID`.
+            public var continuationID: Components.Schemas.Uuid?
+            /// - Remark: Generated from `#/components/schemas/CreateGenerationRequest/screenContextTerms`.
+            public var screenContextTerms: Components.Schemas.ScreenContextTerms?
             /// Creates a new `CreateGenerationRequest`.
             ///
             /// - Parameters:
             ///   - requestID:
             ///   - device:
             ///   - mode:
+            ///   - continuationID:
+            ///   - screenContextTerms:
             public init(
                 requestID: Components.Schemas.Uuid,
                 device: Components.Schemas.DeviceIdentity,
-                mode: Components.Schemas.GenerationMode
+                mode: Components.Schemas.GenerationMode,
+                continuationID: Components.Schemas.Uuid? = nil,
+                screenContextTerms: Components.Schemas.ScreenContextTerms? = nil
             ) {
                 self.requestID = requestID
                 self.device = device
                 self.mode = mode
+                self.continuationID = continuationID
+                self.screenContextTerms = screenContextTerms
             }
             public enum CodingKeys: String, CodingKey {
                 case requestID
                 case device
                 case mode
+                case continuationID
+                case screenContextTerms
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -966,10 +978,20 @@ extension Components {
                     Components.Schemas.GenerationMode.self,
                     forKey: .mode
                 )
+                self.continuationID = try container.decodeIfPresent(
+                    Components.Schemas.Uuid.self,
+                    forKey: .continuationID
+                )
+                self.screenContextTerms = try container.decodeIfPresent(
+                    Components.Schemas.ScreenContextTerms.self,
+                    forKey: .screenContextTerms
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "requestID",
                     "device",
-                    "mode"
+                    "mode",
+                    "continuationID",
+                    "screenContextTerms"
                 ])
             }
         }
@@ -1057,25 +1079,31 @@ extension Components {
             public var originalFrames: Swift.Int64?
             /// - Remark: Generated from `#/components/schemas/FinishGenerationRequest/continuationID`.
             public var continuationID: Components.Schemas.Uuid?
+            /// - Remark: Generated from `#/components/schemas/FinishGenerationRequest/screenContextTerms`.
+            public var screenContextTerms: Components.Schemas.ScreenContextTerms?
             /// Creates a new `FinishGenerationRequest`.
             ///
             /// - Parameters:
             ///   - inferenceFrames:
             ///   - originalFrames:
             ///   - continuationID:
+            ///   - screenContextTerms:
             public init(
                 inferenceFrames: Swift.Int64,
                 originalFrames: Swift.Int64? = nil,
-                continuationID: Components.Schemas.Uuid? = nil
+                continuationID: Components.Schemas.Uuid? = nil,
+                screenContextTerms: Components.Schemas.ScreenContextTerms? = nil
             ) {
                 self.inferenceFrames = inferenceFrames
                 self.originalFrames = originalFrames
                 self.continuationID = continuationID
+                self.screenContextTerms = screenContextTerms
             }
             public enum CodingKeys: String, CodingKey {
                 case inferenceFrames
                 case originalFrames
                 case continuationID
+                case screenContextTerms
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1091,13 +1119,22 @@ extension Components {
                     Components.Schemas.Uuid.self,
                     forKey: .continuationID
                 )
+                self.screenContextTerms = try container.decodeIfPresent(
+                    Components.Schemas.ScreenContextTerms.self,
+                    forKey: .screenContextTerms
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "inferenceFrames",
                     "originalFrames",
-                    "continuationID"
+                    "continuationID",
+                    "screenContextTerms"
                 ])
             }
         }
+        /// Unusual words the client read from the window being dictated into. They follow dictionary names as Qwen proofreading hints within the shared hint budget; the window image and its recognized text stay on the client.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ScreenContextTerms`.
+        public typealias ScreenContextTerms = [Swift.String]
         /// - Remark: Generated from `#/components/schemas/AudioArtifact`.
         public struct AudioArtifact: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/AudioArtifact/filename`.
@@ -2272,6 +2309,8 @@ extension Components {
             public var proofreading: Components.Schemas.ModelProvenance?
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/textProcessing`.
             public var textProcessing: Components.Schemas.TextProcessingRecord?
+            /// - Remark: Generated from `#/components/schemas/GenerationRecord/screenContextTerms`.
+            public var screenContextTerms: Components.Schemas.ScreenContextTerms?
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/recognitionHints`.
             public var recognitionHints: Components.Schemas.ModelHintUsage?
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/proofreadingHints`.
@@ -2315,6 +2354,7 @@ extension Components {
             ///   - speech:
             ///   - proofreading:
             ///   - textProcessing:
+            ///   - screenContextTerms:
             ///   - recognitionHints:
             ///   - proofreadingHints:
             ///   - formattingRejectionReason:
@@ -2346,6 +2386,7 @@ extension Components {
                 speech: Components.Schemas.ModelProvenance? = nil,
                 proofreading: Components.Schemas.ModelProvenance? = nil,
                 textProcessing: Components.Schemas.TextProcessingRecord? = nil,
+                screenContextTerms: Components.Schemas.ScreenContextTerms? = nil,
                 recognitionHints: Components.Schemas.ModelHintUsage? = nil,
                 proofreadingHints: Components.Schemas.ModelHintUsage? = nil,
                 formattingRejectionReason: Swift.String? = nil,
@@ -2377,6 +2418,7 @@ extension Components {
                 self.speech = speech
                 self.proofreading = proofreading
                 self.textProcessing = textProcessing
+                self.screenContextTerms = screenContextTerms
                 self.recognitionHints = recognitionHints
                 self.proofreadingHints = proofreadingHints
                 self.formattingRejectionReason = formattingRejectionReason
@@ -2409,6 +2451,7 @@ extension Components {
                 case speech
                 case proofreading
                 case textProcessing
+                case screenContextTerms
                 case recognitionHints
                 case proofreadingHints
                 case formattingRejectionReason
@@ -2502,6 +2545,10 @@ extension Components {
                     Components.Schemas.TextProcessingRecord.self,
                     forKey: .textProcessing
                 )
+                self.screenContextTerms = try container.decodeIfPresent(
+                    Components.Schemas.ScreenContextTerms.self,
+                    forKey: .screenContextTerms
+                )
                 self.recognitionHints = try container.decodeIfPresent(
                     Components.Schemas.ModelHintUsage.self,
                     forKey: .recognitionHints
@@ -2563,6 +2610,7 @@ extension Components {
                     "speech",
                     "proofreading",
                     "textProcessing",
+                    "screenContextTerms",
                     "recognitionHints",
                     "proofreadingHints",
                     "formattingRejectionReason",
