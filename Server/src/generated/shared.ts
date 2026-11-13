@@ -1,5 +1,5 @@
 /** Generated from Server/api (openapi.yaml + default-proofreading-prompt.txt) by generate-api.ts; edit the sources, never this file. */
-export const API_VERSION = 6;
+export const API_VERSION = 7;
 export const DEFAULT_PORT = 8391;
 export const MAXIMUM_RECORDING_SECONDS = 7200;
 export const MAXIMUM_CHUNK_BYTES = 1048576;

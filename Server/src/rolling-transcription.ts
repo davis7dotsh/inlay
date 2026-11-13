@@ -9,6 +9,7 @@ import {
 } from "./api.ts";
 import type { InferenceBackend, SpeechInferenceResult } from "./inference/native-inference.ts";
 import { atomicPrivateWrite, ensureDirectory, readRegularFile } from "./storage.ts";
+import { validScreenContextTerm } from "./domain/dictionary.ts";
 import {
   createLongRecordingTextState,
   processLongRecordingTextWindow,
@@ -38,6 +39,8 @@ interface Session {
   checkpoint: Checkpoint;
   previous?: DictationContinuation;
   settings: ServerPreferences;
+  /** Optional Qwen hints bound before upload, replaced by any sent at Finish. */
+  screenContextTerms: string[];
   available: number;
   final: boolean;
   controller: AbortController;
@@ -75,17 +78,20 @@ export class RollingTranscription {
       pending = (async () => {
         await ensureDirectory(this.directory(id));
         let previous: DictationContinuation | undefined;
+        let screenContextTerms: string[] = [];
         try {
-          previous = (
-            JSON.parse(
-              (
-                await readRegularFile(
-                  join(this.root, id, "capture-context.json"),
-                  MAXIMUM_METADATA_BYTES,
-                )
-              ).toString(),
-            ) as { previous?: DictationContinuation }
-          ).previous;
+          const context = JSON.parse(
+            (
+              await readRegularFile(
+                join(this.root, id, "capture-context.json"),
+                MAXIMUM_METADATA_BYTES,
+              )
+            ).toString(),
+          ) as { previous?: DictationContinuation; screenContextTerms?: string[] };
+          previous = context.previous;
+          const terms = context.screenContextTerms ?? [];
+          if (settings.textCorrectionEnabled)
+            screenContextTerms = terms.filter(validScreenContextTerm).slice(0, 40);
         } catch (error) {
           if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
         }
@@ -123,6 +129,7 @@ export class RollingTranscription {
           checkpoint,
           previous,
           settings: structuredClone(settings),
+          screenContextTerms,
           available: checkpoint.speechFrames,
           final: false,
           controller: new AbortController(),
@@ -337,6 +344,7 @@ export class RollingTranscription {
             session.settings,
             this.inference,
             signal,
+            session.screenContextTerms,
           ),
         signal,
       );
@@ -387,6 +395,9 @@ export class RollingTranscription {
       signal.throwIfAborted();
       session.available = frames;
       session.final = true;
+      // Windows proofread from here on, including a recovered take's, use the
+      // terms sent at Finish. Committed windows are never proofread again.
+      if (screenContextTerms.length) session.screenContextTerms = screenContextTerms;
       if (session.controller.signal.aborted)
         throw new Error("Recording processing was interrupted. Retry the saved recording.");
       // A capture-time helper error is retryable from the last durable cursor.
@@ -413,7 +424,7 @@ export class RollingTranscription {
               settings,
               this.inference,
               session.controller.signal,
-              screenContextTerms,
+              session.screenContextTerms,
             ),
           session.controller.signal,
         );

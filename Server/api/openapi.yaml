@@ -2,13 +2,13 @@
 openapi: "3.1.0"
 info:
   title: "Inlay API"
-  version: "6.0.0"
+  version: "7.0.0"
   description: "Shared transport contract for the Swift client and TypeScript server. Optional properties are omitted rather than encoded as null. Dates use whole-second ISO8601 UTC timestamps."
 servers:
   - url: "http://localhost:8391"
 security:
   - bearerAuth: []
-x-inlay-apiVersion: 6
+x-inlay-apiVersion: 7
 x-inlay-defaultPort: 8391
 x-inlay-maximumRecordingSeconds: 7200
 x-inlay-maximumChunkBytes: 1048576
@@ -994,6 +994,8 @@ components:
           "$ref": "#/components/schemas/GenerationMode"
         continuationID:
           "$ref": "#/components/schemas/UUID"
+        screenContextTerms:
+          "$ref": "#/components/schemas/ScreenContextTerms"
       required:
         - "requestID"
         - "device"

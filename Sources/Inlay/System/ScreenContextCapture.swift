@@ -20,6 +20,9 @@ final class ScreenContextCapture {
         }
     }
 
+    /// Terms once the capture has settled; reading this never ends the capture.
+    var resolvedTerms: [String]? { terms }
+
     /// A capture still running at the deadline contributes no terms rather than
     /// delaying transcription.
     func value(waitingAtMost timeout: Duration) async -> [String] {

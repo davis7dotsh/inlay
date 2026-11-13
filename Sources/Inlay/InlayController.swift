@@ -1181,6 +1181,7 @@ final class InlayController: ObservableObject {
                 uploadPipe = pipe
                 recorder.onChunk = { pipe.append($0) }
                 let capturedDestinationTask = destinationTask
+                let capturedScreenContext = screenContextTask
                 let earlierTakes = pendingDictations
                 uploadTask = Task { [weak self] in
                     do {
@@ -1189,14 +1190,16 @@ final class InlayController: ObservableObject {
                         // context before the first upload can trigger rolling proof.
                         let destination = await capturedDestinationTask?.value
                         try Task.checkCancellation()
+                        let screenTerms = try await self?.earlyScreenContextTerms(capturedScreenContext, session: current) ?? []
                         let anchor: DictationDestination? = isTest ? .test : destination?.target.map(DictationDestination.field)
                         let sharesEarlierAnchor = earlierTakes.contains { earlier in
                             earlier.target.map { $0.anchor == anchor } ?? true
                         }
-                        if let self, !sharesEarlierAnchor,
-                           let continuationID = anchor.flatMap({ self.continuation(for: $0)?.generationID }) {
+                        let continuationID: UUID? = sharesEarlierAnchor ? nil : anchor.flatMap { self?.continuation(for: $0)?.generationID }
+                        if continuationID != nil || !screenTerms.isEmpty {
                             try await connection.bindContinuation(.init(requestID: current,
-                                device: created.device, mode: created.mode, continuationID: continuationID), to: created.id)
+                                device: created.device, mode: created.mode, continuationID: continuationID,
+                                screenContextTerms: screenTerms.isEmpty ? nil : screenTerms), to: created.id)
                         }
                         let outcome = try await connection.upload(pipe.stream, to: created.id, preserveOriginal: created.settings.preferences.keepOriginalAudio)
                         if let self, !outcome.complete, sessionID == current, isCapturing, !Task.isCancelled {
@@ -1234,6 +1237,19 @@ final class InlayController: ObservableObject {
             }
         }
         return true
+    }
+
+    /// Rolling proof can commit a long take's early text before Finish, so bind
+    /// on-screen terms before the first upload. Capture keeps filling the durable
+    /// pipe meanwhile. This never ends the screen capture; a released take stops
+    /// waiting at once, and Finish keeps its own deadline.
+    private func earlyScreenContextTerms(_ capture: ScreenContextCapture?, session: UUID) async throws -> [String] {
+        guard let capture else { return [] }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while capture.resolvedTerms == nil, sessionID == session, isCapturing, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return capture.resolvedTerms ?? []
     }
 
     /// Interruption path: seal whatever the server already acknowledged and

@@ -934,6 +934,8 @@ extension Components {
             public var mode: Components.Schemas.GenerationMode
             /// - Remark: Generated from `#/components/schemas/CreateGenerationRequest/continuationID`.
             public var continuationID: Components.Schemas.Uuid?
+            /// - Remark: Generated from `#/components/schemas/CreateGenerationRequest/screenContextTerms`.
+            public var screenContextTerms: Components.Schemas.ScreenContextTerms?
             /// Creates a new `CreateGenerationRequest`.
             ///
             /// - Parameters:
@@ -941,22 +943,26 @@ extension Components {
             ///   - device:
             ///   - mode:
             ///   - continuationID:
+            ///   - screenContextTerms:
             public init(
                 requestID: Components.Schemas.Uuid,
                 device: Components.Schemas.DeviceIdentity,
                 mode: Components.Schemas.GenerationMode,
-                continuationID: Components.Schemas.Uuid? = nil
+                continuationID: Components.Schemas.Uuid? = nil,
+                screenContextTerms: Components.Schemas.ScreenContextTerms? = nil
             ) {
                 self.requestID = requestID
                 self.device = device
                 self.mode = mode
                 self.continuationID = continuationID
+                self.screenContextTerms = screenContextTerms
             }
             public enum CodingKeys: String, CodingKey {
                 case requestID
                 case device
                 case mode
                 case continuationID
+                case screenContextTerms
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -976,11 +982,16 @@ extension Components {
                     Components.Schemas.Uuid.self,
                     forKey: .continuationID
                 )
+                self.screenContextTerms = try container.decodeIfPresent(
+                    Components.Schemas.ScreenContextTerms.self,
+                    forKey: .screenContextTerms
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "requestID",
                     "device",
                     "mode",
-                    "continuationID"
+                    "continuationID",
+                    "screenContextTerms"
                 ])
             }
         }

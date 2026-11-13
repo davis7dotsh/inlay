@@ -416,13 +416,14 @@ export async function processLongRecordingTextWindow(
   settings: ServerPreferences,
   inference: InferenceBackend,
   signal?: AbortSignal,
+  screenContextTerms: string[] = [],
 ) {
   if (state.finalized) throw new Error("The text session is already finalized.");
   const next = structuredClone(state);
   if (text) next.pendingText += (next.pendingText || next.rawOffset ? " " : "") + text;
   let boundary = commitBoundary(next.pendingText, settings);
   while (boundary) {
-    await commitPrefix(next, boundary, settings, inference, false, signal);
+    await commitPrefix(next, boundary, settings, inference, false, signal, screenContextTerms);
     boundary = commitBoundary(next.pendingText, settings);
   }
   return next;

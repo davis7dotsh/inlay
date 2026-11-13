@@ -551,6 +551,7 @@ export interface components {
       device: components["schemas"]["DeviceIdentity"];
       mode: components["schemas"]["GenerationMode"];
       continuationID?: components["schemas"]["UUID"];
+      screenContextTerms?: components["schemas"]["ScreenContextTerms"];
     };
     AudioStreamFormat: {
       sampleRate: number;

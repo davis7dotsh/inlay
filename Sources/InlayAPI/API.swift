@@ -159,8 +159,13 @@ public struct CreateGenerationRequest: Codable, Sendable {
     public var device: DeviceIdentity
     public var mode: GenerationMode
     public var continuationID: UUID?
-    public init(requestID: UUID = UUID(), device: DeviceIdentity, mode: GenerationMode = .dictation, continuationID: UUID? = nil) {
+    /// Bound by replaying Create before the first upload, so rolling proofreading
+    /// of a long take uses the same on-screen hints as its final tail.
+    public var screenContextTerms: [String]?
+    public init(requestID: UUID = UUID(), device: DeviceIdentity, mode: GenerationMode = .dictation, continuationID: UUID? = nil,
+                screenContextTerms: [String]? = nil) {
         self.requestID = requestID; self.device = device; self.mode = mode; self.continuationID = continuationID
+        self.screenContextTerms = screenContextTerms
     }
 }
 

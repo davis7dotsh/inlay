@@ -1,7 +1,7 @@
 // Generated from Server/api (openapi.yaml + default-proofreading-prompt.txt) by generate-api.ts; edit the sources, never this file.
 
 enum GeneratedShared {
-    static let apiVersion = 6
+    static let apiVersion = 7
     static let defaultPort = 8391
     static let maximumRecordingSeconds = 7200
     static let maximumChunkBytes = 1048576

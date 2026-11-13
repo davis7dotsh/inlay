@@ -767,15 +767,13 @@ export class GenerationService {
           // owner may bind resolved context by replaying Create before sending
           // any audio. The generation lock makes freezing atomic with upload.
           if (
-            request.continuationID &&
+            (request.continuationID || request.screenContextTerms?.length) &&
             record.status === "receiving" &&
             !Object.keys(this.uploads.get(record.id) ?? {}).length
           ) {
             await atomicPrivateWrite(
               join(this.directory(record.id), "capture-context.json"),
-              JSON.stringify({
-                previous: this.continuation(request.continuationID, record),
-              }),
+              JSON.stringify(this.captureContext(request, record)),
             );
           }
           return copy(record);
@@ -814,9 +812,7 @@ export class GenerationService {
         await mkdir(this.directory(record.id), { mode: 0o700 });
         await atomicPrivateWrite(
           join(this.directory(record.id), "capture-context.json"),
-          JSON.stringify({
-            previous: this.continuation(request.continuationID, record),
-          }),
+          JSON.stringify(this.captureContext(request, record)),
         );
         await this.save(record);
         await syncDirectory(dirname(this.directory(record.id)));
@@ -827,6 +823,17 @@ export class GenerationService {
         throw error;
       }
     });
+  }
+  /** Rolling proofreading reads this before Finish, so long takes need their
+   * optional screen hints here. They follow the same bounds as Finish terms. */
+  private captureContext(request: CreateGenerationRequest, record: GenerationRecord) {
+    const screenContextTerms = record.settings.preferences.textCorrectionEnabled
+      ? request.screenContextTerms?.filter(validScreenContextTerm)
+      : undefined;
+    return {
+      previous: this.continuation(request.continuationID, record),
+      ...(screenContextTerms?.length ? { screenContextTerms } : {}),
+    };
   }
   private newRecord(
     id: string,
