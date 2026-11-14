@@ -27,7 +27,14 @@ Use your own model paths if they are already installed. The script builds the se
 2. Wait for the server to be ready. Focus a text field, hold **Right Option**, speak, and release.
 3. Change the shortcut under **This Mac**, choose inputs under **Microphone**, and edit shared cleanup instructions or dictionary entries under **Server preferences**.
 
-**Test microphone** shows a result in Inlay without inserting it. The regular app defaults to Fn/Globe; set macOS **Keyboard → Press Globe key to → Do Nothing** if its system action conflicts.
+**Test microphone** needs a ready server and shows a result in Inlay without inserting it. The regular app defaults to Fn/Globe; set macOS **Keyboard → Press Globe key to → Do Nothing** if its system action conflicts.
+
+## Long dictations and recovery
+
+- With an updated app **and server**, a take can run for **up to two hours**. Older servers still stop live dictation at three minutes. For hands-free recording, use **Start dictation** in the menu bar, or set the shortcut to **Double tap to toggle** under **This Mac**. Finish the take to keep it; the **×** button discards an active recording.
+- Inlay writes audio to this Mac while you talk. If the connection drops, keep speaking. Once a server is configured, you can also **start dictation while offline**; Inlay saves the audio needed for transcription, without a separate original-microphone track.
+- Leave Inlay open or reopen it with the **same server** selected. The saved count in the window or menu bar shows dictations awaiting upload. After recovery, choose **Copy finished dictation** or open **History**. Recovered text is never automatically pasted or copied over your clipboard.
+- Keep enough free disk space: one hour of speech audio uses about **230 MB** on this Mac, plus about **690 MB** for an optional 48 kHz mono original. If the Mac loses power, only audio already written to disk can be recovered.
 
 ## Use a server on another machine
 
@@ -90,7 +97,7 @@ For the packaged Mac app and server:
 
 Keep `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` set when starting the server. On Linux, `INLAY_TEXT_MODEL` must be the GGUF file, and `run-dev.sh` builds and starts the server without the app. After rebuilding an already-open client, quit and reopen it to load the new executable. `scripts/build-app.sh` signs with `INLAY_SIGNING_IDENTITY` when that is set. Otherwise it uses the Apple Development identity only when exactly one is installed, and ad-hoc signs in every other case. Ad-hoc rebuilds may require granting permissions again. A plain build does not notarize the app; notarization is the `--dist` distribution build described under [Releases](#releases).
 
-The dev runner stores shared history/settings in `.local/server`, device preferences in `.local/client`, and logs in `.local/server.log`. Keep experiment notes and generated artifacts under the ignored `.local/` directory too. Quitting the app leaves the server running. Recordings require an online, available server to start and can run up to two hours. Each take is spooled on the Mac until the server has it, so a dropped connection, server restart, or app crash doesn't lose it.
+The dev runner stores shared history/settings in `.local/server`, device preferences in `.local/client`, and logs in `.local/server.log`. Keep experiment notes and generated artifacts under the ignored `.local/` directory too. Quitting the app leaves the server running.
 
 For newly launched Electron apps, Inlay requests accessibility support when a take begins and checks for an editable field for up to three seconds while recording starts independently. The field must become verifiable before you release the key; a short first take or slow renderer can still use the clipboard fallback. Unsupported native apps do not wait for this preparation. Enabling an Electron accessibility tree can increase that app's memory and CPU use for its lifetime; Inlay leaves it enabled so other assistive tools can continue using it. This activation mechanism is specific to Electron; Chrome fields use their existing accessibility support.
 

@@ -5,8 +5,6 @@ import CoreAudio
 import InlayCore
 import OSLog
 
-import InlayAPI
-
 struct CapturedAudio: Sendable {
     let duration: TimeInterval
     /// Absolute sample peak, in the range 0...1 for normal microphone audio.
@@ -160,7 +158,7 @@ final class AudioRecorder {
     private func interrupt(id: UUID, message: String) {
         guard request?.id == id else { return }
         // Do not cancel here: the controller salvages the take through the
-        // normal stop path so already-streamed audio can still be sealed.
+        // normal stop path so queued microphone buffers are drained.
         onInterruption?(message)
     }
 
@@ -266,8 +264,10 @@ private final class QueuedAudioHardware: AudioCaptureHardware, @unchecked Sendab
         Logger(subsystem: "dev.davis.inlay", category: "audio-capture")
             .error("Capture interrupted: \(message, privacy: .public)")
         let callback = onInterruption
-        request?.cancel()
-        cancel()
+        // Stop admitting PCM immediately, but keep the writer. The normal
+        // stop path must drain its queue and converter before sealing. Calling
+        // cancel() here used to race a shorter, already-uploaded prefix.
+        request?.release()
         callback?(message)
     }
 
@@ -285,13 +285,13 @@ private final class QueuedAudioHardware: AudioCaptureHardware, @unchecked Sendab
     deinit { cancel() }
 }
 
-/// Whether a negotiated input format's original copy can be archived for the
-/// longest take. Mirrors the server caps (192 kHz format ceiling, 4 GB per
-/// stream) in Server/src/generation-service.ts appendAudio.
+/// Mirrors appendAudio's original format and stream-size limits. Check bytes
+/// as they are captured: even a high-rate device can archive a short take.
 enum OriginalAudioPolicy {
+    static let maximumBytes: Int64 = 4_000_000_000
+
     static func isArchivable(sampleRate: Double, channels: Int) -> Bool {
-        sampleRate > 0 && sampleRate <= 192_000 && channels > 0 && channels <= 8
-            && sampleRate * Double(channels) * 4 * Double(InlayAPI.maximumRecordingSeconds) <= 4_000_000_000
+        (8_000...192_000).contains(sampleRate) && sampleRate.rounded() == sampleRate && (1...8).contains(channels)
     }
 }
 
@@ -301,6 +301,11 @@ final class RecordingWriter: @unchecked Sendable {
     private let queue = DispatchQueue(label: "local.inlay.audio-writer", qos: .userInitiated)
     private let admissionLock = NSLock()
     private var accepting = true
+    private var queuedBytes = 0
+    private var inputOverrun = false
+    // A blocked filesystem must interrupt and save the admitted prefix, not
+    // turn hours of input into unbounded queued buffers and get the app killed.
+    private let maximumQueuedBytes = 32 * 1024 * 1024
 
     private let spool: RecordingSpool
     private let format: AVAudioFormat
@@ -310,6 +315,7 @@ final class RecordingWriter: @unchecked Sendable {
     private let onError: (String) -> Void
     private var file: FileHandle?
     private var originalFile: FileHandle?
+    private var originalBytes: Int64 = 0
     private var failure: Error?
     private var frames: AVAudioFramePosition = 0
     private var inputFrames: AVAudioFramePosition = 0
@@ -319,12 +325,11 @@ final class RecordingWriter: @unchecked Sendable {
     private var meterSumSquares = 0.0
     private var meterFrames = 0
     private let meterWindowFrames = 800 // 50 ms at the 16 kHz inference rate.
-    /// Push the spool to disk every ten seconds of speech, so even a kernel
-    /// panic or power loss costs at most that much of a long take.
+    /// Checkpoint every ten seconds of processed audio, off the input thread.
     private let syncFrames: AVAudioFramePosition = 160_000
-    private let maximumFrames = AVAudioFramePosition(16_000 * InlayAPI.maximumRecordingSeconds)
+    private var maximumFrames: AVAudioFramePosition { AVAudioFramePosition(16_000 * spool.maximumSeconds) }
     private var maximumInputFrames: AVAudioFramePosition {
-        AVAudioFramePosition(inputFormat.sampleRate * Double(InlayAPI.maximumRecordingSeconds))
+        AVAudioFramePosition(inputFormat.sampleRate * Double(spool.maximumSeconds))
     }
 
     init(inputFormat: AVAudioFormat, spool: RecordingSpool, preserveOriginalAudio: Bool = false,
@@ -366,20 +371,36 @@ final class RecordingWriter: @unchecked Sendable {
             return try FileHandle(forWritingTo: url)
         }
         file = try open(spool.inferenceURL)
+        // Persist the PCM directory entry before accepting any microphone data.
+        try RecordingSpool.syncDirectory(spool.directory)
         if keepsOriginal {
-            originalFile = try open(spool.originalURL)
-            try spool.update {
-                $0.originalSampleRate = Int(inputFormat.sampleRate)
-                $0.originalChannels = Int(inputFormat.channelCount)
-            }
+            do {
+                originalFile = try open(spool.originalURL)
+                try spool.update {
+                    $0.originalSampleRate = Int(inputFormat.sampleRate)
+                    $0.originalChannels = Int(inputFormat.channelCount)
+                }
+            } catch { omitOriginal() }
         }
     }
 
     func append(_ source: AVAudioPCMBuffer) {
         // The input unit reuses its buffers. Copy only PCM memory here; never run
         // conversion, metering, UI work, or disk I/O on the real-time callback.
-        guard source.frameLength > 0,
-              let copy = AVAudioPCMBuffer(pcmFormat: source.format, frameCapacity: source.frameLength) else { return }
+        let length = Int(source.frameLength) * Int(source.format.channelCount) * MemoryLayout<Float>.size
+        guard length > 0 else { return }
+        admissionLock.lock()
+        defer { admissionLock.unlock() }
+        guard accepting, !inputOverrun else { return }
+        guard length <= maximumQueuedBytes - queuedBytes,
+              let copy = AVAudioPCMBuffer(pcmFormat: source.format, frameCapacity: source.frameLength) else {
+            inputOverrun = true
+            // Notify even if the writer is blocked. stop() will drain the
+            // admitted prefix and flush its converter; nothing after the gap
+            // is admitted. The callback only schedules capture-queue work.
+            onError("The Mac could not keep up with the microphone.")
+            return
+        }
         copy.frameLength = source.frameLength
         let sourceBuffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: source.audioBufferList))
         let destinationBuffers = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
@@ -387,12 +408,11 @@ final class RecordingWriter: @unchecked Sendable {
             guard let sourceData = sourceBuffer.mData, let destinationData = destinationBuffer.mData else { continue }
             memcpy(destinationData, sourceData, Int(min(sourceBuffer.mDataByteSize, destinationBuffer.mDataByteSize)))
         }
-
-        admissionLock.lock()
-        if accepting {
-            queue.async { [self] in process(copy) }
+        queuedBytes += length
+        queue.async { [self] in
+            process(copy)
+            admissionLock.withLock { queuedBytes -= length }
         }
-        admissionLock.unlock()
     }
 
     func finish() async throws -> CapturedAudio {
@@ -405,15 +425,18 @@ final class RecordingWriter: @unchecked Sendable {
             }
             accepting = false
             queue.async { [self] in
-                defer { closeFiles() }
-                do {
+                let result = Result {
                     if let failure { throw failure }
                     try flushConverter()
                     guard frames > 0 else { throw AudioRecordingError.noAudio }
-                    continuation.resume(returning: CapturedAudio(duration: Double(frames) / format.sampleRate, peak: peak))
-                } catch {
-                    continuation.resume(throwing: error)
+                    return CapturedAudio(duration: Double(frames) / format.sampleRate, peak: peak)
                 }
+                // Quit waits on this continuation. Do not resume until the
+                // final checkpoint and close have actually finished.
+                do {
+                    try closeFiles()
+                    continuation.resume(with: result)
+                } catch { continuation.resume(throwing: error) }
             }
             admissionLock.unlock()
         }
@@ -425,7 +448,7 @@ final class RecordingWriter: @unchecked Sendable {
         admissionLock.lock()
         if accepting {
             accepting = false
-            queue.async { [self] in closeFiles() }
+            queue.async { [self] in try? closeFiles() }
         }
         admissionLock.unlock()
     }
@@ -440,14 +463,8 @@ final class RecordingWriter: @unchecked Sendable {
         // converting late driver buffers after the duration cap is reached.
         let remainingInputFrames = maximumInputFrames - inputFrames
         guard remainingInputFrames > 0 else { return }
-        input.frameLength = min(input.frameLength, AVAudioFrameCount(remainingInputFrames))
-        do {
-            try writeOriginal(input)
-            inputFrames += AVAudioFramePosition(input.frameLength)
-        } catch {
-            fail(error)
-            return
-        }
+        input.frameLength = AVAudioFrameCount(min(AVAudioFramePosition(input.frameLength), remainingInputFrames))
+        inputFrames += AVAudioFramePosition(input.frameLength)
         let capacity = AVAudioFrameCount(ceil(Double(input.frameLength) * format.sampleRate / input.format.sampleRate)) + 256
         guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
             fail(AudioRecordingError.conversionUnavailable)
@@ -491,9 +508,14 @@ final class RecordingWriter: @unchecked Sendable {
         }
         do {
             try write(output)
-        } catch {
-            fail(error)
-        }
+            // The original is optional. A format/size/storage problem with
+            // it must not interrupt transcription or shrink saved speech.
+            do { try writeOriginal(input) } catch { omitOriginal() }
+            if unsyncedFrames >= syncFrames {
+                try checkpoint()
+                unsyncedFrames = 0
+            }
+        } catch { fail(error) }
     }
 
     private func flushConverter() throws {
@@ -522,7 +544,20 @@ final class RecordingWriter: @unchecked Sendable {
         guard remainingFrames > 0 else { return }
         buffer.frameLength = min(buffer.frameLength, AVAudioFrameCount(remainingFrames))
         let data = Data(bytes: samples, count: Int(buffer.frameLength) * MemoryLayout<Float>.size)
-        try file.write(contentsOf: data)
+        let offset = UInt64(frames) * 4
+        do { try file.write(contentsOf: data) }
+        catch {
+            // ENOSPC can arrive after a partial write. Drop the optional copy
+            // for space, and retry the same bytes at the same offset once.
+            let storageError = error as NSError
+            guard originalFile != nil,
+                  (storageError.domain == NSPOSIXErrorDomain && storageError.code == Int(ENOSPC))
+                    || (storageError.domain == NSCocoaErrorDomain && storageError.code == CocoaError.fileWriteOutOfSpace.rawValue)
+            else { throw error }
+            omitOriginal()
+            try file.seek(toOffset: offset)
+            try file.write(contentsOf: data)
+        }
         spool.appended(inference: data.count)
         for index in 0..<Int(buffer.frameLength) {
             let sample = samples[index]
@@ -541,17 +576,28 @@ final class RecordingWriter: @unchecked Sendable {
         }
         frames += AVAudioFramePosition(buffer.frameLength)
         unsyncedFrames += AVAudioFramePosition(buffer.frameLength)
-        if unsyncedFrames >= syncFrames {
-            unsyncedFrames = 0
-            try? originalFile?.synchronize()
-            try? file.synchronize()
+    }
+
+    private func checkpoint() throws {
+        if let file { try RecordingSpool.fullSync(file.fileDescriptor) }
+        if let originalFile {
+            do { try RecordingSpool.fullSync(originalFile.fileDescriptor) } catch { omitOriginal() }
         }
+    }
+
+    private func omitOriginal() {
+        spool.omitOriginal()
+        try? originalFile?.close()
+        originalFile = nil
+        try? FileManager.default.removeItem(at: spool.originalURL)
     }
 
     private func writeOriginal(_ buffer: AVAudioPCMBuffer) throws {
         guard let originalFile, let samples = buffer.floatChannelData else { return }
         let channels = Int(buffer.format.channelCount)
         let frameCount = Int(buffer.frameLength)
+        let bytes = Int64(frameCount * channels * MemoryLayout<Float>.size)
+        guard bytes <= OriginalAudioPolicy.maximumBytes - originalBytes else { omitOriginal(); return }
         let data: Data
         if buffer.format.isInterleaved || channels == 1 {
             data = Data(bytes: samples[0], count: frameCount * channels * MemoryLayout<Float>.size)
@@ -567,6 +613,7 @@ final class RecordingWriter: @unchecked Sendable {
             data = interleaved.withUnsafeBytes { Data($0) }
         }
         try originalFile.write(contentsOf: data)
+        originalBytes += bytes
         spool.appended(original: data.count)
     }
 
@@ -577,13 +624,16 @@ final class RecordingWriter: @unchecked Sendable {
     }
 
     /// Writer queue only. Everything written so far stays in the spool.
-    private func closeFiles() {
-        for handle in [originalFile, file].compactMap({ $0 }) {
-            try? handle.synchronize()
-            try? handle.close()
-        }
-        file = nil
+    private func closeFiles() throws {
+        defer { spool.finish() }
+        // Even after a sync error, close both descriptors and publish the
+        // prefix that the filesystem accepted. Never report success first.
+        let syncResult = Result { try checkpoint() }
+        let closeResult = Result { try file?.close() }
+        do { try originalFile?.close() } catch { omitOriginal() }
         originalFile = nil
-        spool.finish()
+        file = nil
+        try syncResult.get()
+        _ = try closeResult.get()
     }
 }

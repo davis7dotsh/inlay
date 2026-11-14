@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { access, mkdir, open, readdir, rename, rm, type FileHandle } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
@@ -61,9 +61,10 @@ import { cleanTranscript } from "./domain/cleaner.ts";
 import { composeDictation } from "./domain/composition.ts";
 import { formatSpokenList } from "./domain/lists.ts";
 import { evaluateCorrectionInWorker } from "./domain/correction-runtime.ts";
-import { maxInputCharacters, modelHints, processingRecord } from "./domain/correction.ts";
+import { modelHints, processingRecord } from "./domain/correction.ts";
 
 const MAX_ACTIVE_GENERATIONS = 12;
+const WAV_HEADER_BYTES = 44;
 // A client keeps its own copy of every take and resumes a stalled upload, so a
 // receiving session survives a long network outage before it is cancelled.
 const RECEIVING_IDLE_MS = 600_000;
@@ -86,8 +87,26 @@ const uuid = () => randomUUID().toUpperCase();
 const isUUID = (value: string) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const copy = <T>(value: T): T => structuredClone(value);
-const graphemes = (text: string) =>
-  [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].length;
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const sentences = new Intl.Segmenter(undefined, { granularity: "sentence" });
+const uploadExpired = (record: GenerationRecord) =>
+  record.status === "receiving" &&
+  (Date.now() - Date.parse(record.updatedAt) > RECEIVING_IDLE_MS ||
+    Date.now() - Date.parse(record.createdAt) > RECEIVING_TOTAL_MS);
+
+async function writeAt(file: FileHandle, data: Buffer, offset: number) {
+  let written = 0;
+  while (written < data.length) {
+    const { bytesWritten } = await file.write(
+      data,
+      written,
+      data.length - written,
+      offset + written,
+    );
+    if (!bytesWritten) throw new Error("Audio write failed.");
+    written += bytesWritten;
+  }
+}
 
 // One Qwen request stops after ~15 s, so long transcripts are proofread in
 // sentence-aligned parts. Shorter takes keep their single, whole-text request.
@@ -107,38 +126,33 @@ type ProofreadPart = Pick<
 
 /** Exact slices of `text` (they concatenate back to it), each within the part budget. */
 function proofreadingParts(text: string): { offset: number; text: string }[] {
-  if (graphemes(text) <= PROOF_WHOLE_GRAPHEMES) return [{ offset: 0, text }];
-  // Sentences keep their trailing whitespace; an unpunctuated run is split at spaces.
-  const pieces: string[] = [];
-  for (const { segment } of new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(
-    text,
-  )) {
-    if (graphemes(segment) <= PROOF_PART_GRAPHEMES) {
-      pieces.push(segment);
-      continue;
-    }
-    let run = "";
-    for (const word of segment.split(/(?<=\s)/u)) {
-      if (run && graphemes(run) + graphemes(word) > PROOF_PART_GRAPHEMES) {
-        pieces.push(run);
-        run = "";
-      }
-      run += word;
-    }
-    if (run) pieces.push(run);
-  }
+  if (text.length <= PROOF_WHOLE_GRAPHEMES) return [{ offset: 0, text }];
+  // Count each grapheme just once. Keep only UTF-16 indices, not ICU segment
+  // objects: a two-hour take can contain hundreds of thousands of characters.
+  const boundaries = Array.from(graphemes.segment(text), ({ index }) => index);
+  if (boundaries.length <= PROOF_WHOLE_GRAPHEMES) return [{ offset: 0, text }];
+  boundaries.push(text.length);
+  const sentenceBreaks = new Set(Array.from(sentences.segment(text), ({ index }) => index));
   const parts: { offset: number; text: string }[] = [];
-  let offset = 0;
-  let current = "";
-  for (const piece of pieces) {
-    if (current && graphemes(current) + graphemes(piece) > PROOF_PART_GRAPHEMES) {
-      parts.push({ offset, text: current });
-      offset += current.length;
-      current = "";
+  for (let start = 0; start < boundaries.length - 1;) {
+    const limit = Math.min(start + PROOF_PART_GRAPHEMES, boundaries.length - 1);
+    let end = limit;
+    if (limit < boundaries.length - 1) {
+      let space: number | undefined;
+      for (let i = limit; i > start; i--) {
+        const offset = boundaries[i]!;
+        if (sentenceBreaks.has(offset)) {
+          end = i;
+          break;
+        }
+        if (space === undefined && /\s/u.test(text[offset - 1]!)) space = i;
+      }
+      if (!sentenceBreaks.has(boundaries[end]!)) end = space ?? limit;
     }
-    current += piece;
+    const offset = boundaries[start]!;
+    parts.push({ offset, text: text.slice(offset, boundaries[end]!) });
+    start = end;
   }
-  if (current) parts.push({ offset, text: current });
   return parts;
 }
 
@@ -156,6 +170,18 @@ import { DEFAULT_PROOFREADING_PROMPT } from "./generated/shared.ts";
 export const defaultProofreadingPrompt = DEFAULT_PROOFREADING_PROMPT;
 // History pages carry the list projection only; full records come from
 // GET /v1/generations/:id. Optional fields stay omitted, never null.
+// The history list shows two lines; detail/copy requests read the full record.
+// Bound by scalar count (including without whitespace), never split a surrogate.
+function historyPreview(text: string) {
+  if (text.length <= 256) return text;
+  let units = 0,
+    count = 0;
+  for (const scalar of text) {
+    if (count++ === 256) return text.slice(0, units) + "…";
+    units += scalar.length;
+  }
+  return text;
+}
 const summarizeGeneration = (record: GenerationRecord): GenerationSummary => ({
   id: record.id,
   device: record.device,
@@ -163,7 +189,7 @@ const summarizeGeneration = (record: GenerationRecord): GenerationSummary => ({
   status: record.status,
   createdAt: record.createdAt,
   updatedAt: record.updatedAt,
-  previewText: record.previewText,
+  previewText: historyPreview(record.previewText || record.finalText),
   ...(record.queuePosition !== undefined ? { queuePosition: record.queuePosition } : {}),
   ...(record.originalAudioOmittedReason !== undefined
     ? { originalAudioOmittedReason: record.originalAudioOmittedReason }
@@ -255,7 +281,7 @@ interface ServiceConfiguration {
 
 const validDeviceLabel = (text: string) =>
   text.length > 0 &&
-  graphemes(text) <= 128 &&
+  Array.from(graphemes.segment(text)).length <= 128 &&
   text === text.trim() &&
   !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(text);
 // Revocation carries the ID in one URL segment, so also keep its encoded size
@@ -263,6 +289,9 @@ const validDeviceLabel = (text: string) =>
 const validDeviceID = (text: string) =>
   validDeviceLabel(text) && text.length <= 2_048 && Buffer.byteLength(text) <= 4_096;
 interface Upload {
+  // A renamed stream remains private until the queued metadata commits. This
+  // flag lets a failed second seal or metadata write retry the same file.
+  sealed: boolean;
   format: AudioStreamFormat;
   chunks: { offset: number; count: number }[];
   bytes: number;
@@ -368,13 +397,16 @@ export class GenerationService {
         "This credential belongs to a different device.",
       );
   }
-  private getInternal(id: string) {
+  private stored(id: string) {
     const record = this.records.get(id.toUpperCase());
     if (!record) throw new ServiceError(404, "not_found", "Recording not found.");
-    return this.decorate(copy(record));
+    return record;
+  }
+  private getInternal(id: string) {
+    return this.decorate(copy(this.stored(id)));
   }
   /** Computes queuePosition on a copy only; it is never persisted (save strips it). */
-  private decorate(record: GenerationRecord): GenerationRecord {
+  private decorate<T extends GenerationRecord | GenerationSummary>(record: T): T {
     delete record.queuePosition;
     if (record.status === "queued") {
       let position = 0;
@@ -388,6 +420,25 @@ export class GenerationService {
       }
     }
     return record;
+  }
+  /** Only a complete archive is evidence the client can relinquish its copy. */
+  private async hasSealedInference(record: GenerationRecord) {
+    if (!record.inferenceAudio) return false;
+    try {
+      const file = await open(
+        join(this.directory(record.id), "inference.wav"),
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      try {
+        const info = await file.stat();
+        return info.isFile() && info.size === record.inferenceAudio.byteCount;
+      } finally {
+        await file.close();
+      }
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+      throw error;
+    }
   }
   private async initialize() {
     const data = resolve(this.configuration.dataDirectory);
@@ -467,22 +518,8 @@ export class GenerationService {
           throw new ServiceError(500, "invalid_archive", "A generation has invalid metadata.");
         record.id = id;
         if (!terminal(record)) {
-          let sealed = false;
-          if (record.status !== "receiving" && record.inferenceAudio) {
-            try {
-              const file = await open(
-                join(this.directory(id), "inference.wav"),
-                constants.O_RDONLY | constants.O_NOFOLLOW,
-              );
-              try {
-                sealed = (await file.stat()).isFile();
-              } finally {
-                await file.close();
-              }
-            } catch {
-              sealed = false;
-            }
-          }
+          const wasReceiving = record.status === "receiving";
+          const sealed = !wasReceiving && (await this.hasSealedInference(record));
           if (sealed) {
             record.status = "queued";
             record.progress = 0;
@@ -490,14 +527,16 @@ export class GenerationService {
             record.updatedAt = now();
             requeue.push({ id, createdAt: record.createdAt });
           } else {
-            const wasReceiving = record.status === "receiving";
             record.status = "failed";
             record.error = wasReceiving
               ? "Server restarted before this generation completed."
-              : "Sealed audio is missing, so this generation cannot be transcribed.";
+              : "Sealed audio is missing or incomplete, so this generation cannot be transcribed.";
             record.updatedAt = now();
             delete record.progress;
-            await this.cleanPartial(id);
+            await this.cleanPartial(record, wasReceiving);
+            // Do not advertise an absent/truncated archive. Leave damaged files
+            // in place for manual salvage; only uncommitted staging is cleaned.
+            if (!wasReceiving) delete record.inferenceAudio;
           }
           if (Buffer.byteLength(JSON.stringify(record)) <= MAXIMUM_METADATA_BYTES)
             await atomicPrivateWrite(
@@ -567,17 +606,10 @@ export class GenerationService {
       await this.imports.expireImportStages();
     });
     for (const snapshot of this.records.values()) {
-      if (
-        snapshot.status !== "receiving" ||
-        !(
-          Date.now() - Date.parse(snapshot.updatedAt) > RECEIVING_IDLE_MS ||
-          Date.now() - Date.parse(snapshot.createdAt) > RECEIVING_TOTAL_MS
-        )
-      )
-        continue;
+      if (!uploadExpired(snapshot)) continue;
       await this.withGenerationLock(snapshot.id, async () => {
         const record = this.records.get(snapshot.id);
-        if (record?.status === "receiving") await this.cancelRecord(record.id);
+        if (record && uploadExpired(record)) await this.cancelRecord(record.id);
       });
     }
     if (Date.now() - this.lastRetentionSweep >= 86_400_000) {
@@ -624,7 +656,7 @@ export class GenerationService {
       this.subscribers.clear();
     });
   }
-  async health(): Promise<ServerHealth> {
+  async health(includeRecordingLimit: boolean): Promise<ServerHealth> {
     const state = await this.inference.readiness(false);
     let writable = true;
     try {
@@ -650,6 +682,7 @@ export class GenerationService {
     return {
       apiVersion: API_VERSION,
       serverVersion: SERVER_VERSION,
+      ...(includeRecordingLimit ? { maximumRecordingSeconds: MAXIMUM_RECORDING_SECONDS } : {}),
       isDev: this.configuration.development,
       ready,
       speech: {
@@ -792,6 +825,8 @@ export class GenerationService {
         now(),
       );
       await mkdir(this.directory(record.id), { mode: 0o700 });
+      // fsync inside the new directory cannot persist its entry in the parent.
+      await syncDirectory(dirname(this.directory(record.id)));
       await this.save(record);
       this.uploads.set(record.id, {});
       return copy(record);
@@ -828,9 +863,9 @@ export class GenerationService {
     data: Uint8Array,
     actorDeviceID: string,
   ): Promise<AudioChunkReceipt> {
-    const bytes = Buffer.from(data);
+    const bytes = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     return this.withGenerationLock(id, async () => {
-      const record = this.getInternal(id);
+      const record = this.stored(id);
       id = record.id;
       this.requireOwner(record, actorDeviceID);
       if (record.status !== "receiving")
@@ -883,7 +918,7 @@ export class GenerationService {
             "Audio must contain finite float32 samples.",
           );
       const streams = this.uploads.get(id) ?? {};
-      const upload = streams[kind] ?? { format: copy(format), chunks: [], bytes: 0 };
+      const upload = streams[kind] ?? { format: copy(format), chunks: [], bytes: 0, sealed: false };
       if (
         upload.format.sampleRate !== format.sampleRate ||
         upload.format.channels !== format.channels
@@ -894,7 +929,7 @@ export class GenerationService {
           "An audio stream cannot change format during recording.",
         );
       await requireRegularDirectory(this.directory(id));
-      const path = join(this.directory(id), `${kind}.raw`);
+      const path = join(this.directory(id), upload.sealed ? `${kind}.wav` : `${kind}.wav.partial`);
       if (sequence < upload.chunks.length) {
         const chunk = upload.chunks[sequence]!;
         const file = await open(
@@ -903,10 +938,10 @@ export class GenerationService {
         );
         try {
           const info = await file.stat();
-          if (!info.isFile() || info.size !== upload.bytes)
+          if (!info.isFile() || info.size !== WAV_HEADER_BYTES + upload.bytes)
             throw new ServiceError(500, "invalid_archive", "An audio upload changed unexpectedly.");
           const replay = Buffer.alloc(chunk.count);
-          const result = await file.read(replay, 0, replay.length, chunk.offset);
+          const result = await file.read(replay, 0, replay.length, WAV_HEADER_BYTES + chunk.offset);
           if (
             chunk.count !== bytes.length ||
             result.bytesRead !== replay.length ||
@@ -921,12 +956,13 @@ export class GenerationService {
           await file.close();
         }
         record.updatedAt = now();
-        this.records.set(id, record);
         return {
           nextSequence: upload.chunks.length,
           frameCount: upload.bytes / (format.channels * 4),
         };
       }
+      if (upload.sealed)
+        throw new ServiceError(409, "upload_closed", "This audio stream is already sealed.");
       if (sequence !== upload.chunks.length)
         throw new ServiceError(409, "missing_chunk", "Audio chunks must arrive in sequence.");
       const nextBytes = upload.bytes + bytes.length;
@@ -939,7 +975,11 @@ export class GenerationService {
           "recording_limit",
           `Recordings are limited to ${MAXIMUM_RECORDING_SECONDS / 3_600} hours and 4 GB per audio stream.`,
         );
-      if (upload.bytes === 0) await requireDiskSpace(this.configuration.dataDirectory);
+      // Preserve the reserve throughout a long take, not just on its first chunk.
+      await requireDiskSpaceFor(
+        this.configuration.dataDirectory,
+        bytes.length + (upload.bytes ? 0 : WAV_HEADER_BYTES),
+      );
       const file = await open(
         path,
         constants.O_WRONLY |
@@ -950,18 +990,17 @@ export class GenerationService {
       );
       try {
         const info = await file.stat();
-        if (!info.isFile() || info.size !== upload.bytes)
+        const oldSize = upload.bytes ? WAV_HEADER_BYTES + upload.bytes : 0;
+        if (!info.isFile() || info.size !== oldSize)
           throw new ServiceError(500, "invalid_archive", "An audio upload changed unexpectedly.");
-        let written = 0;
-        while (written < bytes.length) {
-          const result = await file.write(
-            bytes,
-            written,
-            bytes.length - written,
-            upload.bytes + written,
-          );
-          if (!result.bytesWritten) throw new Error("Audio write failed.");
-          written += result.bytesWritten;
+        try {
+          // Reserve a header with our first positioned write. Sealing then
+          // changes just 44 bytes instead of copying up to 4 GB a second time.
+          await writeAt(file, bytes, WAV_HEADER_BYTES + upload.bytes);
+        } catch (error) {
+          if (oldSize === 0) await rm(path);
+          else await file.truncate(oldSize);
+          throw error;
         }
       } finally {
         await file.close();
@@ -971,7 +1010,6 @@ export class GenerationService {
       streams[kind] = upload;
       this.uploads.set(id, streams);
       record.updatedAt = now();
-      this.records.set(id, record);
       return {
         nextSequence: upload.chunks.length,
         frameCount: upload.bytes / (format.channels * 4),
@@ -1014,14 +1052,15 @@ export class GenerationService {
       let sealOriginal = original;
       if (record.settings.preferences.keepOriginalAudio) {
         if (request.originalFrames === undefined) {
-          // Deliberate omission (format too large to archive): seal inference only.
+          // The optional stream may be absent or incomplete after interruption.
           if (original) {
-            await rm(join(this.directory(id), "original.raw"), { force: true }).catch(() => {});
-            if (streams) delete streams.original;
+            const name = original.sealed ? "original.wav" : "original.wav.partial";
+            await rm(join(this.directory(id), name), { force: true });
+            delete streams.original;
             sealOriginal = undefined;
           }
           record.originalAudioOmittedReason =
-            "Original audio was not kept for this recording because its format is too large to archive.";
+            "The original microphone audio was not archived; the complete inference audio was kept.";
         } else {
           if (
             !original ||
@@ -1051,39 +1090,25 @@ export class GenerationService {
           "This recording does not retain original audio.",
         );
       const previous = this.continuation(request.continuationID, record);
-      await requireDiskSpaceFor(
-        this.configuration.dataDirectory,
-        speech.bytes + 44 + (sealOriginal ? sealOriginal.bytes + 44 : 0),
-      );
       try {
-        if (!record.inferenceAudio)
-          record.inferenceAudio = await this.seal(id, "inference", speech);
-        if (sealOriginal && !record.originalAudio)
-          record.originalAudio = await this.seal(id, "original", sealOriginal);
+        record.inferenceAudio = await this.seal(id, "inference", speech);
+        if (sealOriginal) record.originalAudio = await this.seal(id, "original", sealOriginal);
         record.status = "queued";
         delete record.error;
         record.updatedAt = now();
         record.progress = 0;
+        // Make the WAV names durable before publishing the commit marker. A
+        // crash between these steps leaves an unacknowledged receiving take,
+        // never queued metadata pointing at a rename that can still be lost.
+        await syncDirectory(this.directory(id));
         await this.save(record);
       } catch (error) {
         logError("seal_failed", error, { id });
-        // Keep the uploaded audio: a seal failure is retryable with the same
-        // frame counts once space is freed. Drop only the partial WAVs, and
-        // clear an artifact assignment only when its raw source still exists
-        // (a completed seal already removed the raw; keep that artifact).
-        for (const kind of ["inference", "original"] as const) {
-          const rawKept = await access(join(this.directory(id), `${kind}.raw`)).then(
-            () => true,
-            () => false,
-          );
-          if (rawKept) delete record[kind === "inference" ? "inferenceAudio" : "originalAudio"];
-        }
-        record.status = "receiving";
-        record.error = "The server could not preserve the complete recording.";
-        record.updatedAt = now();
-        await this.save(record).catch(() => this.publish(record));
-        await this.cleanSealPartials(id);
-        throw new ServiceError(500, "audio_storage_failed", record.error);
+        throw new ServiceError(
+          500,
+          "audio_storage_failed",
+          "The server could not seal the recording. The upload can be retried.",
+        );
       }
       this.uploads.delete(id);
       this.enqueueProcessing(id, previous);
@@ -1122,7 +1147,7 @@ export class GenerationService {
     }
     const items = sorted.slice(start, start + limit);
     return {
-      items: items.map((item) => summarizeGeneration(this.decorate(copy(item)))),
+      items: items.map((item) => this.decorate(copy(summarizeGeneration(item)))),
       nextCursor: start + items.length < sorted.length ? items.at(-1)?.id : undefined,
     };
   }
@@ -1210,19 +1235,12 @@ export class GenerationService {
         );
       if (!record.inferenceAudio)
         throw new ServiceError(404, "artifact_not_found", "This recording has no sealed audio.");
-      try {
-        const file = await open(
-          join(this.directory(record.id), "inference.wav"),
-          constants.O_RDONLY | constants.O_NOFOLLOW,
+      if (!(await this.hasSealedInference(record)))
+        throw new ServiceError(
+          404,
+          "artifact_not_found",
+          "The sealed audio file is missing or incomplete.",
         );
-        try {
-          if (!(await file.stat()).isFile()) throw new Error("not a file");
-        } finally {
-          await file.close();
-        }
-      } catch {
-        throw new ServiceError(404, "artifact_not_found", "The sealed audio file is missing.");
-      }
       record.status = "queued";
       record.progress = 0;
       delete record.error;
@@ -1249,13 +1267,14 @@ export class GenerationService {
   private async cancelRecord(id: string) {
     const record = this.getInternal(id);
     if (terminal(record)) return record;
+    const wasReceiving = record.status === "receiving";
     record.status = "cancelled";
     record.error = "Recording cancelled.";
     delete record.progress;
     record.updatedAt = now();
     this.processingControllers.get(record.id)?.abort();
     await this.save(record).catch(() => this.publish(record));
-    await this.cleanPartial(record.id);
+    await this.cleanPartial(record, wasReceiving);
     return copy(record);
   }
   recordDelivery(id: string, receipt: DeliveryReceipt, actorDeviceID: string) {
@@ -1490,26 +1509,17 @@ export class GenerationService {
   private async seal(id: string, kind: AudioKind, upload: Upload): Promise<AudioArtifact> {
     const directory = this.directory(id);
     await requireRegularDirectory(directory);
-    const source = await open(
-      join(directory, `${kind}.raw`),
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    const partial = join(directory, `${kind}.wav.partial`);
-    try {
-      const info = await source.stat();
-      if (!info.isFile() || info.size !== upload.bytes)
-        throw new Error("Audio changed before sealing.");
-      const output = await open(
+    if (!upload.sealed) {
+      const partial = join(directory, `${kind}.wav.partial`);
+      const file = await open(
         partial,
-        constants.O_WRONLY |
-          constants.O_CREAT |
-          constants.O_EXCL |
-          constants.O_NOFOLLOW |
-          constants.O_NONBLOCK,
-        0o600,
+        constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
       );
       try {
-        const header = Buffer.alloc(44);
+        const info = await file.stat();
+        if (!info.isFile() || info.size !== WAV_HEADER_BYTES + upload.bytes)
+          throw new Error("Audio changed before sealing.");
+        const header = Buffer.alloc(WAV_HEADER_BYTES);
         header.write("RIFF");
         header.writeUInt32LE(upload.bytes + 36, 4);
         header.write("WAVEfmt ", 8);
@@ -1522,36 +1532,20 @@ export class GenerationService {
         header.writeUInt16LE(32, 34);
         header.write("data", 36);
         header.writeUInt32LE(upload.bytes, 40);
-        await output.writeFile(header);
-        const buffer = Buffer.alloc(MAXIMUM_CHUNK_BYTES);
-        let offset = 0;
-        while (offset < upload.bytes) {
-          const result = await source.read(
-            buffer,
-            0,
-            Math.min(buffer.length, upload.bytes - offset),
-            offset,
-          );
-          if (!result.bytesRead) throw new Error("Audio ended before sealing.");
-          await output.writeFile(buffer.subarray(0, result.bytesRead));
-          offset += result.bytesRead;
-        }
-        await output.sync();
+        await writeAt(file, header, 0);
+        await file.sync();
       } finally {
-        await output.close();
+        await file.close();
       }
-    } finally {
-      await source.close();
+      await rename(partial, join(directory, `${kind}.wav`));
+      upload.sealed = true;
     }
-    await rename(partial, join(directory, `${kind}.wav`));
-    await syncDirectory(directory);
-    await rm(join(directory, `${kind}.raw`));
     return {
       filename: `${kind}.wav`,
       sampleRate: upload.format.sampleRate,
       channels: upload.format.channels,
       frameCount: upload.bytes / (upload.format.channels * 4),
-      byteCount: upload.bytes + 44,
+      byteCount: upload.bytes + WAV_HEADER_BYTES,
       encoding: "pcm_f32le",
     };
   }
@@ -1798,12 +1792,10 @@ export class GenerationService {
     }
     if (results.length === 1) {
       const [only] = results;
-      const { offset: _offset, text: _text, outputText, ...extra } = only!;
-      // A single part is the whole transcript; keep its exact trimmed shape.
-      return make(only!.status, {
+      const { offset, text: _original, ...extra } = only!;
+      return make(extra.status, {
         ...extra,
-        proposedText: extra.proposedText?.trim(),
-        outputText: only!.status === "applied" ? outputText.trim() : text,
+        verifiedRepairs: extra.verifiedRepairs?.map((repair) => shiftRepair(repair, offset)),
       });
     }
     const statuses = results.map((result) => result.status);
@@ -1844,12 +1836,6 @@ export class GenerationService {
     language: string,
     signal: AbortSignal,
   ): Promise<Omit<ProofreadPart, "offset" | "text">> {
-    if (graphemes(text) > maxInputCharacters)
-      return {
-        status: "skipped",
-        outputText: text,
-        reason: "The transcript exceeded the correction length limit.",
-      };
     try {
       const proof = await this.inference.correct(
         text,
@@ -1883,7 +1869,32 @@ export class GenerationService {
   }
   private async save(record: GenerationRecord) {
     delete record.queuePosition;
-    const data = JSON.stringify(record);
+    let data = JSON.stringify(record);
+    // A continuation can repeat earlier takes, and proofreading diagnostics
+    // repeat source and output. Never fail a finished take just to archive
+    // those copies. Leave room for a later delivery receipt as well.
+    const completionBudget = MAXIMUM_METADATA_BYTES - 32 * 1024;
+    if (
+      record.status === "completed" &&
+      !record.importedSource &&
+      Buffer.byteLength(data) > completionBudget
+    ) {
+      record.previewText = record.finalText || historyPreview(record.previewText);
+      if (record.continuation) record.continuation.preview = record.previewText;
+      data = JSON.stringify(record);
+      if (Buffer.byteLength(data) > completionBudget) {
+        // Always preserve the full raw, final and insertion text, audio and
+        // continuation state. Only list/UI previews and audit fields shrink.
+        delete record.textProcessing;
+        delete record.proofreadingHints;
+        delete record.consumedListControls;
+        if (record.continuation) record.continuation.preview = historyPreview(record.previewText);
+        // An empty detail preview makes the native client copy finalText in
+        // full. Only the list projection is allowed to show a truncated take.
+        if (record.finalText) record.previewText = "";
+        data = JSON.stringify(record);
+      }
+    }
     if (Buffer.byteLength(data) > MAXIMUM_METADATA_BYTES)
       throw new ServiceError(
         413,
@@ -1942,19 +1953,19 @@ export class GenerationService {
     this.lastProgressYieldAt.set(id, nowMs);
     for (const watcher of this.subscribers.get(id) ?? []) this.yieldTo(watcher, record);
   }
-  private async cleanSealPartials(id: string) {
-    for (const name of ["inference.wav.partial", "original.wav.partial"])
-      await rm(join(this.directory(id), name), { force: true }).catch(() => {});
-  }
-  private async cleanPartial(id: string) {
-    this.uploads.delete(id);
+  private async cleanPartial(record: GenerationRecord, wasReceiving: boolean) {
+    this.uploads.delete(record.id);
+    // A crash/failed seal may leave a renamed stream without committed
+    // metadata. Remove only unclaimed WAVs, preserving sealed archives.
     for (const name of [
       "inference.raw",
-      "original.raw",
+      "original.raw", // legacy upload staging
       "inference.wav.partial",
       "original.wav.partial",
+      ...(wasReceiving && !record.inferenceAudio ? ["inference.wav"] : []),
+      ...(wasReceiving && !record.originalAudio ? ["original.wav"] : []),
     ])
-      await rm(join(this.directory(id), name), { force: true }).catch(() => {});
+      await rm(join(this.directory(record.id), name), { force: true }).catch(() => {});
   }
   private beginWarmup(force = false) {
     if (this.stopping || this.warming || this.processingControllers.size) return;

@@ -53,6 +53,12 @@ paths:
   "/v1/health":
     get:
       operationId: "getHealth"
+      parameters:
+        - name: "includeRecordingLimit"
+          in: "query"
+          description: "Opt in to maximumRecordingSeconds; older clients require the original health response shape."
+          schema:
+            type: "boolean"
       responses:
         "200":
           description: "Success"
@@ -965,6 +971,11 @@ components:
           maximum: 9007199254740991
         serverVersion:
           type: "string"
+        maximumRecordingSeconds:
+          description: "Maximum supported take length in seconds, sent only when requested. Servers predating this field accept up to 180 seconds."
+          type: "integer"
+          minimum: 1
+          maximum: 9007199254740991
         isDev:
           type: "boolean"
         ready:

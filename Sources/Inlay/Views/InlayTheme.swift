@@ -433,9 +433,11 @@ struct RecordingElapsedTime: View {
     @State private var seconds = 0
 
     var body: some View {
-        Text(inlayDuration(Double(seconds)))
+        Text(verbatim: "0:00:00")
+            .hidden()
+            .overlay(alignment: .trailing) { Text(inlayDuration(Double(seconds))) }
             .monospacedDigit()
-            .frame(minWidth: 34, alignment: .trailing)
+            .accessibilityElement(children: .ignore)
             .onReceive(feedback.$elapsedSeconds.removeDuplicates()) { seconds = $0 }
             .accessibilityLabel("Recording time")
             .accessibilityValue(inlayDuration(Double(seconds)))
