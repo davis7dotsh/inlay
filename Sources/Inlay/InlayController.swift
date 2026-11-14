@@ -764,7 +764,8 @@ final class InlayController: ObservableObject {
             do {
                 let record = try await connection.generation(sealed)
                 if record.status == .receiving { _ = try await connection.finish(sealed, value: finish) }
-                if record.status == .receiving || record.inferenceAudio != nil {
+                // Completed records count even after retention purged their audio.
+                if record.status == .receiving || record.status == .completed || record.inferenceAudio != nil {
                     if !pendingEntries.contains(where: { $0.id == sealed }) {
                         addPendingEntry(id: sealed, finish: finish, fallback: nil, isTest: false)
                     }

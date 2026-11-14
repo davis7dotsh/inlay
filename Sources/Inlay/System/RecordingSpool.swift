@@ -166,10 +166,35 @@ final class RecordingSpool: @unchecked Sendable {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// Callers hold the lock (or own the spool exclusively), so saves never reorder.
+    /// Callers hold the lock (or own the spool exclusively), so saves never
+    /// reorder. The replacement reaches stable storage, rename included,
+    /// before this returns: a seal marker must survive power loss.
     private func write(_ manifest: RecordingSpoolManifest) throws {
         let data = try InlayAPI.encoder().encode(manifest)
-        try data.write(to: manifestURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifestURL.path)
+        let temporary = directory.appendingPathComponent(".manifest-\(UUID().uuidString).json")
+        guard FileManager.default.createFile(atPath: temporary.path, contents: nil,
+                                             attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        do {
+            let file = try FileHandle(forWritingTo: temporary)
+            defer { try? file.close() }
+            try file.write(contentsOf: data)
+            try Self.fullSync(file.fileDescriptor)
+            guard rename(temporary.path, manifestURL.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
+        }
+        let folder = open(directory.path, O_RDONLY)
+        guard folder >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(folder) }
+        try Self.fullSync(folder)
+    }
+
+    /// fsync alone leaves data in the drive's cache on macOS.
+    private static func fullSync(_ descriptor: Int32) throws {
+        if fcntl(descriptor, F_FULLFSYNC) == 0 || fsync(descriptor) == 0 { return }
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 }
