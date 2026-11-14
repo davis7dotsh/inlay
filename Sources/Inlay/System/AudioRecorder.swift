@@ -368,7 +368,7 @@ final class RecordingWriter: @unchecked Sendable {
         file = try open(spool.inferenceURL)
         if keepsOriginal {
             originalFile = try open(spool.originalURL)
-            spool.update {
+            try spool.update {
                 $0.originalSampleRate = Int(inputFormat.sampleRate)
                 $0.originalChannels = Int(inputFormat.channelCount)
             }

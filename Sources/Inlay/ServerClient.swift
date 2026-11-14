@@ -317,12 +317,12 @@ extension ServerClient {
             // Batch about half a second while live; catch up a backlog in full chunks.
             let next: (cursor: SpoolCursor, available: Int64, isOriginal: Bool)? = {
                 let pendingInference = snapshot.inferenceBytes - inference.sent
-                if pendingInference >= 32_000 || (finished && pendingInference > 0) {
+                if inference.outstanding != nil || pendingInference >= 32_000 || (finished && pendingInference > 0) {
                     return (inference, pendingInference, false)
                 }
                 guard keepOriginal, original.format != nil else { return nil }
                 let pendingOriginal = snapshot.originalBytes - original.sent
-                if pendingOriginal >= 768_000 || (finished && pendingOriginal > 0) {
+                if original.outstanding != nil || pendingOriginal >= 768_000 || (finished && pendingOriginal > 0) {
                     return (original, pendingOriginal, true)
                 }
                 return nil
@@ -374,8 +374,11 @@ extension ServerClient {
     private func send(_ cursor: inout SpoolCursor, available: Int64, to id: UUID) async -> SendResult {
         guard let format = cursor.format else { return .rejected }
         let frameBytes = Int64(format.channels * 4)
-        let count = min(available, Int64(InlayAPI.maximumChunkBytes)) / frameBytes * frameBytes
+        // A chunk whose acknowledgement was lost must be resent byte for byte,
+        // even though more audio has been captured since.
+        let count = cursor.outstanding ?? min(available, Int64(InlayAPI.maximumChunkBytes)) / frameBytes * frameBytes
         guard count > 0 else { return .rejected }
+        cursor.outstanding = count
         let payload: Data
         do { payload = try cursor.read(count) } catch { return .rejected }
         let sequence = cursor.sequence
@@ -392,6 +395,7 @@ extension ServerClient {
             guard receipt.nextSequence == sequence + 1, Int64(receipt.frameCount) == expectedFrames else { return .rejected }
             cursor.sequence = receipt.nextSequence
             cursor.sent += count
+            cursor.outstanding = nil
             return .sent
         } catch {
             return Self.isTransient(error) ? .transient : .rejected
@@ -412,6 +416,8 @@ private struct SpoolCursor {
     var format: AudioStreamFormat?
     var sent: Int64 = 0
     var sequence = 0
+    /// Byte count of the chunk sent at `sequence` and not yet acknowledged.
+    var outstanding: Int64?
     private var handle: FileHandle?
 
     init(kind: AudioKind, url: URL) {

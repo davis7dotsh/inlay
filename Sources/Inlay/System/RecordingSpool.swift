@@ -7,6 +7,9 @@ struct RecordingSpoolManifest: Codable, Equatable {
     var id: UUID
     var createdAt: Date
     var isTest: Bool
+    /// The server this take belongs to. Recovery only uploads it there, so a
+    /// take is never duplicated onto, or sent to, a different server.
+    var endpoint: String?
     /// Interleaved float32 original audio, when this take archives it.
     var originalSampleRate: Int?
     var originalChannels: Int?
@@ -58,13 +61,13 @@ final class RecordingSpool: @unchecked Sendable {
         clientRoot.appendingPathComponent("recordings", isDirectory: true)
     }
 
-    static func create(in clientRoot: URL, id: UUID, isTest: Bool) throws -> RecordingSpool {
+    static func create(in clientRoot: URL, id: UUID, endpoint: String, isTest: Bool) throws -> RecordingSpool {
         let files = FileManager.default
         let root = root(in: clientRoot)
         try files.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let directory = root.appendingPathComponent(id.uuidString, isDirectory: true)
         try files.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        let spool = RecordingSpool(directory: directory, manifest: .init(id: id, createdAt: Date(), isTest: isTest))
+        let spool = RecordingSpool(directory: directory, manifest: .init(id: id, createdAt: Date(), isTest: isTest, endpoint: endpoint))
         do { try spool.write(spool.manifestValue) } catch {
             try? files.removeItem(at: directory)
             throw error
@@ -132,10 +135,14 @@ final class RecordingSpool: @unchecked Sendable {
         }
     }
 
-    func update(_ change: (inout RecordingSpoolManifest) -> Void) {
-        lock.withLock {
-            change(&manifestValue)
-            try? write(manifestValue)
+    /// Persists before returning. Callers must not contact the server on a
+    /// failure: the manifest is what prevents duplicate creates and seals.
+    func update(_ change: (inout RecordingSpoolManifest) -> Void) throws {
+        try lock.withLock {
+            var next = manifestValue
+            change(&next)
+            try write(next)
+            manifestValue = next
         }
     }
 

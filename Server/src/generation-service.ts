@@ -1792,6 +1792,8 @@ export class GenerationService {
         offset: part.offset + lead.length,
         text: part.text,
         outputText: lead + result.outputText + tail,
+        proposedText:
+          result.proposedText === undefined ? undefined : lead + result.proposedText + tail,
       });
     }
     if (results.length === 1) {
@@ -1800,6 +1802,7 @@ export class GenerationService {
       // A single part is the whole transcript; keep its exact trimmed shape.
       return make(only!.status, {
         ...extra,
+        proposedText: extra.proposedText?.trim(),
         outputText: only!.status === "applied" ? outputText.trim() : text,
       });
     }

@@ -129,6 +129,8 @@ final class InlayController: ObservableObject {
     /// Client data directory; takes are spooled under its `recordings` folder.
     private let clientRoot: URL
     private var isRecoveringSpools = false
+    /// Finishes once captured audio is written and synchronized to the spool.
+    private(set) var terminationDrain: Task<Void, Never>?
     /// Per-spool retry backoff for recovery uploads, keyed by spool ID.
     private var spoolRetries: [UUID: (failures: Int, nextAttempt: Date)] = [:]
 
@@ -334,7 +336,7 @@ final class InlayController: ObservableObject {
             await reconcilePendingGenerations()
             if health.ready, health.apiVersion == InlayAPI.version, !isRecoveringSpools {
                 // Long uploads must not hold up health checks.
-                Task { [weak self] in await self?.recoverSavedRecordings(connection) }
+                Task { [weak self] in await self?.recoverSavedRecordings(connection, endpoint: endpoint) }
             }
         } catch is CancellationError {
         } catch {
@@ -706,11 +708,11 @@ final class InlayController: ObservableObject {
         var created: GenerationRecord?
         for _ in 0..<2 {
             let requestID = spool.manifest.uploadRequestID ?? UUID()
-            spool.update { $0.uploadRequestID = requestID }
+            try spool.update { $0.uploadRequestID = requestID }
             let record = try await connection.create(.init(requestID: requestID, device: device, mode: mode))
             if record.status == .receiving { created = record; break }
             // An earlier attempt with this ID already ended; start another.
-            spool.update { $0.uploadRequestID = nil }
+            try spool.update { $0.uploadRequestID = nil }
         }
         guard let created else { throw ServerClientError.invalidResponse }
         let outcome = try await connection.upload(spool, to: created.id,
@@ -725,13 +727,16 @@ final class InlayController: ObservableObject {
     /// Uploads takes whose spool outlived the session that recorded them:
     /// a crash, a quit mid-take, or a server that was unreachable at release.
     /// Results surface as ready-to-copy, never as insertions.
-    private func recoverSavedRecordings(_ connection: ServerClient) async {
+    private func recoverSavedRecordings(_ connection: ServerClient, endpoint: String) async {
         guard !isRecoveringSpools, !isShuttingDown else { return }
         isRecoveringSpools = true
         defer { isRecoveringSpools = false }
         let owned = Set(pendingDictations.map(\.spool.id) + [activeSpool?.id].compactMap { $0 })
-        for spool in RecordingSpool.saved(in: clientRoot) where !owned.contains(spool.id) {
-            guard !isShuttingDown, !Task.isCancelled else { return }
+        // A take only ever goes to the server it was recorded for. Takes for
+        // another endpoint wait until that server is selected again.
+        for spool in RecordingSpool.saved(in: clientRoot)
+        where !owned.contains(spool.id) && (spool.manifest.endpoint ?? endpoint) == endpoint {
+            guard !isShuttingDown, !Task.isCancelled, preferences.endpoint == endpoint else { return }
             if spool.manifest.isTest { spool.delete(); continue }
             if let retry = spoolRetries[spool.id], retry.nextAttempt > Date() { continue }
             do {
@@ -773,7 +778,7 @@ final class InlayController: ObservableObject {
         let fresh = try await Self.uploadFresh(spool, connection: connection, device: deviceIdentity, mode: .dictation)
         let finish = fresh.outcome.finish
         guard finish.inferenceFrames >= 4_000 else { return }
-        spool.update {
+        try spool.update {
             $0.sealingGenerationID = fresh.id
             $0.sealedInferenceFrames = finish.inferenceFrames
             $0.sealedOriginalFrames = finish.originalFrames
@@ -887,6 +892,14 @@ final class InlayController: ObservableObject {
         // independently owned and may complete in history.
         let generation = activeGenerationID
         let connection = activeClient
+        // Stop through the writer's normal drain (queued buffers, converter
+        // flush, fsync) rather than cancelling, and let quit wait for it.
+        let stopping = isCapturing ? recorder.stopCapture() : nil
+        let earlier = recorderStopTask
+        terminationDrain = Task {
+            _ = try? await earlier?.value
+            _ = try? await stopping?.value
+        }
         resetSession(keepSpool: true)
         if let generation, let connection { Task { try? await connection.cancel(generation) } }
         stopPendingDictations()
@@ -984,7 +997,7 @@ final class InlayController: ObservableObject {
                 // Every take is written to disk first. The upload tails that
                 // copy, so a slow or lost connection never stops the microphone;
                 // a failed live upload is re-sent in full after release.
-                let spool = try RecordingSpool.create(in: clientRoot, id: current, isTest: isTest)
+                let spool = try RecordingSpool.create(in: clientRoot, id: current, endpoint: preferences.endpoint, isTest: isTest)
                 activeSpool = spool
                 let keepOriginal = created.settings.preferences.keepOriginalAudio
                 uploadTask = Task {
@@ -1109,13 +1122,15 @@ final class InlayController: ObservableObject {
                     .contains { earlier in earlier.target.map { $0.anchor == anchor } ?? true }
                 finish.continuationID = sharesEarlierAnchor ? nil : anchor.flatMap { self.continuation(for: $0)?.generationID }
                 try Task.checkCancellation()
-                pending.sealed = true // The server may accept a seal whose response is interrupted.
-                addPendingEntry(id: id, finish: finish, fallback: nil, isTest: test)
-                pending.spool.update {
+                // Record the seal before sending it; without that record a lost
+                // response could later re-upload a take the server already has.
+                try pending.spool.update {
                     $0.sealingGenerationID = id
                     $0.sealedInferenceFrames = finish.inferenceFrames
                     $0.sealedOriginalFrames = finish.originalFrames
                 }
+                pending.sealed = true // The server may accept a seal whose response is interrupted.
+                addPendingEntry(id: id, finish: finish, fallback: nil, isTest: test)
                 var result: GenerationRecord
                 do { result = try await Self.seal(connection, id: id, finish: finish, fallback: nil) }
                 catch let ServerClientError.rejected(status, message, code) where (400..<500).contains(status) && ![408, 429].contains(status) {
