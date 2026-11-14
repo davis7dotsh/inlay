@@ -6,13 +6,14 @@ import Foundation
 /// synchronous, even while a driver is still servicing start() on its queue.
 final class AudioCaptureRequest: @unchecked Sendable {
     let id = UUID()
-    let onChunk: (@Sendable (CapturedAudioChunk) -> Void)?
+    /// Durable destination for this take's PCM.
+    let spool: RecordingSpool
     private enum State { case open, released, cancelled }
     private let lock = NSLock()
     private var state: State = .open
 
-    init(onChunk: (@Sendable (CapturedAudioChunk) -> Void)? = nil) {
-        self.onChunk = onChunk
+    init(spool: RecordingSpool) {
+        self.spool = spool
     }
 
     var acceptsAudio: Bool { lock.withLock { state == .open } }
@@ -119,10 +120,7 @@ final class AudioCaptureWorker: @unchecked Sendable {
         }
         return try await withTaskCancellationHandler {
             let audio = try await writer.finish()
-            guard !request.isCancelled, !Task.isCancelled else {
-                audio.cleanup()
-                throw AudioRecordingError.cancelled
-            }
+            guard !request.isCancelled, !Task.isCancelled else { throw AudioRecordingError.cancelled }
             return audio
         } onCancel: {
             request.cancel()

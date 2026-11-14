@@ -1,7 +1,5 @@
 import Combine
 import Foundation
-import InlayAPI
-import InlayCore
 
 /// High-frequency feedback is observed only by the waveform and clock leaves,
 /// never forwarded through the dashboard's controller.
@@ -18,17 +16,17 @@ final class RecordingFeedback: ObservableObject {
         if next != levels { levels = next }
     }
 
-    func updateElapsed(_ elapsed: TimeInterval) {
-        let bounded = elapsed.isFinite ? min(Double(InlayAPI.maximumRecordingSeconds), max(0, elapsed)) : 0
+    func updateElapsed(_ elapsed: TimeInterval, limit: Int) {
+        let bounded = elapsed.isFinite ? min(Double(limit), max(0, elapsed)) : 0
         let seconds = Int(bounded)
         if seconds != elapsedSeconds { elapsedSeconds = seconds }
-        let remaining = InlayAPI.maximumRecordingSeconds - seconds
-        let notice: RecordingLimitNotice? = (1...30).contains(remaining) ? .approaching(secondsRemaining: remaining) : nil
+        let remaining = limit - seconds
+        let notice: RecordingLimitNotice? = (1...60).contains(remaining) ? .approaching(secondsRemaining: remaining, limit: limit) : nil
         if limitNotice != notice { limitNotice = notice }
     }
 
-    func finish(atLimit: Bool) {
-        let notice: RecordingLimitNotice? = atLimit ? .stopped : nil
+    func finish(atLimit: Bool, limit: Int) {
+        let notice: RecordingLimitNotice? = atLimit ? .stopped(limit: limit) : nil
         if limitNotice != notice { limitNotice = notice }
     }
 
@@ -45,20 +43,26 @@ final class RecordingFeedback: ObservableObject {
 }
 
 enum RecordingLimitNotice: Equatable {
-    case approaching(secondsRemaining: Int)
-    case stopped
+    case approaching(secondsRemaining: Int, limit: Int)
+    case stopped(limit: Int)
 
     var text: String {
         switch self {
-        case .approaching(let seconds): "Recording limit in \(inlayDuration(Double(seconds)))"
-        case .stopped: "Stopped at the 3-minute limit"
+        case .approaching(let seconds, _): "Recording limit in \(inlayDuration(Double(seconds)))"
+        case .stopped(let limit): "Stopped at the \(Self.label(for: limit)) limit"
         }
     }
 
     var accessibilityLabel: String {
         switch self {
-        case .approaching: "Recording is approaching the three-minute limit"
+        case .approaching(_, let limit): "Recording is approaching the \(Self.label(for: limit)) limit"
         case .stopped: text
         }
+    }
+
+    private static func label(for seconds: Int) -> String {
+        if seconds.isMultiple(of: 3_600) { return "\(seconds / 3_600)-hour" }
+        if seconds.isMultiple(of: 60) { return "\(seconds / 60)-minute" }
+        return "\(seconds)-second"
     }
 }

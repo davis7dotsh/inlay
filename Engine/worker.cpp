@@ -17,7 +17,6 @@
 #include "miniaudio.h"
 
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <cerrno>
 #include <chrono>
@@ -49,7 +48,13 @@ constexpr size_t maxRequestBytes = 1024 * 1024;
 constexpr size_t maxVocabularyBytes = 384 * 1024;
 constexpr size_t maxPromptBytes = 8192;
 constexpr size_t minSamples = PARAKEET_SAMPLE_RATE / 5;
-constexpr size_t maxSamples = PARAKEET_SAMPLE_RATE * 180;
+constexpr size_t maxRecordingSeconds = 7200;
+constexpr size_t maxSamples = PARAKEET_SAMPLE_RATE * maxRecordingSeconds;
+// Parakeet's dynamic encoder attends across the whole clip, so memory grows
+// quadratically with length. Long takes are decoded in bounded windows cut at
+// detected pauses; anything up to one window is a single unchanged pass.
+constexpr size_t windowSamples = PARAKEET_SAMPLE_RATE * 120;
+constexpr size_t preferredCutSamples = PARAKEET_SAMPLE_RATE * 60;
 
 void emit(const json &event) {
     std::cout << event.dump(-1, ' ', false, json::error_handler_t::replace) << '\n' << std::flush;
@@ -98,56 +103,49 @@ void watchParent() {
     }).detach();
 }
 
-struct Audio {
-    std::vector<float> samples;
-    double duration;
-    bool silent;
-};
-
-std::variant<Audio, std::string> readAudio(const std::string &path) {
-    std::error_code error;
-    if (!std::filesystem::is_regular_file(path, error)) {
-        return "The recording is missing or is not a regular file.";
-    }
-    const auto bytes = std::filesystem::file_size(path, error);
-    if (error || bytes > 32 * 1024 * 1024) {
-        return "The recording cannot be read or exceeds the 32 MB limit.";
-    }
-
+// Keep the decoder on the same file descriptor for the whole job; the decoded
+// sample buffer below never needs to grow with the duration of the recording.
+struct WaveFile {
     ma_dr_wav wav{};
-    if (!ma_dr_wav_init_file(&wav, path.c_str(), nullptr)) {
-        return "The recording is not a readable WAV file.";
-    }
-    const auto finish = [&wav](ma_dr_wav *) { ma_dr_wav_uninit(&wav); };
-    const std::unique_ptr<ma_dr_wav, decltype(finish)> guard(&wav, finish);
-    if (wav.channels != 1 || wav.sampleRate != PARAKEET_SAMPLE_RATE) {
-        return "The recording must be mono, 16 kHz WAV audio.";
-    }
-    if (!((wav.translatedFormatTag == 1 && wav.bitsPerSample == 16) ||
-          (wav.translatedFormatTag == 3 && wav.bitsPerSample == 32))) {
-        return "The recording must use PCM16 or float32 WAV samples.";
-    }
-    if (wav.totalPCMFrameCount < minSamples || wav.totalPCMFrameCount > maxSamples) {
-        return "Record between 0.2 seconds and 3 minutes of audio.";
+    bool opened = false;
+    WaveFile() = default;
+    WaveFile(const WaveFile &) = delete;
+    WaveFile &operator=(const WaveFile &) = delete;
+    ~WaveFile() { if (opened) ma_dr_wav_uninit(&wav); }
+
+    std::optional<std::string> open(const std::string &path) {
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(path, error)) {
+            return "The recording is missing or is not a regular file.";
+        }
+        const auto bytes = std::filesystem::file_size(path, error);
+        if (error || bytes > maxSamples * sizeof(float) + 64 * 1024) {
+            return "The recording cannot be read or exceeds the two-hour limit.";
+        }
+        opened = ma_dr_wav_init_file(&wav, path.c_str(), nullptr);
+        if (!opened) return "The recording is not a readable WAV file.";
+        if (wav.channels != 1 || wav.sampleRate != PARAKEET_SAMPLE_RATE) {
+            return "The recording must be mono, 16 kHz WAV audio.";
+        }
+        if (!((wav.translatedFormatTag == 1 && wav.bitsPerSample == 16) ||
+              (wav.translatedFormatTag == 3 && wav.bitsPerSample == 32))) {
+            return "The recording must use PCM16 or float32 WAV samples.";
+        }
+        if (wav.totalPCMFrameCount < minSamples || wav.totalPCMFrameCount > maxSamples) {
+            return "Record between 0.2 seconds and 2 hours of audio.";
+        }
+        return std::nullopt;
     }
 
-    std::vector<float> samples(static_cast<size_t>(wav.totalPCMFrameCount));
-    const auto frames = ma_dr_wav_read_pcm_frames_f32(&wav, samples.size(), samples.data());
-    if (frames != samples.size()) return "The recording is incomplete.";
-
-    double squareSum = 0;
-    float peak = 0;
-    for (auto &sample : samples) {
-        if (!std::isfinite(sample)) return "The recording contains invalid audio samples.";
-        sample = std::clamp(sample, -1.0f, 1.0f);
-        squareSum += static_cast<double>(sample) * sample;
-        peak = std::max(peak, std::abs(sample));
+    std::optional<std::string> read(float *samples, size_t count) {
+        if (ma_dr_wav_read_pcm_frames_f32(&wav, count, samples) != count) return "The recording is incomplete.";
+        for (size_t i = 0; i < count; ++i) {
+            if (!std::isfinite(samples[i])) return "The recording contains invalid audio samples.";
+            samples[i] = std::clamp(samples[i], -1.0f, 1.0f);
+        }
+        return std::nullopt;
     }
-    // Keep the amplitude gate conservative; Silero handles nonspeech detection.
-    const bool silent = peak < 0.002f || std::sqrt(squareSum / samples.size()) < 0.0003;
-    const double duration = static_cast<double>(samples.size()) / PARAKEET_SAMPLE_RATE;
-    return Audio{std::move(samples), duration, silent};
-}
+};
 
 std::string trim(std::string text) {
     constexpr auto space = " \t\r\n";
@@ -156,17 +154,55 @@ std::string trim(std::string text) {
     return text.substr(first, text.find_last_not_of(space) - first + 1);
 }
 
-struct Progress {
-    const std::string &id;
-    int last = -1;
+struct Window {
+    size_t end; // Relative to the front of the rolling PCM buffer.
+    bool hasSpeech;
 };
 
-void reportProgress(parakeet_context *, parakeet_state *, int value, void *opaque) {
-    auto &progress = *static_cast<Progress *>(opaque);
-    value = std::clamp(value, 0, 100);
-    if (value <= progress.last) return;
-    progress.last = value;
-    emit({{"type", "progress"}, {"id", progress.id}, {"value", value / 100.0}});
+// Look a little past the furthest possible cut. That gives Silero context
+// for speech starting just before a boundary, even if the prefix was silent.
+constexpr size_t lookaheadSamples = PARAKEET_SAMPLE_RATE;
+
+std::optional<Window> nextWindow(whisper_vad_context *vad, const std::vector<float> &samples, size_t remaining) {
+    const bool last = remaining <= windowSamples;
+    // Leave a little context for the final window rather than decoding a
+    // handful of frames on their own when a take just exceeds the limit.
+    const size_t limit = last ? remaining : std::min(windowSamples, remaining - lookaheadSamples);
+    // Silence elsewhere in the take must not dilute a brief or quiet phrase.
+    // Skip only digital silence outright; let Silero decide on anything else.
+    if (std::none_of(samples.begin(), samples.end(), [](float s) { return s != 0.0f; })) return Window{limit, false};
+
+    auto detection = whisper_vad_default_params();
+    detection.threshold = 0.5f;
+    detection.min_speech_duration_ms = 120;
+    const std::unique_ptr<whisper_vad_segments, decltype(&whisper_vad_free_segments)> speech(
+        whisper_vad_segments_from_samples(vad, detection, samples.data(), static_cast<int>(samples.size())),
+        whisper_vad_free_segments);
+    if (!speech) return std::nullopt;
+    const int count = whisper_vad_segments_n_segments(speech.get());
+    if (last || count == 0) return Window{limit, count > 0};
+
+    const auto toSample = [](float centiseconds) {
+        return static_cast<size_t>(centiseconds * (PARAKEET_SAMPLE_RATE / 100));
+    };
+    size_t cut = limit, longest = 0;
+    const auto considerPause = [&](size_t start, size_t end) {
+        start = std::max(start, preferredCutSamples);
+        end = std::min(end, limit);
+        if (end > start && end - start >= longest) {
+            longest = end - start;
+            cut = start + longest / 2;
+        }
+    };
+    size_t previousEnd = 0;
+    for (int i = 0; i < count; ++i) {
+        const size_t start = toSample(whisper_vad_segments_get_segment_t0(speech.get(), i));
+        considerPause(previousEnd, start);
+        previousEnd = toSample(whisper_vad_segments_get_segment_t1(speech.get(), i));
+    }
+    considerPause(previousEnd, limit);
+    const auto firstSpeech = toSample(whisper_vad_segments_get_segment_t0(speech.get(), 0));
+    return Window{cut, firstSpeech < cut};
 }
 
 std::optional<std::string> stringField(const json &request, const char *key) {
@@ -242,56 +278,66 @@ void transcribe(parakeet_context *context, whisper_vad_context *vad, int threads
 
     const auto start = Clock::now();
     const auto &terms = std::get<std::vector<std::string>>(vocabulary);
-    auto loaded = readAudio(*path);
-    if (const auto failure = std::get_if<std::string>(&loaded)) {
+    WaveFile file;
+    if (const auto failure = file.open(*path)) {
         emitError(*failure, *id);
         return;
     }
-    auto &audio = std::get<Audio>(loaded);
-    Progress progress{*id};
-    reportProgress(nullptr, nullptr, 0, &progress);
+    const auto total = static_cast<size_t>(file.wav.totalPCMFrameCount);
+    auto parameters = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
+    parameters.n_threads = threads;
+    parameters.no_context = true; // Never leak one dictation (or window) into the next.
+    std::vector<float> samples;
+    samples.reserve(std::min(total, windowSamples + lookaheadSamples));
     std::string text;
-    if (!audio.silent) {
-        // A small CPU-only Silero pass rejects fan noise, tones, and other
-        // nonspeech before recognition.
-        // Its recurrent state is reset on each call, just like the ASR context.
-        if (!whisper_vad_detect_speech(vad, audio.samples.data(), static_cast<int>(audio.samples.size()))) {
-            emitError("Local speech detection failed. Try recording again.", *id);
+    int lastProgress = -1;
+    const auto report = [&](size_t done) {
+        // Credit only completed ASR (or a skipped silent window), not merely
+        // the end of the encoder callback, which precedes token decoding.
+        const int percent = static_cast<int>(100ULL * done / total);
+        if (percent != lastProgress) {
+            lastProgress = percent;
+            emit({{"type", "progress"}, {"id", *id}, {"value", percent / 100.0}});
+        }
+    };
+    report(0);
+    for (size_t done = 0; done < total;) {
+        const size_t kept = samples.size();
+        samples.resize(std::min(windowSamples + lookaheadSamples, total - done));
+        if (const auto failure = file.read(samples.data() + kept, samples.size() - kept)) {
+            emitError(*failure, *id);
             return;
         }
-        auto detection = whisper_vad_default_params();
-        detection.threshold = 0.5f;
-        detection.min_speech_duration_ms = 120;
-        const std::unique_ptr<whisper_vad_segments, decltype(&whisper_vad_free_segments)> segments(
-            whisper_vad_segments_from_probs(vad, detection), whisper_vad_free_segments);
-        if (!segments) {
-            emitError("Local speech detection failed. Try recording again.", *id);
+        const auto window = nextWindow(vad, samples, total - done);
+        if (!window) {
+            emitError("Local speech detection failed. Retry transcription.", *id);
             return;
         }
-        audio.silent = whisper_vad_segments_n_segments(segments.get()) == 0;
-        // Keep the complete recording when there is speech; this avoids cutting
-        // off quiet word boundaries or short pauses inside a sentence.
+        if (window->hasSpeech) {
+            // The full API, unlike parakeet_chunk, also handles windows longer
+            // than the model's nominal encoder context without truncation.
+            if (parakeet_full(context, parameters, samples.data(), static_cast<int>(window->end)) != 0) {
+                emitError("Local transcription failed. Retry transcription.", *id);
+                return;
+            }
+            std::string part;
+            for (int i = 0; i < parakeet_full_n_segments(context); ++i) {
+                part += parakeet_full_get_segment_text(context, i);
+            }
+            part = trim(std::move(part));
+            if (!part.empty()) {
+                if (!text.empty()) text += ' ';
+                text += part;
+            }
+        }
+        done += window->end;
+        report(done);
+        // Keep the unconsumed suffix, including lookahead. No source frame is
+        // read twice, and consecutive ASR inputs neither overlap nor drop out.
+        samples.erase(samples.begin(), samples.begin() + window->end);
     }
-    if (!audio.silent) {
-        auto parameters = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
-        parameters.n_threads = threads;
-        parameters.no_context = true; // Never leak one dictation into the next.
-        parameters.progress_callback = reportProgress;
-        parameters.progress_callback_user_data = &progress;
-
-        // The full API handles complete recordings, including those longer than
-        // the model's nominal context. parakeet_chunk would truncate long takes.
-        if (parakeet_full(context, parameters, audio.samples.data(), static_cast<int>(audio.samples.size())) != 0) {
-            emitError("Local transcription failed. Try recording again.", *id);
-            return;
-        }
-        for (int i = 0; i < parakeet_full_n_segments(context); ++i) {
-            text += parakeet_full_get_segment_text(context, i);
-        }
-    }
-    reportProgress(nullptr, nullptr, 100, &progress);
     emit({{"type", "result"}, {"id", *id}, {"text", trim(std::move(text))},
-          {"duration", audio.duration}, {"elapsed", std::chrono::duration<double>(Clock::now() - start).count()},
+          {"duration", static_cast<double>(total) / PARAKEET_SAMPLE_RATE}, {"elapsed", std::chrono::duration<double>(Clock::now() - start).count()},
           // Parakeet auto-selects the spoken language but exposes no language ID
           // or vocabulary prompting API. Never claim a hint was applied.
           {"language", "auto"}, {"includedTerms", json::array()}, {"omittedTerms", terms},

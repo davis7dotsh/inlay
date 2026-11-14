@@ -6,6 +6,7 @@ public enum InlayAPI {
     public static let defaultPort = GeneratedShared.defaultPort
     public static let maximumRecordingSeconds = GeneratedShared.maximumRecordingSeconds
     public static let maximumChunkBytes = GeneratedShared.maximumChunkBytes
+    public static let maximumMetadataBytes = GeneratedShared.maximumMetadataBytes
     public static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -134,13 +135,21 @@ public struct ModelRuntimeInfo: Codable, Equatable, Sendable {
 public struct ServerHealth: Codable, Equatable, Sendable {
     public var apiVersion: Int
     public var serverVersion: String
+    public var maximumRecordingSeconds: Int?
+    public var supportedRecordingSeconds: Int {
+        // v4 servers predating capability negotiation enforce a three-minute limit.
+        let advertised = maximumRecordingSeconds.flatMap { $0 > 0 ? $0 : nil } ?? 180
+        return min(InlayAPI.maximumRecordingSeconds, advertised)
+    }
     public var isDev: Bool
     public var ready: Bool
     public var speech: ModelRuntimeInfo
     public var proofreading: ModelRuntimeInfo
     public var message: String?
     public init(apiVersion: Int = InlayAPI.version, serverVersion: String = "0.0.0-dev", isDev: Bool = true,
-                ready: Bool, speech: ModelRuntimeInfo, proofreading: ModelRuntimeInfo, message: String? = nil) {
+                ready: Bool, speech: ModelRuntimeInfo, proofreading: ModelRuntimeInfo, message: String? = nil,
+                maximumRecordingSeconds: Int? = nil) {
+        self.maximumRecordingSeconds = maximumRecordingSeconds
         self.apiVersion = apiVersion; self.serverVersion = serverVersion; self.isDev = isDev
         self.ready = ready; self.speech = speech; self.proofreading = proofreading; self.message = message
     }

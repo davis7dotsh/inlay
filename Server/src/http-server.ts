@@ -167,7 +167,10 @@ export function createHTTPServer(service: GenerationService) {
   );
 
   app.get("/v1/liveness", () => ({ status: "ok" }));
-  app.get("/v1/health", () => service.health());
+  // Older Swift clients reject unknown JSON keys, so don't send new capabilities unsolicited.
+  app.get<{ Querystring: { includeRecordingLimit?: string } }>("/v1/health", (request) =>
+    service.health(request.query.includeRecordingLimit === "true"),
+  );
   app.post("/v1/devices/enroll", async (request, reply) => {
     const result = await service.enrollDevice(
       validateBody("EnrollDeviceRequest", request.body),

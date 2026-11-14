@@ -433,9 +433,11 @@ struct RecordingElapsedTime: View {
     @State private var seconds = 0
 
     var body: some View {
-        Text(inlayDuration(Double(seconds)))
+        Text(verbatim: "0:00:00")
+            .hidden()
+            .overlay(alignment: .trailing) { Text(inlayDuration(Double(seconds))) }
             .monospacedDigit()
-            .frame(minWidth: 34, alignment: .trailing)
+            .accessibilityElement(children: .ignore)
             .onReceive(feedback.$elapsedSeconds.removeDuplicates()) { seconds = $0 }
             .accessibilityLabel("Recording time")
             .accessibilityValue(inlayDuration(Double(seconds)))
@@ -517,6 +519,7 @@ struct InlineNotice: View {
 
 func inlayDuration(_ seconds: Double) -> String {
     let total = max(0, Int(seconds.isFinite ? seconds : 0))
+    if total >= 3_600 { return String(format: "%d:%02d:%02d", total / 3_600, total / 60 % 60, total % 60) }
     return String(format: "%d:%02d", total / 60, total % 60)
 }
 
