@@ -125,7 +125,7 @@ final class InlayController: ObservableObject {
     let preferences: ClientPreferencesStore
     private let pendingStore: PendingGenerationsStore
     private var pendingEntries: [PendingGenerationEntry]
-    private var isReconcilingPending = false
+    private var connectionRevision = 0
     /// Client data directory; takes are spooled under its `recordings` folder.
     private let clientRoot: URL
     private var recoveryTask: Task<Void, Never>?
@@ -326,6 +326,7 @@ final class InlayController: ObservableObject {
         }
         isCheckingServer = true
         let endpoint = preferences.endpoint
+        let revision = connectionRevision
         defer { isCheckingServer = false }
         do {
             let connection = try client()
@@ -354,7 +355,7 @@ final class InlayController: ObservableObject {
                 }
             }
             if refreshData { await refreshDevices() }
-            await reconcilePendingGenerations()
+            await reconcilePendingGenerations(connection, endpoint: endpoint, revision: revision)
             if health.ready, health.apiVersion == InlayAPI.version, recoveryTask == nil,
                endpoint == preferences.endpoint, !isShuttingDown, !Task.isCancelled {
                 // Keep health checks independent; cancel this endpoint-bound job on a switch or quit.
@@ -382,17 +383,17 @@ final class InlayController: ObservableObject {
 
     func saveConnection(endpoint: String, token: String, deviceName: String) {
         guard !isBusy, !wisprImport.isImportRunning else { return }
+        let previousEndpoint = preferences.endpoint
         guard preferences.save(endpoint: endpoint, token: token, deviceName: deviceName) else {
             errorMessage = preferences.errorMessage
             return
         }
+        connectionRevision += 1
         continuationAnchors.removeAll()
         // Other servers' pending receipts stay on disk until the user switches back.
         recoveryTask?.cancel()
         spoolRetries.removeAll()
-        undeliveredResults.removeAll { result in
-            !pendingEntries.contains { $0.id == result.id && $0.endpoint == preferences.endpoint }
-        }
+        if previousEndpoint != preferences.endpoint { undeliveredResults.removeAll() }
         serverHealth = nil
         sharedPreferences = nil
         generations = []
@@ -652,7 +653,9 @@ final class InlayController: ObservableObject {
             let pending = pendingDictations.remove(at: index)
             pending.cancel()
             if let id = pending.id {
-                if !removePendingEntry(id) { discardError = "Could not save the cancellation. This result may reappear after relaunch." }
+                if let endpoint = pending.spool.manifest.endpoint, !removePendingEntry(id, endpoint: endpoint) {
+                    discardError = "Could not save the cancellation. This result may reappear after relaunch."
+                }
                 Task { try? await pending.client.cancel(id) }
             }
             discardError = discardRecording(pending.spool) ?? discardError
@@ -732,19 +735,6 @@ final class InlayController: ObservableObject {
             continuationID: finish.continuationID, isTest: isTest, sealedAt: Date())]
         guard pendingStore.save(next) else { throw CocoaError(.fileWriteUnknown) }
         pendingEntries = next
-    }
-
-    /// A lost upload acknowledgement leaves the server one chunk ahead of this
-    /// Mac's count, which `finish` rejects as incomplete. Seal with the
-    /// unacknowledged count instead of cancelling speech the server holds.
-    private static func seal(_ connection: ServerClient, id: UUID, finish: FinishGenerationRequest,
-                             fallback: FinishGenerationRequest?) async throws -> GenerationRecord {
-        do { return try await connection.finish(id, value: finish) }
-        catch {
-            guard let fallback, let clientError = error as? ServerClientError,
-                  case .rejected(409, _, "incomplete_audio") = clientError else { throw error }
-            return try await connection.finish(id, value: fallback)
-        }
     }
 
     private var deviceIdentity: DeviceIdentity { .init(id: preferences.deviceID, name: preferences.deviceName) }
@@ -854,7 +844,7 @@ final class InlayController: ObservableObject {
                 $0.sealingGenerationID = nil; $0.sealedInferenceFrames = nil
                 $0.sealedOriginalFrames = nil; $0.continuationID = nil
             }
-            removePendingEntry(sealed)
+            removePendingEntry(sealed, endpoint: endpoint)
             if incompleteUpload { Task { try? await connection.cancel(sealed) } }
         }
         let frames = spool.snapshot().inferenceBytes / 4
@@ -869,51 +859,63 @@ final class InlayController: ObservableObject {
     }
 
     @discardableResult
-    private func removePendingEntry(_ id: UUID) -> Bool {
-        guard pendingEntries.contains(where: { $0.id == id }) else { return true }
-        pendingEntries.removeAll { $0.id == id }
-        undeliveredResults.removeAll { $0.id == id }
+    private func removePendingEntry(_ id: UUID, endpoint: String) -> Bool {
+        let remaining = pendingEntries.filter { $0.id != id || $0.endpoint != endpoint }
+        guard remaining.count != pendingEntries.count else { return true }
+        pendingEntries = remaining
+        if endpoint == preferences.endpoint { undeliveredResults.removeAll { $0.id == id } }
         return pendingStore.save(pendingEntries)
     }
 
     /// Surfaces takes that finished on the server while this app was not
     /// tracking them. Completed results are copy-only here: never inserted.
-    private func reconcilePendingGenerations() async {
-        guard !isReconcilingPending, !pendingEntries.isEmpty else { return }
-        isReconcilingPending = true
-        defer { isReconcilingPending = false }
-        guard let connection = try? client() else { return }
-        // Takes this session still owns deliver themselves; never offer them for copy.
-        func isLive(_ id: UUID) -> Bool { pendingDictations.contains { $0.id == id } }
-        // A connection change during the read drops or re-scopes entries; skip those.
-        func isCurrent(_ entry: PendingGenerationEntry) -> Bool {
-            entry.endpoint == preferences.endpoint && pendingEntries.contains { $0.id == entry.id }
+    private func reconcilePendingGenerations(_ connection: ServerClient, endpoint: String, revision: Int) async {
+        // The health check owns this client. A settings change (even A → B → A)
+        // invalidates its reads and retries; another check will pick up the receipts.
+        func isCurrentConnection() -> Bool {
+            revision == connectionRevision && endpoint == preferences.endpoint && !isShuttingDown && !Task.isCancelled
         }
-        for entry in pendingEntries where isCurrent(entry) && !isLive(entry.id) {
+        func isUnowned(_ entry: PendingGenerationEntry) -> Bool {
+            pendingEntries.contains(entry) && !pendingDictations.contains { $0.id == entry.id }
+        }
+        func removeIfStillPending(_ entry: PendingGenerationEntry) {
+            if isCurrentConnection(), isUnowned(entry) { removePendingEntry(entry.id, endpoint: endpoint) }
+        }
+        for entry in pendingEntries where entry.endpoint == endpoint {
+            guard isCurrentConnection() else { return }
+            guard isUnowned(entry) else { continue }
             let record: GenerationRecord
             do { record = try await connection.generation(entry.id) }
-            catch ServerClientError.rejected(404, _, _) {
-                if isCurrent(entry) { removePendingEntry(entry.id) }; continue
-            } catch { continue }
-            guard isCurrent(entry), !isLive(entry.id) else { continue }
+            catch ServerClientError.rejected(404, _, _) { removeIfStillPending(entry); continue }
+            catch { continue }
+            guard isCurrentConnection() else { return }
+            guard isUnowned(entry) else { continue }
             switch record.status {
             case .completed:
                 if record.delivery == nil, !record.finalText.isEmpty {
                     if !undeliveredResults.contains(where: { $0.id == record.id }) {
                         undeliveredResults.append(record)
                     }
-                } else { removePendingEntry(entry.id) }
+                } else { removePendingEntry(entry.id, endpoint: endpoint) }
             case .failed, .cancelled:
-                removePendingEntry(entry.id)
+                removePendingEntry(entry.id, endpoint: endpoint)
             case .receiving:
                 do {
-                    _ = try await Self.seal(connection, id: entry.id, finish: FinishGenerationRequest(
-                        inferenceFrames: entry.inferenceFrames, originalFrames: entry.originalFrames, continuationID: entry.continuationID),
-                        fallback: entry.fallbackInferenceFrames.map { .init(inferenceFrames: $0, originalFrames: nil) })
+                    let finish = FinishGenerationRequest(inferenceFrames: entry.inferenceFrames, originalFrames: entry.originalFrames,
+                                                         continuationID: entry.continuationID)
+                    do { _ = try await connection.finish(entry.id, value: finish) }
+                    catch let error as ServerClientError {
+                        // A lost upload acknowledgement may leave the server one chunk ahead.
+                        guard case .rejected(409, _, "incomplete_audio") = error,
+                              let frames = entry.fallbackInferenceFrames else { throw error }
+                        guard isCurrentConnection() else { return }
+                        guard isUnowned(entry) else { continue }
+                        _ = try await connection.finish(entry.id, value: .init(inferenceFrames: frames, originalFrames: nil))
+                    }
                 } catch let ServerClientError.rejected(status, _, _) where (400..<500).contains(status) && ![401, 403, 408, 429].contains(status) {
                     // Auth failures may come from a credential the user has just
                     // replaced; they do not prove the speech is unrecoverable.
-                    if isCurrent(entry) { removePendingEntry(entry.id) }
+                    removeIfStillPending(entry)
                 } catch {}
             case .queued, .transcribing, .proofreading:
                 break
@@ -930,7 +932,7 @@ final class InlayController: ObservableObject {
             lastTranscriptionSeconds = (record.speech?.processingSeconds ?? 0) + (record.proofreading?.processingSeconds ?? 0)
             lastDelivery = "Copied to clipboard"
             lastDeliveryStatus = .copied
-            removePendingEntry(record.id)
+            removePendingEntry(record.id, endpoint: preferences.endpoint)
             let connection = try? client()
             Task {
                 try? await connection?.delivery(record.id, receipt: DeliveryReceipt(
@@ -1195,7 +1197,7 @@ final class InlayController: ObservableObject {
         let task = Task { [weak self] in
             guard let self else { return }
             defer {
-                if pending.resolved, let id = pending.id { removePendingEntry(id) }
+                if pending.resolved, let id = pending.id { removePendingEntry(id, endpoint: endpoint) }
                 pendingDictations.removeAll { $0 === pending }
                 if !isShuttingDown { refreshSavedRecordingCount() }
                 if pendingDictations.isEmpty {
@@ -1254,7 +1256,7 @@ final class InlayController: ObservableObject {
                 try addPendingEntry(id: id, endpoint: endpoint, finish: finish, isTest: test)
                 pending.sealed = true // A lost response is not a rejected seal.
                 var result: GenerationRecord
-                do { result = try await Self.seal(connection, id: id, finish: finish, fallback: nil) }
+                do { result = try await connection.finish(id, value: finish) }
                 catch let ServerClientError.rejected(status, message, code) where (400..<500).contains(status) && ![408, 429].contains(status) {
                     pending.sealed = false // The server answered without sealing, so cancel promptly.
                     throw ServerClientError.rejected(status, message, code)
@@ -1467,7 +1469,7 @@ final class InlayController: ObservableObject {
         for pending in pendingDictations {
             pending.cancel()
             if !pending.sealed, let id = pending.id {
-                removePendingEntry(id)
+                if let endpoint = pending.spool.manifest.endpoint { removePendingEntry(id, endpoint: endpoint) }
                 Task { try? await pending.client.cancel(id) }
             }
         }

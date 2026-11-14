@@ -309,6 +309,7 @@ interface Watcher {
 export class GenerationService {
   private preferences: PreferencesSnapshot = defaultPreferences();
   private records = new Map<string, GenerationRecord>();
+  private deferredArchives = new Set<string>();
   private uploads = new Map<string, Partial<Record<AudioKind, Upload>>>();
   private processingControllers = new Map<string, AbortController>();
   private speechStageQueue: Promise<unknown> = Promise.resolve();
@@ -400,6 +401,12 @@ export class GenerationService {
   private stored(id: string) {
     const record = this.records.get(id.toUpperCase());
     if (!record) throw new ServiceError(404, "not_found", "Recording not found.");
+    if (this.deferredArchives.has(record.id))
+      throw new ServiceError(
+        503,
+        "archive_unavailable",
+        "The server could not verify this recording. Restore archive access and restart the server.",
+      );
     return record;
   }
   private getInternal(id: string) {
@@ -436,7 +443,12 @@ export class GenerationService {
         await file.close();
       }
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error.code === "ENOENT" || error.code === "ELOOP")
+      )
+        return false;
       throw error;
     }
   }
@@ -518,31 +530,41 @@ export class GenerationService {
           throw new ServiceError(500, "invalid_archive", "A generation has invalid metadata.");
         record.id = id;
         if (!terminal(record)) {
-          const wasReceiving = record.status === "receiving";
-          const sealed = !wasReceiving && (await this.hasSealedInference(record));
-          if (sealed) {
-            record.status = "queued";
-            record.progress = 0;
-            delete record.error;
-            record.updatedAt = now();
-            requeue.push({ id, createdAt: record.createdAt });
-          } else {
+          try {
+            const wasReceiving = record.status === "receiving";
+            const sealed = !wasReceiving && (await this.hasSealedInference(record));
+            if (sealed) {
+              record.status = "queued";
+              record.progress = 0;
+              delete record.error;
+              record.updatedAt = now();
+            } else {
+              record.status = "failed";
+              record.error = wasReceiving
+                ? "Server restarted before this generation completed."
+                : "Sealed audio is missing or incomplete, so this generation cannot be transcribed.";
+              record.updatedAt = now();
+              delete record.progress;
+              await this.cleanPartial(record, wasReceiving);
+              // Do not advertise an absent/truncated archive. Leave damaged files
+              // in place for manual salvage; only uncommitted staging is cleaned.
+              if (!wasReceiving) delete record.inferenceAudio;
+            }
+            if (Buffer.byteLength(JSON.stringify(record)) <= MAXIMUM_METADATA_BYTES)
+              await atomicPrivateWrite(
+                join(this.directory(id), "metadata.json"),
+                JSON.stringify(record),
+              );
+            if (sealed) requeue.push({ id, createdAt: record.createdAt });
+          } catch (error) {
+            // Valid metadata, but an I/O failure prevents confirming its seal. Keep it
+            // visible in History and retry on restart; never let these frame counts
+            // acknowledge a client spool or let retention remove the archive.
             record.status = "failed";
-            record.error = wasReceiving
-              ? "Server restarted before this generation completed."
-              : "Sealed audio is missing or incomplete, so this generation cannot be transcribed.";
-            record.updatedAt = now();
             delete record.progress;
-            await this.cleanPartial(record, wasReceiving);
-            // Do not advertise an absent/truncated archive. Leave damaged files
-            // in place for manual salvage; only uncommitted staging is cleaned.
-            if (!wasReceiving) delete record.inferenceAudio;
+            this.deferredArchives.add(id);
+            logWarn("generation_recovery_deferred", { id }, error);
           }
-          if (Buffer.byteLength(JSON.stringify(record)) <= MAXIMUM_METADATA_BYTES)
-            await atomicPrivateWrite(
-              join(this.directory(id), "metadata.json"),
-              JSON.stringify(record),
-            );
         }
         this.records.set(id, record);
         this.imports.indexRecord(record);
@@ -797,7 +819,7 @@ export class GenerationService {
           record.requestID.toUpperCase() === request.requestID.toUpperCase() &&
           record.device.id === request.device.id,
       );
-      if (existing) return copy(existing);
+      if (existing) return this.getInternal(existing.id);
       const active = [...this.records.values()].filter((record) => !terminal(record)).length;
       if (active >= MAX_ACTIVE_GENERATIONS)
         throw new ServiceError(
@@ -1364,7 +1386,8 @@ export class GenerationService {
   ) {
     return this.withGenerationLock(id, async () => {
       const record = this.records.get(id);
-      if (!record || !terminal(record) || !eligible(record)) return 0;
+      if (!record || this.deferredArchives.has(id) || !terminal(record) || !eligible(record))
+        return 0;
       return this.purgeAudio(record, kinds);
     });
   }

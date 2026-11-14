@@ -33,7 +33,7 @@ Capture writes raw PCM under `recordings/<take>/` in the private client data dir
 
 If a live upload expires or is rejected, the client can upload the saved take to a fresh generation. Interrupted uploads expire on the server after ten idle minutes. The client persists upload identity and seal counts so that a lost acknowledgement can be reconciled without duplicating the recording. After quitting, crashing, or recording offline, Inlay retries saved dictations when the same server is ready. Recovered results are offered for manual copy; they never write to the clipboard or an earlier cursor automatically. Microphone-test spools are not replayed after relaunch.
 
-Once the server has the sealed audio, it owns processing independently of the app. On restart, the server requeues unfinished generations with sealed inference audio and marks unsealed ones failed. Completed history is retained; opening it never triggers insertion.
+Once the server has the sealed audio, it owns processing independently of the app. On restart, the server requeues unfinished generations with sealed inference audio and marks unsealed ones failed. If the server cannot read a sealed file, History shows the take as failed without moving or deleting it. Restore file access and restart the server to retry; until then the Mac keeps any unacknowledged local copy. Completed history is retained; opening it never triggers insertion.
 
 ## Text delivery
 
