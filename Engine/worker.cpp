@@ -49,7 +49,13 @@ constexpr size_t maxRequestBytes = 1024 * 1024;
 constexpr size_t maxVocabularyBytes = 384 * 1024;
 constexpr size_t maxPromptBytes = 8192;
 constexpr size_t minSamples = PARAKEET_SAMPLE_RATE / 5;
-constexpr size_t maxSamples = PARAKEET_SAMPLE_RATE * 180;
+constexpr size_t maxRecordingSeconds = 7200;
+constexpr size_t maxSamples = PARAKEET_SAMPLE_RATE * maxRecordingSeconds;
+// Parakeet's dynamic encoder attends across the whole clip, so memory grows
+// quadratically with length. Long takes are decoded in bounded windows cut at
+// detected pauses; anything up to one window is a single unchanged pass.
+constexpr size_t windowSamples = PARAKEET_SAMPLE_RATE * 120;
+constexpr size_t preferredCutSamples = PARAKEET_SAMPLE_RATE * 60;
 
 void emit(const json &event) {
     std::cout << event.dump(-1, ' ', false, json::error_handler_t::replace) << '\n' << std::flush;
@@ -110,8 +116,8 @@ std::variant<Audio, std::string> readAudio(const std::string &path) {
         return "The recording is missing or is not a regular file.";
     }
     const auto bytes = std::filesystem::file_size(path, error);
-    if (error || bytes > 32 * 1024 * 1024) {
-        return "The recording cannot be read or exceeds the 32 MB limit.";
+    if (error || bytes > maxSamples * sizeof(float) + 64 * 1024) {
+        return "The recording cannot be read or exceeds the two-hour limit.";
     }
 
     ma_dr_wav wav{};
@@ -128,7 +134,7 @@ std::variant<Audio, std::string> readAudio(const std::string &path) {
         return "The recording must use PCM16 or float32 WAV samples.";
     }
     if (wav.totalPCMFrameCount < minSamples || wav.totalPCMFrameCount > maxSamples) {
-        return "Record between 0.2 seconds and 3 minutes of audio.";
+        return "Record between 0.2 seconds and 2 hours of audio.";
     }
 
     std::vector<float> samples(static_cast<size_t>(wav.totalPCMFrameCount));
@@ -159,14 +165,69 @@ std::string trim(std::string text) {
 struct Progress {
     const std::string &id;
     int last = -1;
+    // The current window's share of the whole recording, in samples.
+    size_t done = 0;
+    size_t span = 0;
+    size_t total = 0;
 };
 
 void reportProgress(parakeet_context *, parakeet_state *, int value, void *opaque) {
     auto &progress = *static_cast<Progress *>(opaque);
     value = std::clamp(value, 0, 100);
+    if (progress.total > 0) {
+        const double whole = (progress.done + progress.span * (value / 100.0)) / progress.total;
+        value = std::clamp(static_cast<int>(whole * 100), 0, 100);
+    }
     if (value <= progress.last) return;
     progress.last = value;
     emit({{"type", "progress"}, {"id", progress.id}, {"value", value / 100.0}});
+}
+
+struct Window {
+    size_t start;
+    size_t end;
+};
+
+// Splits [0, total) into windows of at most windowSamples. Each cut lands in
+// the middle of the longest pause found in the window's later half, then the
+// latest pause, and only falls back to a hard cut during unbroken speech.
+// Windows without detected speech are dropped.
+std::vector<Window> speechWindows(size_t total, const std::vector<Window> &speech) {
+    std::vector<Window> gaps;
+    size_t previous = 0;
+    for (const auto &segment : speech) {
+        if (segment.start > previous) gaps.push_back({previous, segment.start});
+        previous = std::max(previous, segment.end);
+    }
+    if (previous < total) gaps.push_back({previous, total});
+
+    std::vector<Window> windows;
+    size_t start = 0;
+    while (start < total) {
+        size_t end = total;
+        if (total - start > windowSamples) {
+            const size_t limit = start + windowSamples;
+            std::optional<Window> best;
+            std::optional<size_t> latest;
+            for (const auto &gap : gaps) {
+                // Only the part of a pause inside this window is a usable cut.
+                const Window usable{std::max(gap.start, start), std::min(gap.end, limit)};
+                if (usable.end <= usable.start) continue;
+                const size_t middle = usable.start + (usable.end - usable.start) / 2;
+                if (middle <= start) continue;
+                latest = middle;
+                if (middle >= start + preferredCutSamples &&
+                    (!best || usable.end - usable.start > best->end - best->start)) best = usable;
+            }
+            end = best ? best->start + (best->end - best->start) / 2 : latest.value_or(limit);
+        }
+        const bool hasSpeech = std::any_of(speech.begin(), speech.end(), [&](const Window &segment) {
+            return segment.start < end && segment.end > start;
+        });
+        if (hasSpeech) windows.push_back({start, end});
+        start = end;
+    }
+    return windows;
 }
 
 std::optional<std::string> stringField(const json &request, const char *key) {
@@ -251,6 +312,7 @@ void transcribe(parakeet_context *context, whisper_vad_context *vad, int threads
     Progress progress{*id};
     reportProgress(nullptr, nullptr, 0, &progress);
     std::string text;
+    std::vector<Window> speech;
     if (!audio.silent) {
         // A small CPU-only Silero pass rejects fan noise, tones, and other
         // nonspeech before recognition.
@@ -268,25 +330,49 @@ void transcribe(parakeet_context *context, whisper_vad_context *vad, int threads
             emitError("Local speech detection failed. Try recording again.", *id);
             return;
         }
-        audio.silent = whisper_vad_segments_n_segments(segments.get()) == 0;
-        // Keep the complete recording when there is speech; this avoids cutting
-        // off quiet word boundaries or short pauses inside a sentence.
+        // Segment times are centiseconds.
+        const auto toSample = [&](float centiseconds) {
+            const double sample = std::max(0.0, static_cast<double>(centiseconds)) * PARAKEET_SAMPLE_RATE / 100.0;
+            return std::min(audio.samples.size(), static_cast<size_t>(sample));
+        };
+        for (int i = 0; i < whisper_vad_segments_n_segments(segments.get()); ++i) {
+            const auto start = toSample(whisper_vad_segments_get_segment_t0(segments.get(), i));
+            const auto end = toSample(whisper_vad_segments_get_segment_t1(segments.get(), i));
+            if (end > start) speech.push_back({start, end});
+        }
+        audio.silent = speech.empty();
+        // Keep the complete recording (or complete windows of it) when there is
+        // speech; this avoids cutting off quiet word boundaries or short pauses.
     }
     if (!audio.silent) {
         auto parameters = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
         parameters.n_threads = threads;
-        parameters.no_context = true; // Never leak one dictation into the next.
+        parameters.no_context = true; // Never leak one dictation (or window) into the next.
         parameters.progress_callback = reportProgress;
         parameters.progress_callback_user_data = &progress;
 
         // The full API handles complete recordings, including those longer than
         // the model's nominal context. parakeet_chunk would truncate long takes.
-        if (parakeet_full(context, parameters, audio.samples.data(), static_cast<int>(audio.samples.size())) != 0) {
-            emitError("Local transcription failed. Try recording again.", *id);
-            return;
-        }
-        for (int i = 0; i < parakeet_full_n_segments(context); ++i) {
-            text += parakeet_full_get_segment_text(context, i);
+        const auto windows = audio.samples.size() <= windowSamples
+            ? std::vector<Window>{{0, audio.samples.size()}}
+            : speechWindows(audio.samples.size(), speech);
+        progress.total = audio.samples.size();
+        for (const auto &window : windows) {
+            progress.done = window.start;
+            progress.span = window.end - window.start;
+            if (parakeet_full(context, parameters, audio.samples.data() + window.start,
+                              static_cast<int>(window.end - window.start)) != 0) {
+                emitError("Local transcription failed. Try recording again.", *id);
+                return;
+            }
+            std::string part;
+            for (int i = 0; i < parakeet_full_n_segments(context); ++i) {
+                part += parakeet_full_get_segment_text(context, i);
+            }
+            part = trim(std::move(part));
+            if (part.empty()) continue;
+            if (!text.empty()) text += ' ';
+            text += part;
         }
     }
     reportProgress(nullptr, nullptr, 100, &progress);

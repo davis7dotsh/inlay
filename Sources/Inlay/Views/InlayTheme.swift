@@ -517,6 +517,7 @@ struct InlineNotice: View {
 
 func inlayDuration(_ seconds: Double) -> String {
     let total = max(0, Int(seconds.isFinite ? seconds : 0))
+    if total >= 3_600 { return String(format: "%d:%02d:%02d", total / 3_600, total / 60 % 60, total % 60) }
     return String(format: "%d:%02d", total / 60, total % 60)
 }
 

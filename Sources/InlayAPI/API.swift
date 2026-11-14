@@ -6,6 +6,7 @@ public enum InlayAPI {
     public static let defaultPort = GeneratedShared.defaultPort
     public static let maximumRecordingSeconds = GeneratedShared.maximumRecordingSeconds
     public static let maximumChunkBytes = GeneratedShared.maximumChunkBytes
+    public static let maximumMetadataBytes = GeneratedShared.maximumMetadataBytes
     public static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

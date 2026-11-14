@@ -30,6 +30,7 @@ import {
   MAXIMUM_CHUNK_BYTES,
   MAXIMUM_METADATA_BYTES,
   MAXIMUM_PREFERENCES_BYTES,
+  MAXIMUM_RECORDING_SECONDS,
 } from "./api.ts";
 import { decodePersonalDictionary } from "./domain/dictionary.ts";
 import { validateBody } from "./validation.ts";
@@ -63,8 +64,18 @@ import { evaluateCorrectionInWorker } from "./domain/correction-runtime.ts";
 import { maxInputCharacters, modelHints, processingRecord } from "./domain/correction.ts";
 
 const MAX_ACTIVE_GENERATIONS = 12;
-const RECEIVING_IDLE_MS = 120_000;
-const RECEIVING_TOTAL_MS = 900_000;
+// A client keeps its own copy of every take and resumes a stalled upload, so a
+// receiving session survives a long network outage before it is cancelled.
+const RECEIVING_IDLE_MS = 600_000;
+// Room for the longest take plus time to catch up a delayed upload.
+const RECEIVING_TOTAL_MS = (MAXIMUM_RECORDING_SECONDS + 3_600) * 1_000;
+// Inference uploads arrive in roughly half-second chunks.
+const MAXIMUM_CHUNK_SEQUENCE = 65_536;
+// Original audio is optional archival; its WAV header holds a 32-bit size.
+// Mirrored by OriginalAudioPolicy in Sources/Inlay/System/AudioRecorder.swift.
+const MAXIMUM_ORIGINAL_STREAM_BYTES = 4_000_000_000;
+// Transcript text is bounded by the speech helper's response limit.
+const MAXIMUM_TRANSCRIPT_BYTES = 512 * 1024;
 // Event streams repeat the latest record on every tick unless a line went out
 // within the last half interval, so subscribers see a line at least every ~3 s.
 const HEARTBEAT_MS = 2_000;
@@ -77,6 +88,68 @@ const isUUID = (value: string) =>
 const copy = <T>(value: T): T => structuredClone(value);
 const graphemes = (text: string) =>
   [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].length;
+
+// One Qwen request stops after ~15 s, so long transcripts are proofread in
+// sentence-aligned parts. Shorter takes keep their single, whole-text request.
+const PROOF_WHOLE_GRAPHEMES = 2_400;
+const PROOF_PART_GRAPHEMES = 1_200;
+type ProofreadPart = Pick<
+  TextProcessingRecord,
+  | "status"
+  | "outputText"
+  | "proposedText"
+  | "verifiedRepairs"
+  | "processingSeconds"
+  | "engineVersion"
+  | "modelSHA256"
+  | "reason"
+> & { offset: number; text: string };
+
+/** Exact slices of `text` (they concatenate back to it), each within the part budget. */
+function proofreadingParts(text: string): { offset: number; text: string }[] {
+  if (graphemes(text) <= PROOF_WHOLE_GRAPHEMES) return [{ offset: 0, text }];
+  // Sentences keep their trailing whitespace; an unpunctuated run is split at spaces.
+  const pieces: string[] = [];
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: "sentence" }).segment(
+    text,
+  )) {
+    if (graphemes(segment) <= PROOF_PART_GRAPHEMES) {
+      pieces.push(segment);
+      continue;
+    }
+    let run = "";
+    for (const word of segment.split(/(?<=\s)/u)) {
+      if (run && graphemes(run) + graphemes(word) > PROOF_PART_GRAPHEMES) {
+        pieces.push(run);
+        run = "";
+      }
+      run += word;
+    }
+    if (run) pieces.push(run);
+  }
+  const parts: { offset: number; text: string }[] = [];
+  let offset = 0;
+  let current = "";
+  for (const piece of pieces) {
+    if (current && graphemes(current) + graphemes(piece) > PROOF_PART_GRAPHEMES) {
+      parts.push({ offset, text: current });
+      offset += current.length;
+      current = "";
+    }
+    current += piece;
+  }
+  if (current) parts.push({ offset, text: current });
+  return parts;
+}
+
+const shiftRepair = (
+  repair: NonNullable<TextProcessingRecord["verifiedRepairs"]>[number],
+  offset: number,
+) => ({
+  abandoned: { ...repair.abandoned, locationUTF16: repair.abandoned.locationUTF16 + offset },
+  cue: { ...repair.cue, locationUTF16: repair.cue.locationUTF16 + offset },
+  replacement: { ...repair.replacement, locationUTF16: repair.replacement.locationUTF16 + offset },
+});
 
 import { DEFAULT_PROOFREADING_PROMPT } from "./generated/shared.ts";
 
@@ -772,7 +845,7 @@ export class GenerationService {
           "original_disabled",
           "Original audio retention was disabled for this recording.",
         );
-      if (!Number.isInteger(sequence) || sequence < 0 || sequence >= 4096)
+      if (!Number.isInteger(sequence) || sequence < 0 || sequence >= MAXIMUM_CHUNK_SEQUENCE)
         throw new ServiceError(
           413,
           "chunk_limit",
@@ -857,11 +930,14 @@ export class GenerationService {
       if (sequence !== upload.chunks.length)
         throw new ServiceError(409, "missing_chunk", "Audio chunks must arrive in sequence.");
       const nextBytes = upload.bytes + bytes.length;
-      if (nextBytes / (format.sampleRate * format.channels * 4) > 180.1 || nextBytes > 268_435_456)
+      if (
+        nextBytes / (format.sampleRate * format.channels * 4) > MAXIMUM_RECORDING_SECONDS + 0.1 ||
+        nextBytes > MAXIMUM_ORIGINAL_STREAM_BYTES
+      )
         throw new ServiceError(
           413,
           "recording_limit",
-          "Recordings are limited to 180 seconds and 256 MiB per audio stream.",
+          `Recordings are limited to ${MAXIMUM_RECORDING_SECONDS / 3_600} hours and 4 GB per audio stream.`,
         );
       if (upload.bytes === 0) await requireDiskSpace(this.configuration.dataDirectory);
       const file = await open(
@@ -928,11 +1004,11 @@ export class GenerationService {
           "Inference audio has not been completely uploaded.",
         );
       const duration = speech.bytes / 64000;
-      if (duration < 0.25 || duration > 180)
+      if (duration < 0.25 || duration > MAXIMUM_RECORDING_SECONDS)
         throw new ServiceError(
           400,
           "invalid_duration",
-          "Recordings must be between 0.25 and 180 seconds.",
+          `Recordings must be between 0.25 seconds and ${MAXIMUM_RECORDING_SECONDS / 3_600} hours.`,
         );
       const original = streams?.original;
       let sealOriginal = original;
@@ -1567,7 +1643,7 @@ export class GenerationService {
           processingSeconds: speech.processingSeconds,
         };
         const cleaned = cleanTranscript(speech.text);
-        const transcript = applyDictionary(settings.dictionary, cleaned, 24 * 1024);
+        const transcript = applyDictionary(settings.dictionary, cleaned, MAXIMUM_TRANSCRIPT_BYTES);
         const structured = formatSpokenList(transcript, previous?.list);
         record.formattingRejectionReason = structured.formattingRejectionReason;
         record.consumedListControls = structured.consumedControls;
@@ -1700,8 +1776,77 @@ export class GenerationService {
       });
     if (!settings.textCorrectionEnabled) return make("disabled");
     if (!text) return make("skipped", { reason: "No text to correct." });
+    const parts = proofreadingParts(text);
+    const results: ProofreadPart[] = [];
+    for (const part of parts) {
+      const core = part.text.trim();
+      if (!core) {
+        results.push({ ...part, status: "unchanged", outputText: part.text });
+        continue;
+      }
+      const lead = part.text.slice(0, part.text.length - part.text.trimStart().length);
+      const tail = part.text.slice(part.text.trimEnd().length);
+      const result = await this.proofreadPart(core, settings, terms, language, signal);
+      results.push({
+        ...result,
+        offset: part.offset + lead.length,
+        text: part.text,
+        outputText: lead + result.outputText + tail,
+      });
+    }
+    if (results.length === 1) {
+      const [only] = results;
+      const { offset: _offset, text: _text, outputText, ...extra } = only!;
+      // A single part is the whole transcript; keep its exact trimmed shape.
+      return make(only!.status, {
+        ...extra,
+        outputText: only!.status === "applied" ? outputText.trim() : text,
+      });
+    }
+    const statuses = results.map((result) => result.status);
+    const status: TextProcessingRecord["status"] = statuses.includes("applied")
+      ? "applied"
+      : statuses.every((value) => value === "unchanged")
+        ? "unchanged"
+        : statuses.includes("rejected")
+          ? "rejected"
+          : "failed";
+    const kept = results.filter(
+      (result) => result.status === "rejected" || result.status === "failed",
+    );
+    const outputText = results.map((result) => result.outputText).join("");
+    const first = results.find((result) => result.engineVersion !== undefined);
+    return make(status, {
+      outputText: status === "applied" ? outputText : text,
+      proposedText: results.map((result) => result.proposedText ?? result.text).join(""),
+      verifiedRepairs: results.flatMap((result) =>
+        (result.verifiedRepairs ?? []).map((repair) => shiftRepair(repair, result.offset)),
+      ),
+      processingSeconds: results.reduce(
+        (total, result) => total + (result.processingSeconds ?? 0),
+        0,
+      ),
+      engineVersion: first?.engineVersion,
+      modelSHA256: first?.modelSHA256,
+      reason: kept.length
+        ? `Proofread in ${results.length} parts; ${kept.length} kept the original wording (${kept[0]!.reason ?? "rejected"}).`
+        : undefined,
+    });
+  }
+  /** One bounded Qwen request; never throws except on cancellation. */
+  private async proofreadPart(
+    text: string,
+    settings: ServerPreferences,
+    terms: string[],
+    language: string,
+    signal: AbortSignal,
+  ): Promise<Omit<ProofreadPart, "offset" | "text">> {
     if (graphemes(text) > maxInputCharacters)
-      return make("skipped", { reason: "The transcript exceeded the correction length limit." });
+      return {
+        status: "skipped",
+        outputText: text,
+        reason: "The transcript exceeded the correction length limit.",
+      };
     try {
       const proof = await this.inference.correct(
         text,
@@ -1722,13 +1867,15 @@ export class GenerationService {
         modelSHA256: proof.modelSHA256,
       };
       return evaluation.rejectionReason
-        ? make("rejected", { ...extra, reason: evaluation.rejectionReason })
-        : make(candidate === text ? "unchanged" : "applied", { ...extra, outputText: candidate });
+        ? { ...extra, status: "rejected", outputText: text, reason: evaluation.rejectionReason }
+        : { ...extra, status: candidate === text ? "unchanged" : "applied", outputText: candidate };
     } catch (error) {
       signal.throwIfAborted();
-      return make("failed", {
+      return {
+        status: "failed",
+        outputText: text,
         reason: error instanceof Error ? error.message : "Proofreading failed.",
-      });
+      };
     }
   }
   private async save(record: GenerationRecord) {
@@ -1738,7 +1885,7 @@ export class GenerationService {
       throw new ServiceError(
         413,
         "metadata_too_large",
-        "The generation metadata exceeded its 1 MiB storage limit.",
+        "The generation metadata exceeded its 4 MiB storage limit.",
       );
     await atomicPrivateWrite(join(this.directory(record.id), "metadata.json"), data);
     this.publish(record);

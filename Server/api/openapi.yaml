@@ -10,7 +10,7 @@ security:
   - bearerAuth: []
 x-inlay-apiVersion: 4
 x-inlay-defaultPort: 8391
-x-inlay-maximumRecordingSeconds: 180
+x-inlay-maximumRecordingSeconds: 7200
 x-inlay-maximumChunkBytes: 1048576
 x-inlay-maximumArtifactBytes: 8388608
 x-inlay-maximumDictionaryBytes: 8388608
@@ -34,7 +34,7 @@ x-inlay-supportedLanguages:
     "uk",
     "sv",
   ]
-x-inlay-maximumMetadataBytes: 1048576
+x-inlay-maximumMetadataBytes: 4194304
 x-inlay-maximumPreferencesBytes: 262144
 paths:
   "/v1/liveness":

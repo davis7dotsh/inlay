@@ -126,6 +126,11 @@ final class InlayController: ObservableObject {
     private let pendingStore: PendingGenerationsStore
     private var pendingEntries: [PendingGenerationEntry]
     private var isReconcilingPending = false
+    /// Client data directory; takes are spooled under its `recordings` folder.
+    private let clientRoot: URL
+    private var isRecoveringSpools = false
+    /// Per-spool retry backoff for recovery uploads, keyed by spool ID.
+    private var spoolRetries: [UUID: (failures: Int, nextAttempt: Date)] = [:]
 
     var isRecording: Bool { activity == .recording }
     var isCapturing: Bool { activity.isCapturing }
@@ -168,7 +173,7 @@ final class InlayController: ObservableObject {
     /// Released takes in recording order. The newest may own the HUD via sessionID.
     @Published private var pendingDictations: [PendingDictation] = []
     private var uploadTask: Task<UploadOutcome, Error>?
-    private var uploadPipe: AudioChunkPipe?
+    private var activeSpool: RecordingSpool?
     private var refreshTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
     private var hudTask: Task<Void, Never>?
@@ -182,10 +187,12 @@ final class InlayController: ObservableObject {
     @MainActor
     private final class PendingDictation {
         let session: UUID
-        let id: UUID
+        /// The live generation, replaced if its upload fails and the spool is
+        /// re-uploaded to a fresh one.
+        var id: UUID
         let client: ServerClient
         let upload: Task<UploadOutcome, Error>
-        let pipe: AudioChunkPipe
+        let spool: RecordingSpool
         let destination: InsertionDestinationCapture?
         let salvaged: Bool
         var task: Task<Void, Never>?
@@ -195,13 +202,14 @@ final class InlayController: ObservableObject {
         var target: (destination: InsertionDestination, anchor: DictationDestination?)?
 
         init(session: UUID, id: UUID, client: ServerClient, upload: Task<UploadOutcome, Error>,
-             pipe: AudioChunkPipe, destination: InsertionDestinationCapture?, salvaged: Bool = false) {
+             spool: RecordingSpool, destination: InsertionDestinationCapture?, salvaged: Bool = false) {
             self.session = session; self.id = id; self.client = client; self.upload = upload
-            self.pipe = pipe; self.destination = destination; self.salvaged = salvaged
+            self.spool = spool; self.destination = destination; self.salvaged = salvaged
         }
 
+        /// Stops work but keeps the spool, so quitting never loses a take.
         func cancel() {
-            task?.cancel(); upload.cancel(); pipe.cancel(); destination?.cancel()
+            task?.cancel(); upload.cancel(); destination?.cancel()
         }
     }
     @Published private var insertionDestination: InsertionDestination?
@@ -232,6 +240,7 @@ final class InlayController: ObservableObject {
         self.recorder = recorder ?? AudioRecorder()
         self.audioDevices = audioDevices ?? AudioDeviceStore()
         self.serverClientFactory = serverClient
+        clientRoot = configuration.url.deletingLastPathComponent()
         preferences = ClientPreferencesStore(root: configuration.url.deletingLastPathComponent())
         let loadedPendingStore = PendingGenerationsStore(root: configuration.url.deletingLastPathComponent())
         pendingStore = loadedPendingStore
@@ -323,6 +332,10 @@ final class InlayController: ObservableObject {
             }
             if refreshData { await refreshDevices() }
             await reconcilePendingGenerations()
+            if health.ready, health.apiVersion == InlayAPI.version, !isRecoveringSpools {
+                // Long uploads must not hold up health checks.
+                Task { [weak self] in await self?.recoverSavedRecordings(connection) }
+            }
         } catch is CancellationError {
         } catch {
             guard endpoint == preferences.endpoint, !Task.isCancelled else { return }
@@ -604,6 +617,7 @@ final class InlayController: ObservableObject {
         } else if activity.isBusy, let index = pendingDictations.lastIndex(where: { $0.session == sessionID }) {
             let pending = pendingDictations.remove(at: index)
             pending.cancel()
+            pending.spool.discard()
             Task { try? await pending.client.cancel(pending.id) }
         } else if let earlier = pendingDictations.last {
             // The HUD shows a settled result or error. Dismissing it must not
@@ -630,17 +644,19 @@ final class InlayController: ObservableObject {
         onHUDVisibility?(true)
     }
 
-    private func resetSession() {
+    /// `keepSpool` leaves captured audio on disk for recovery (quitting);
+    /// every other reset discards it.
+    private func resetSession(keepSpool: Bool = false) {
         sessionID = UUID()
         hotkey.clearLatchedTake()
         microphoneStartTask?.cancel(); microphoneStartTask = nil
-        uploadPipe?.cancel(); uploadPipe = nil
+        if keepSpool { activeSpool?.finish() } else { activeSpool?.discard() }
+        activeSpool = nil
         uploadTask?.cancel(); uploadTask = nil
         destinationTask?.cancel(); destinationTask = nil
         stopRecordingTimer()
         recorder.cancel()
         outputMuter.restore()
-        recorder.onChunk = nil
         insertionDestination = nil
         recordingListHint = nil
         recordingInputName = nil
@@ -679,6 +695,91 @@ final class InlayController: ObservableObject {
                   case .rejected(409, _, "incomplete_audio") = clientError else { throw error }
             return try await connection.finish(id, value: fallback)
         }
+    }
+
+    private var deviceIdentity: DeviceIdentity { .init(id: preferences.deviceID, name: preferences.deviceName) }
+
+    /// Uploads a finished spool, start to end, to a new generation. The create
+    /// request ID is persisted first, so a retry replays rather than duplicates.
+    private static func uploadFresh(_ spool: RecordingSpool, connection: ServerClient, device: DeviceIdentity,
+                                    mode: GenerationMode) async throws -> (id: UUID, outcome: UploadOutcome) {
+        var created: GenerationRecord?
+        for _ in 0..<2 {
+            let requestID = spool.manifest.uploadRequestID ?? UUID()
+            spool.update { $0.uploadRequestID = requestID }
+            let record = try await connection.create(.init(requestID: requestID, device: device, mode: mode))
+            if record.status == .receiving { created = record; break }
+            // An earlier attempt with this ID already ended; start another.
+            spool.update { $0.uploadRequestID = nil }
+        }
+        guard let created else { throw ServerClientError.invalidResponse }
+        let outcome = try await connection.upload(spool, to: created.id,
+                                                  preserveOriginal: created.settings.preferences.keepOriginalAudio)
+        guard outcome.complete else {
+            Task { try? await connection.cancel(created.id) }
+            throw ServerClientError.disconnected
+        }
+        return (created.id, outcome)
+    }
+
+    /// Uploads takes whose spool outlived the session that recorded them:
+    /// a crash, a quit mid-take, or a server that was unreachable at release.
+    /// Results surface as ready-to-copy, never as insertions.
+    private func recoverSavedRecordings(_ connection: ServerClient) async {
+        guard !isRecoveringSpools, !isShuttingDown else { return }
+        isRecoveringSpools = true
+        defer { isRecoveringSpools = false }
+        let owned = Set(pendingDictations.map(\.spool.id) + [activeSpool?.id].compactMap { $0 })
+        for spool in RecordingSpool.saved(in: clientRoot) where !owned.contains(spool.id) {
+            guard !isShuttingDown, !Task.isCancelled else { return }
+            if spool.manifest.isTest { spool.delete(); continue }
+            if let retry = spoolRetries[spool.id], retry.nextAttempt > Date() { continue }
+            do {
+                try await recover(spool, connection)
+                spool.delete()
+                spoolRetries[spool.id] = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                let failures = (spoolRetries[spool.id]?.failures ?? 0) + 1
+                let delay = min(1_800, 30 * pow(2, Double(failures - 1)))
+                spoolRetries[spool.id] = (failures, Date().addingTimeInterval(delay))
+            }
+        }
+    }
+
+    /// Returns once the server durably holds the take (or it held no speech).
+    private func recover(_ spool: RecordingSpool, _ connection: ServerClient) async throws {
+        guard spool.snapshot().inferenceBytes / 4 >= 4_000 else { return }
+        let manifest = spool.manifest
+        if let sealed = manifest.sealingGenerationID, let frames = manifest.sealedInferenceFrames {
+            // A seal was sent before this Mac lost track of it. Never upload
+            // the take twice if the server already holds it.
+            let finish = FinishGenerationRequest(inferenceFrames: frames, originalFrames: manifest.sealedOriginalFrames)
+            do {
+                let record = try await connection.generation(sealed)
+                if record.status == .receiving { _ = try await connection.finish(sealed, value: finish) }
+                if record.status == .receiving || record.inferenceAudio != nil {
+                    if !pendingEntries.contains(where: { $0.id == sealed }) {
+                        addPendingEntry(id: sealed, finish: finish, fallback: nil, isTest: false)
+                    }
+                    return
+                }
+            } catch let ServerClientError.rejected(status, _, _)
+                        where (400..<500).contains(status) && ![401, 403, 408, 429].contains(status) {
+                // Missing, expired, or unsealable: upload the spool again below.
+            }
+        }
+        let fresh = try await Self.uploadFresh(spool, connection: connection, device: deviceIdentity, mode: .dictation)
+        let finish = fresh.outcome.finish
+        guard finish.inferenceFrames >= 4_000 else { return }
+        spool.update {
+            $0.sealingGenerationID = fresh.id
+            $0.sealedInferenceFrames = finish.inferenceFrames
+            $0.sealedOriginalFrames = finish.originalFrames
+        }
+        addPendingEntry(id: fresh.id, finish: finish, fallback: nil, isTest: false)
+        _ = try await connection.finish(fresh.id, value: finish)
     }
 
     private func removePendingEntry(_ id: UUID) {
@@ -781,11 +882,12 @@ final class InlayController: ObservableObject {
         isShuttingDown = true
         wisprImport.shutdown()
         stopShortcutCheck()
-        // Quitting the client cancels an incomplete recording. A sealed server
-        // generation remains independently owned and may complete in history.
+        // Quitting stops an incomplete recording; its spool stays on disk and
+        // is uploaded on the next launch. A sealed server generation remains
+        // independently owned and may complete in history.
         let generation = activeGenerationID
         let connection = activeClient
-        resetSession()
+        resetSession(keepSpool: true)
         if let generation, let connection { Task { try? await connection.cancel(generation) } }
         stopPendingDictations()
         monitorTask?.cancel(); refreshTask?.cancel(); hudTask?.cancel(); permissionTask?.cancel()
@@ -879,31 +981,14 @@ final class InlayController: ObservableObject {
                 activeGenerationID = created.id
                 activeClient = connection
                 sharedPreferences = created.settings
-                // A backlog stops capture; the upload seals what reached the server.
-                let pipe = AudioChunkPipe { [weak self] error in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        if sessionID == current, isCapturing {
-                            salvageDictation(reason: error.localizedDescription)
-                        }
-                    }
-                }
-                uploadPipe = pipe
-                recorder.onChunk = { pipe.append($0) }
-                uploadTask = Task { [weak self] in
-                    do {
-                        let outcome = try await connection.upload(pipe.stream, to: created.id, preserveOriginal: created.settings.preferences.keepOriginalAudio)
-                        if let self, !outcome.complete, sessionID == current, isCapturing, !Task.isCancelled {
-                            salvageDictation(reason: "The connection was interrupted.")
-                        }
-                        return outcome
-                    }
-                    catch {
-                        if let self, sessionID == current, isCapturing, !Task.isCancelled {
-                            failSession(Self.connectionMessage(error), cancelServer: true)
-                        }
-                        throw error
-                    }
+                // Every take is written to disk first. The upload tails that
+                // copy, so a slow or lost connection never stops the microphone;
+                // a failed live upload is re-sent in full after release.
+                let spool = try RecordingSpool.create(in: clientRoot, id: current, isTest: isTest)
+                activeSpool = spool
+                let keepOriginal = created.settings.preferences.keepOriginalAudio
+                uploadTask = Task {
+                    try await connection.upload(spool, to: created.id, preserveOriginal: keepOriginal)
                 }
                 // A released take owns its teardown. Never let its asynchronous
                 // stop consume the new microphone request.
@@ -911,7 +996,7 @@ final class InlayController: ObservableObject {
                 guard sessionID == current, activity == .starting, !Task.isCancelled else { return }
                 recordingStart = ProcessInfo.processInfo.systemUptime
                 statusMessage = "Starting microphone…"
-                try await recorder.start(deviceID: deviceID, preserveOriginalAudio: created.settings.preferences.keepOriginalAudio)
+                try await recorder.start(deviceID: deviceID, preserveOriginalAudio: keepOriginal, spool: spool)
                 guard sessionID == current, activity == .starting, !Task.isCancelled else { return }
                 activity = .recording
                 statusMessage = "Listening"
@@ -951,7 +1036,7 @@ final class InlayController: ObservableObject {
         let releasedAt = ProcessInfo.processInfo.systemUptime
         destinationTask?.finish()
         guard releasedAt - recordingStart >= 0.25 else { cancelDictation(); showError("Too short — hold the key, speak, then release."); return }
-        guard let id = activeGenerationID, let connection = activeClient, let uploadTask, let uploadPipe else {
+        guard let id = activeGenerationID, let connection = activeClient, let uploadTask, let spool = activeSpool else {
             failSession("This recording has no server session.", cancelServer: true); return
         }
         stopRecordingTimer(); resetLevels()
@@ -964,22 +1049,19 @@ final class InlayController: ObservableObject {
         let capturedDestination = insertionDestination
         let clipboardCount = recordingClipboardChangeCount
         let pending = PendingDictation(session: current, id: id, client: connection, upload: uploadTask,
-                                       pipe: uploadPipe, destination: destinationTask, salvaged: salvaged)
+                                       spool: spool, destination: destinationTask, salvaged: salvaged)
         // Usually known at release, so a later take can continue a list in another field.
         let knownDestination: InsertionDestination? = test || salvaged || sessionClipboardOnly ? .clipboard : capturedDestination
         pending.target = knownDestination.map { Self.resolve($0, isTest: test, releasedAt: releasedAt) }
         pendingDictations.append(pending)
-        activeGenerationID = nil; activeClient = nil; self.uploadTask = nil; self.uploadPipe = nil
+        activeGenerationID = nil; activeClient = nil; self.uploadTask = nil; activeSpool = nil
         destinationTask = nil; insertionDestination = nil; recordingListHint = nil; recordingInputName = nil
-        recorder.onChunk = nil
         let stopped = recorder.stopCapture()
         recorderStopTask = stopped
         let precedingDelivery = deliveryTail
         let task = Task { [weak self] in
             guard let self else { return }
-            var capturedAudio: CapturedAudio?
             defer {
-                capturedAudio?.cleanup()
                 if pending.resolved { removePendingEntry(pending.id) }
                 pendingDictations.removeAll { $0 === pending }
                 if pendingDictations.isEmpty {
@@ -988,32 +1070,32 @@ final class InlayController: ObservableObject {
                 }
             }
             do {
-                let stoppedAudio: CapturedAudio?
-                do { stoppedAudio = try await stopped.value }
-                catch {
-                    // A salvaged take lives in the streamed, server-acknowledged
-                    // audio; a dead local capture must not discard it.
-                    if salvaged { stoppedAudio = nil } else { throw error }
-                }
-                capturedAudio = stoppedAudio
+                // A salvaged take lives in the spool even if its local capture
+                // died; the spool, not the stop result, is the recording.
+                do { _ = try await stopped.value }
+                catch { if !salvaged { throw error } }
+                pending.spool.finish()
                 try Task.checkCancellation()
-                pending.pipe.finish()
-                let uploadOutcome = try await pending.upload.value
+                var uploadOutcome = try await pending.upload.value
+                if !uploadOutcome.complete {
+                    // The server stopped taking this generation's audio (an
+                    // outage, restart, or idle expiry). Send the whole spool to
+                    // a fresh generation instead of keeping only a prefix.
+                    let failed = pending.id
+                    Task { try? await connection.cancel(failed) }
+                    if sessionID == current { statusMessage = "Re-uploading recording…"; hudProgressText = "Uploading" }
+                    let fresh = try await Self.uploadFresh(pending.spool, connection: connection, device: deviceIdentity,
+                                                           mode: test ? .test : .dictation)
+                    pending.id = fresh.id
+                    uploadOutcome = fresh.outcome
+                }
+                let id = pending.id
                 var finish = uploadOutcome.finish
-                var fallback = uploadOutcome.fallback
-                let truncated = !uploadOutcome.complete && !test
-                if !uploadOutcome.complete, max(finish.inferenceFrames, fallback?.inferenceFrames ?? 0) < 4_000 {
-                    throw ServerClientError.rejected(422, "The interrupted recording was too short to save.", "")
-                }
-                if truncated {
-                    // Released, but the upload stopped early: only a prefix exists.
-                    // Like a salvaged take, it is copied and never auto-inserted.
-                    pending.target = (.clipboard, nil)
-                    if sessionID == current { statusMessage = "Saving interrupted recording…" }
+                if finish.inferenceFrames < 4_000 {
+                    pending.spool.delete()
+                    throw ServerClientError.rejected(422, "The recording was too short to save.", "")
                 }
                 try Task.checkCancellation()
-                stoppedAudio?.cleanup()
-                capturedAudio = nil
                 let target: (destination: InsertionDestination, anchor: DictationDestination?)
                 if let known = pending.target { target = known }
                 else {
@@ -1026,16 +1108,22 @@ final class InlayController: ObservableObject {
                 let sharesEarlierAnchor = pendingDictations.prefix { $0 !== pending }
                     .contains { earlier in earlier.target.map { $0.anchor == anchor } ?? true }
                 finish.continuationID = sharesEarlierAnchor ? nil : anchor.flatMap { self.continuation(for: $0)?.generationID }
-                fallback?.continuationID = finish.continuationID
                 try Task.checkCancellation()
                 pending.sealed = true // The server may accept a seal whose response is interrupted.
-                addPendingEntry(id: id, finish: finish, fallback: fallback, isTest: test)
+                addPendingEntry(id: id, finish: finish, fallback: nil, isTest: test)
+                pending.spool.update {
+                    $0.sealingGenerationID = id
+                    $0.sealedInferenceFrames = finish.inferenceFrames
+                    $0.sealedOriginalFrames = finish.originalFrames
+                }
                 var result: GenerationRecord
-                do { result = try await Self.seal(connection, id: id, finish: finish, fallback: fallback) }
+                do { result = try await Self.seal(connection, id: id, finish: finish, fallback: nil) }
                 catch let ServerClientError.rejected(status, message, code) where (400..<500).contains(status) && ![408, 429].contains(status) {
                     pending.sealed = false // The server answered without sealing, so cancel promptly.
                     throw ServerClientError.rejected(status, message, code)
                 }
+                // The server now holds the complete take durably.
+                pending.spool.delete()
                 try Task.checkCancellation()
                 if !result.status.isTerminal {
                     result = try await connection.events(id) { [weak self] record in
@@ -1053,13 +1141,8 @@ final class InlayController: ObservableObject {
                 await waitForCaptureRelease()
                 try Task.checkCancellation()
                 let deliveryDestination = rebasedDestination(resolved)
-                var receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
+                let receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
                                             clipboardCount: clipboardCount, session: current)
-                if truncated, receipt.status == DictationDeliveryStatus.copied.rawValue {
-                    let message = "Recording was interrupted. The saved part was copied to the clipboard."
-                    receipt.message = message
-                    lastDelivery = message
-                }
                 try Task.checkCancellation()
                 do { try await connection.delivery(id, receipt: receipt) }
                 catch { continuationAnchors.removeAll { $0.generationID == id } }
@@ -1088,12 +1171,20 @@ final class InlayController: ObservableObject {
                 pending.resolved = true
                 refreshServer()
             } catch {
-                pending.upload.cancel(); pending.pipe.cancel(); pending.destination?.cancel()
+                pending.upload.cancel(); pending.destination?.cancel()
                 if !pending.sealed {
                     pending.resolved = true
+                    let id = pending.id
                     Task { try? await connection.cancel(id) }
                 }
                 guard !Task.isCancelled else { return }
+                // Unless the user discarded it, an unsealed take stays on disk
+                // and is uploaded again once the server can take it.
+                let saved = !test && FileManager.default.fileExists(atPath: pending.spool.directory.path)
+                    && pending.spool.snapshot().inferenceBytes / 4 >= 4_000
+                let failure = saved
+                    ? "Recording saved on this Mac. Inlay will transcribe it when the server is reachable."
+                    : Self.connectionMessage(error)
                 if let clientError = error as? ServerClientError, case .processingTimedOut = clientError {
                     // Not a failure: stop blocking later deliveries and let the
                     // persisted-pending reconciliation surface the result.
@@ -1103,9 +1194,9 @@ final class InlayController: ObservableObject {
                     }
                 } else if sessionID == current {
                     if error is URLError { serverHealth = nil; serverStatusMessage = Self.connectionMessage(error) }
-                    showError(Self.connectionMessage(error))
+                    showError(failure)
                 } else {
-                    let message = "Earlier dictation failed: \(Self.connectionMessage(error))"
+                    let message = saved ? "Earlier dictation: \(failure)" : "Earlier dictation failed: \(failure)"
                     errorMessage = message
                     lastDelivery = message
                     lastDeliveryStatus = .failed

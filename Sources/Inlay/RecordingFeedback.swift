@@ -23,7 +23,7 @@ final class RecordingFeedback: ObservableObject {
         let seconds = Int(bounded)
         if seconds != elapsedSeconds { elapsedSeconds = seconds }
         let remaining = InlayAPI.maximumRecordingSeconds - seconds
-        let notice: RecordingLimitNotice? = (1...30).contains(remaining) ? .approaching(secondsRemaining: remaining) : nil
+        let notice: RecordingLimitNotice? = (1...60).contains(remaining) ? .approaching(secondsRemaining: remaining) : nil
         if limitNotice != notice { limitNotice = notice }
     }
 
@@ -51,14 +51,19 @@ enum RecordingLimitNotice: Equatable {
     var text: String {
         switch self {
         case .approaching(let seconds): "Recording limit in \(inlayDuration(Double(seconds)))"
-        case .stopped: "Stopped at the 3-minute limit"
+        case .stopped: "Stopped at the \(Self.limit) limit"
         }
     }
 
     var accessibilityLabel: String {
         switch self {
-        case .approaching: "Recording is approaching the three-minute limit"
+        case .approaching: "Recording is approaching the \(Self.limit) limit"
         case .stopped: text
         }
+    }
+
+    private static var limit: String {
+        let seconds = InlayAPI.maximumRecordingSeconds
+        return seconds % 3_600 == 0 ? "\(seconds / 3_600)-hour" : "\(seconds / 60)-minute"
     }
 }
