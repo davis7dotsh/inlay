@@ -38,7 +38,6 @@
         "rollback-reload",
         "rollback-open",
         "open-work-carried-heading",
-        "open-work-sotto-migration",
         "open-work-deepgram",
         "open-work-carried-backup",
         "open-work-carried-wispr",
@@ -52,7 +51,6 @@
         "ports-client-only",
         "open-decisions-heading",
         "open-work-carried-tests",
-        "open-decision-display-name",
         "open-decision-sotto-leftovers",
         "open-decision-error-text",
         "b-20-current-status-automatic-launch-at-logi-15",
@@ -92,7 +90,25 @@
           }
         },
         {
-          "insert": ", installed on 2026-11-15, but its server still runs the 2026-10-15 build. Speech recognition uses Deepgram "
+          "insert": ", and its server runs "
+        },
+        {
+          "insert": "main",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " at "
+        },
+        {
+          "insert": "487a713",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": ", both installed on 2026-11-15. Speech recognition uses Deepgram "
         },
         {
           "insert": "nova-3",
@@ -177,13 +193,13 @@
                 "insert": " is at "
               },
               {
-                "insert": "dfd49a6",
+                "insert": "487a713",
                 "attributes": {
                   "code": true
                 }
               },
               {
-                "insert": ", which PR #7 merged on 2026-11-15. It includes commits "
+                "insert": ", which PR #8 merged on 2026-11-15. It includes commits "
               },
               {
                 "insert": "deb2c36",
@@ -285,7 +301,7 @@
                 }
               },
               {
-                "insert": ", installed in the app but not the server"
+                "insert": ", installed in the app and the server"
               }
             ],
             [
@@ -353,7 +369,7 @@
                 }
               },
               {
-                "insert": ". The installed app runs the ports from "
+                "insert": ". Since 2026-11-15 the installed app runs the ports from "
               },
               {
                 "insert": "dfd49a6",
@@ -362,7 +378,13 @@
                 }
               },
               {
-                "insert": " since 2026-11-15. The server still runs the 2026-10-15 build"
+                "insert": ", and the server runs them from "
+              },
+              {
+                "insert": "487a713",
+                "attributes": {
+                  "code": true
+                }
               }
             ]
           ],
@@ -556,7 +578,7 @@
                 "insert": "launchd service "
               },
               {
-                "insert": "ai.codecaine.sotto.server",
+                "insert": "ai.codecaine.transcriber.server",
                 "attributes": {
                   "code": true
                 }
@@ -571,10 +593,10 @@
                 }
               },
               {
-                "insert": ", which starts "
+                "insert": ", which starts the server in "
               },
               {
-                "insert": "build/server/transcriber-server",
+                "insert": "build/server",
                 "attributes": {
                   "code": true
                 }
@@ -598,25 +620,52 @@
                 }
               },
               {
-                "insert": ". The server uses the helpers "
+                "insert": ". On 2026-11-15 "
               },
               {
-                "insert": "transcriber-engine",
+                "insert": "./scripts/build-server.sh",
                 "attributes": {
                   "code": true
                 }
               },
               {
-                "insert": " and "
+                "insert": " rebuilt "
               },
               {
-                "insert": "transcriber-text-engine",
+                "insert": "build/server",
                 "attributes": {
                   "code": true
                 }
               },
               {
-                "insert": ". launchd restarted the rebuilt server on 2026-10-15, and "
+                "insert": " from "
+              },
+              {
+                "insert": "main",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": " at "
+              },
+              {
+                "insert": "487a713",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": ", and "
+              },
+              {
+                "insert": "launchctl kickstart -k",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": " restarted the service. "
               },
               {
                 "insert": "/v1/health",
@@ -625,7 +674,34 @@
                 }
               },
               {
-                "insert": " reports Deepgram speech and MLX proofreading ready"
+                "insert": " reports server version "
+              },
+              {
+                "insert": "487a713",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": " and Deepgram "
+              },
+              {
+                "insert": "nova-3",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": " speech ready. Qwen3-4B MLX proofreading is disabled because the shared preference "
+              },
+              {
+                "insert": "textCorrectionEnabled",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": " is false. The server log shows 5,079 archive records loaded and 0 quarantined"
               }
             ]
           ],
@@ -683,16 +759,25 @@
                 "insert": ". launchd service "
               },
               {
-                "insert": "ai.codecaine.sotto.archive",
+                "insert": "ai.codecaine.transcriber.archive",
                 "attributes": {
                   "code": true
                 }
               },
               {
-                "insert": " was reinstalled with "
+                "insert": " runs "
               },
               {
-                "insert": "scripts/archive/install.py",
+                "insert": "scripts/archive/archive.py",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": " from the checkout, with its cache in "
+              },
+              {
+                "insert": ".local/archive-cache",
                 "attributes": {
                   "code": true
                 }
@@ -722,7 +807,7 @@
                 "insert": " holds "
               },
               {
-                "insert": "ai.codecaine.sotto.app",
+                "insert": "ai.codecaine.transcriber.app",
                 "attributes": {
                   "code": true
                 }
@@ -731,7 +816,7 @@
                 "insert": ", "
               },
               {
-                "insert": "ai.codecaine.sotto.server",
+                "insert": "ai.codecaine.transcriber.server",
                 "attributes": {
                   "code": true
                 }
@@ -740,7 +825,7 @@
                 "insert": ", and "
               },
               {
-                "insert": "ai.codecaine.sotto.archive",
+                "insert": "ai.codecaine.transcriber.archive",
                 "attributes": {
                   "code": true
                 }
@@ -1518,61 +1603,6 @@
       ],
       "children": []
     },
-    "open-work-sotto-migration": {
-      "id": "open-work-sotto-migration",
-      "type": "list-item",
-      "props": {
-        "ordered": false
-      },
-      "text": [
-        {
-          "insert": "Migrate the "
-        },
-        {
-          "insert": "sotto",
-          "attributes": {
-            "code": true
-          }
-        },
-        {
-          "insert": " identifiers that the source rename kept."
-        }
-      ],
-      "children": [
-        "open-work-sotto-migration-names"
-      ]
-    },
-    "open-work-sotto-migration-names": {
-      "id": "open-work-sotto-migration-names",
-      "type": "list-item",
-      "props": {
-        "ordered": false
-      },
-      "text": [
-        {
-          "insert": "They are the archive source ID, the "
-        },
-        {
-          "insert": "ai.codecaine.sotto.*",
-          "attributes": {
-            "code": true
-          }
-        },
-        {
-          "insert": " launchd labels, the "
-        },
-        {
-          "insert": "--sotto-data",
-          "attributes": {
-            "code": true
-          }
-        },
-        {
-          "insert": " flag, and the checkout folder."
-        }
-      ],
-      "children": []
-    },
     "open-work-deepgram": {
       "id": "open-work-deepgram",
       "type": "list-item",
@@ -1755,7 +1785,7 @@
       },
       "text": [
         {
-          "insert": "Install the ported server build.",
+          "insert": "Confirm the installed ported build.",
           "attributes": {
             "bold": true
           }
@@ -1784,7 +1814,16 @@
           }
         },
         {
-          "insert": " since 2026-11-15. The launchd server on 127.0.0.1:8391 still runs the 2026-10-15 build, and it gets the server-side ports only after a server rebuild."
+          "insert": ", and the launchd server on 127.0.0.1:8391 runs "
+        },
+        {
+          "insert": "487a713",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": ". Both were installed on 2026-11-15."
         }
       ],
       "children": []
@@ -2108,28 +2147,6 @@
       ],
       "children": []
     },
-    "open-decision-display-name": {
-      "id": "open-decision-display-name",
-      "type": "list-item",
-      "props": {
-        "ordered": false
-      },
-      "text": [
-        {
-          "insert": "Decide whether to rename the corpus. "
-        },
-        {
-          "insert": "codecaine.docs.json",
-          "attributes": {
-            "code": true
-          }
-        },
-        {
-          "insert": " still gives the display name Sotto, and no Docs tool edits it."
-        }
-      ],
-      "children": []
-    },
     "open-decision-sotto-leftovers": {
       "id": "open-decision-sotto-leftovers",
       "type": "list-item",
@@ -2224,7 +2241,7 @@
       "props": {},
       "text": [
         {
-          "insert": "The launchd service plists and "
+          "insert": "The server and archive launchd plists and "
         },
         {
           "insert": ".local/Start Transcriber.command",
@@ -2236,7 +2253,7 @@
           "insert": " use the checkout path "
         },
         {
-          "insert": "/Users/Ford/workspace/codecaine/utilities/sotto",
+          "insert": "/Users/Ford/workspace/codebases/codecaine/utilities/transcriber",
           "attributes": {
             "code": true
           }
@@ -2245,13 +2262,13 @@
           "insert": ". Codecaine Docs discovers this corpus as "
         },
         {
-          "insert": "sotto-8955067e",
+          "insert": "transcriber-a8507791",
           "attributes": {
             "code": true
           }
         },
         {
-          "insert": " with the display name Sotto. Qwen cold-start readiness failed once on an earlier launch and succeeded after one restart. Diagnose that startup issue if it recurs."
+          "insert": " with the display name Transcriber. Qwen cold-start readiness failed once on an earlier launch and succeeded after one restart. Diagnose that startup issue if it recurs."
         }
       ],
       "children": []
