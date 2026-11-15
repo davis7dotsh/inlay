@@ -41,10 +41,66 @@ private struct DevicePreferencesForm: View {
             } header: { Text("Connection").textCase(nil) }
 
             Section {
-                Picker("Dictation key", selection: $controller.shortcut) {
-                    ForEach(HoldKey.allCases) { key in Text(key.title).tag(key) }
+                Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
+                    .accessibilityIdentifier("preferences.mute-output")
+                Text("Muting also silences VoiceOver and dictation sounds while recording.")
+                    .font(.caption)
+                    .foregroundStyle(TranscriberPalette.muted)
+                Toggle("Play dictation sounds", isOn: $controller.dictationSoundsEnabled)
+                    .accessibilityIdentifier("preferences.dictation-sounds")
+                Toggle("Start \(TranscriberBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
+                if let error = controller.loginItemError {
+                    Text(error).font(.caption).foregroundStyle(TranscriberPalette.warning)
+                }
+            } header: { Text("This Mac").textCase(nil) }
+            .disabled(controller.isBusy)
+
+            Section {
+                ForEach(controller.shortcuts) { key in
+                    HStack {
+                        KeyCap(key: key)
+                        Spacer()
+                        Button { controller.shortcuts.removeAll { $0 == key } } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.borderless)
+                            .disabled(controller.shortcuts.count == 1)
+                            .help(controller.shortcuts.count == 1 ? "Keep at least one key." : "Remove key")
+                            .accessibilityLabel("Remove \(key.title)")
+                    }
                 }
                 .accessibilityIdentifier("preferences.shortcut")
+                HStack {
+                    if controller.isAddingShortcut {
+                        Text("Press a key, or pick one below. Esc cancels.").foregroundStyle(TranscriberPalette.muted)
+                        Spacer()
+                        Button("Cancel") { controller.finishAddingShortcut() }
+                    } else {
+                        Button { controller.beginAddingShortcut() } label: { Label("Add key", systemImage: "plus.circle") }
+                            .buttonStyle(.borderless)
+                        Spacer()
+                    }
+                }
+                .accessibilityIdentifier("preferences.add-shortcut")
+                if controller.isAddingShortcut {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], alignment: .leading, spacing: 8) {
+                        ForEach(HoldKey.pickable.filter { !controller.shortcuts.contains($0) }) { key in
+                            Button { controller.finishAddingShortcut(key) } label: {
+                                Text(key.title).lineLimit(1).frame(maxWidth: .infinity)
+                            }
+                                .accessibilityIdentifier("preferences.pick-key.\(key.token)")
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            } header: {
+                Text("Keys").textCase(nil)
+            } footer: {
+                Text("Every key starts and stops dictation the same way. For a macro pad, F13 to F20 work best. macOS often drops F21 to F24.")
+                    .font(.caption)
+                    .foregroundStyle(TranscriberPalette.muted)
+            }
+            .disabled(controller.isBusy)
+
+            Section {
                 Picker("Trigger", selection: $controller.activationMode) {
                     ForEach(HotkeyActivationMode.allCases) { mode in Text(mode.title).tag(mode) }
                 }
@@ -58,7 +114,9 @@ private struct DevicePreferencesForm: View {
                 } label: {
                     Text(controller.isCheckingShortcut ? "Hold the key for a second" : "Shortcut check")
                 }
-                if let note = controller.shortcut.note { Text(note).font(.caption).foregroundStyle(TranscriberPalette.muted) }
+                if let note = controller.shortcuts.lazy.compactMap(\.note).first {
+                    Text(note).font(.caption).foregroundStyle(TranscriberPalette.muted)
+                }
                 DisclosureGroup("Shortcut diagnostics", isExpanded: $showingDiagnostics) {
                     ScrollView {
                         Text(controller.shortcutCheckText.isEmpty ? "Run a shortcut check to see events." : controller.shortcutCheckText)
@@ -68,18 +126,7 @@ private struct DevicePreferencesForm: View {
                     }
                     .frame(height: 90)
                 }
-                Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
-                    .accessibilityIdentifier("preferences.mute-output")
-                Text("Muting also silences VoiceOver and dictation sounds while recording.")
-                    .font(.caption)
-                    .foregroundStyle(TranscriberPalette.muted)
-                Toggle("Play dictation sounds", isOn: $controller.dictationSoundsEnabled)
-                    .accessibilityIdentifier("preferences.dictation-sounds")
-                Toggle("Start \(TranscriberBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
-                if let error = controller.loginItemError {
-                    Text(error).font(.caption).foregroundStyle(TranscriberPalette.warning)
-                }
-            } header: { Text("This Mac").textCase(nil) }
+            }
             .disabled(controller.isBusy)
 
             Section {
@@ -113,6 +160,7 @@ private struct DevicePreferencesForm: View {
                     .foregroundStyle(TranscriberPalette.muted)
             }
         }
+        .onDisappear { controller.finishAddingShortcut() }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .toggleStyle(.switch)

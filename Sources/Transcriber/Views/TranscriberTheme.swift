@@ -237,19 +237,19 @@ struct StatusDot: View {
 struct MicrophoneTestLabel: View {
     var inputName: String
     var isCapturing: Bool
-    var isHeldFn = false
+    var isHeldKey = false
 
     var body: some View {
         HStack(spacing: 9) {
-            Image(systemName: isHeldFn ? "waveform" : (isCapturing ? "stop.fill" : "mic"))
+            Image(systemName: isHeldKey ? "waveform" : (isCapturing ? "stop.fill" : "mic"))
                 .font(.system(size: 12))
                 .frame(width: 16)
                 .foregroundStyle(TranscriberPalette.accentInk)
-            Text(isHeldFn ? "Release fn to finish" : inputName)
+            Text(isHeldKey ? "Release the key to finish" : inputName)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .center)
-            Image(systemName: isHeldFn ? "arrow.up" : (isCapturing ? "checkmark" : "play.fill"))
+            Image(systemName: isHeldKey ? "arrow.up" : (isCapturing ? "checkmark" : "play.fill"))
                 .font(.system(size: 10, weight: .medium))
                 .frame(width: 16)
                 .foregroundStyle(TranscriberPalette.muted)
@@ -257,7 +257,7 @@ struct MicrophoneTestLabel: View {
         .frame(maxWidth: .infinity, minHeight: 24)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(isHeldFn ? "Release fn to finish" : (isCapturing ? "Finish dictation" : "Test \(inputName)"))
+        .accessibilityLabel(isHeldKey ? "Release the key to finish" : (isCapturing ? "Finish dictation" : "Test \(inputName)"))
     }
 }
 
@@ -269,7 +269,7 @@ struct KeyCap: View {
         HStack(spacing: 7) {
             Text(key.symbol)
                 .font(.system(size: 15, weight: .medium))
-            if key != .fn {
+            if key.symbol != key.title, key != .fn {
                 Text(key.title)
                     .font(.callout)
                     .lineLimit(1)
@@ -305,7 +305,10 @@ struct TranscriberHoldKeyCap: View {
                 .frame(height: 60)
                 .offset(y: 4)
             Text(key.symbol)
-                .font(.system(size: key == .fn ? 27 : 30, weight: .regular))
+                .font(.system(size: key.symbol.count == 1 ? 30 : (key == .fn ? 27 : 22), weight: .regular))
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .padding(.horizontal, 6)
                 .foregroundStyle(TranscriberPalette.accentInk)
                 .frame(width: 64, height: 60)
                 .background(isPressed ? TranscriberPalette.tint : TranscriberPalette.surface, in: shape)

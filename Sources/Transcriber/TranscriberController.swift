@@ -92,13 +92,16 @@ final class TranscriberController: ObservableObject {
     @Published var isHotkeyActive = false
     @Published private(set) var isCheckingShortcut = false
     @Published private(set) var shortcutCheckText = ""
-    @Published var shortcut: HoldKey = .rightOption {
+    /// Fork: every listed key starts and stops dictation the same way.
+    @Published var shortcuts: [HoldKey] = [.rightOption] {
         didSet {
-            if shortcut != oldValue { stopShortcutCheck() }
-            if !applyingConfiguration { configuration.update { $0.holdKey = shortcut.rawValue } }
-            hotkey.key = shortcut
+            if shortcuts != oldValue { stopShortcutCheck() }
+            if !applyingConfiguration { configuration.update { $0.holdKeys = shortcuts.map(\.token) } }
+            hotkey.keys = shortcuts
         }
     }
+    /// Fork: the next key pressed in a Transcriber window joins `shortcuts`.
+    @Published private(set) var isAddingShortcut = false
     @Published var activationMode: HotkeyActivationMode = .hold {
         didSet {
             guard activationMode != oldValue else { return }
@@ -159,7 +162,7 @@ final class TranscriberController: ObservableObject {
     var recordingUsesClipboard: Bool { isCapturing && insertionDestination == .clipboard }
     var isBusy: Bool { activity.isBusy || !pendingDictations.isEmpty }
     var pendingDictationCount: Int { pendingDictations.count }
-    var canCancelWithEscape: Bool { isCapturing && !hotkey.isHoldingFn }
+    var canCancelWithEscape: Bool { isCapturing && !hotkey.isHoldingDedicatedKey }
     var isServerReady: Bool { serverHealth?.ready == true && serverHealth?.apiVersion == TranscriberAPI.version }
     var canTest: Bool { isServerReady && permissions.microphone && microphones.resolution.device != nil && !isCapturing }
     var selectedInputName: String { microphones.resolution.device?.name ?? "No microphone available" }
@@ -194,6 +197,8 @@ final class TranscriberController: ObservableObject {
     private var shortcutCheckTask: Task<Void, Never>?
     private var shortcutCheckStarted: TimeInterval = 0
     private var shortcutCheckEntries: [String] = []
+    private var shortcutCapture: Any?
+    private var shortcutCaptureTimeout: Task<Void, Never>?
     private var sessionID = UUID()
     /// Fork: the server record a take uploads into. The microphone starts while
     /// its create request is in flight, so every consumer awaits this task
@@ -292,7 +297,7 @@ final class TranscriberController: ObservableObject {
         permissions = startServices ? PermissionSnapshot.capture()
             : PermissionSnapshot(microphone: false, accessibility: false, inputMonitoring: false)
         applyConfiguration(configuration.configuration)
-        hotkey.key = shortcut
+        hotkey.keys = shortcuts
         microphones.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         preferences.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         configuration.$configuration.removeDuplicates().sink { [weak self] in self?.applyConfiguration($0) }.store(in: &subscriptions)
@@ -328,7 +333,8 @@ final class TranscriberController: ObservableObject {
     private func applyConfiguration(_ settings: TranscriberConfiguration) {
         guard !isBusy, !isShuttingDown else { return }
         applyingConfiguration = true
-        if let key = HoldKey(rawValue: settings.holdKey), shortcut != key { shortcut = key }
+        let keys = settings.holdKeys.compactMap(HoldKey.init(token:))
+        if !keys.isEmpty, shortcuts != keys { shortcuts = keys }
         if let mode = HotkeyActivationMode(rawValue: settings.activationMode), activationMode != mode { activationMode = mode }
         if launchAtLogin != settings.launchAtLogin { launchAtLogin = settings.launchAtLogin }
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
@@ -783,7 +789,7 @@ final class TranscriberController: ObservableObject {
     }
 
     func toggleTestRecording() {
-        guard !hotkey.isHoldingFn else { return }
+        guard !hotkey.isHoldingDedicatedKey else { return }
         if isCapturing { finishDictation() }
         else { beginDictation(isTest: true) }
     }
@@ -1055,11 +1061,14 @@ final class TranscriberController: ObservableObject {
                 // No take started, so a double-tap monitor must not latch.
                 return false
             }
+            // Fork: the key pressed to add a dictation key never starts a take.
+            if isAddingShortcut { return false }
             return beginDictation(isTest: false)
         }
         hotkey.onRelease = { [weak self] in
             guard let self else { return }
             if isCheckingShortcut { appendShortcutCheck("Hold released."); return }
+            if isAddingShortcut { return }
             if !isTestSession { finishDictation() }
         }
         hotkey.onCancel = { [weak self] in
@@ -1649,7 +1658,7 @@ final class TranscriberController: ObservableObject {
         isCheckingShortcut = true
         hotkey.onDiagnostic = { [weak self] message in self?.appendShortcutCheck(message) }
         hotkey.requireFreshHold()
-        appendShortcutCheck("Checking \(shortcut.title) for 60 seconds. The microphone stays off.")
+        appendShortcutCheck("Checking \(shortcuts.map(\.title).orList) for 60 seconds. The microphone stays off.")
         appendShortcutCheck("Listener: \(isHotkeyActive ? "enabled" : "unavailable"); Accessibility: \(permissions.accessibility); Input Monitoring: \(permissions.inputMonitoring).")
         shortcutCheckTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 60_000_000_000) }
@@ -1669,6 +1678,55 @@ final class TranscriberController: ObservableObject {
         isCheckingShortcut = false
         shortcutCheckTask?.cancel()
         shortcutCheckTask = nil
+    }
+
+    /// Fork: listens for the next key pressed in a Transcriber window and adds
+    /// it to the dictation keys. Escape or 60 s without a key cancels. The
+    /// press never reaches the window and never starts a take.
+    func beginAddingShortcut() {
+        guard !isBusy, !isAddingShortcut else { return }
+        stopShortcutCheck()
+        isAddingShortcut = true
+        shortcutCapture = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+            let used = MainActor.assumeIsolated { self?.captureShortcut(event) ?? false }
+            return used ? nil : event
+        }
+        shortcutCaptureTimeout = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            self?.finishAddingShortcut()
+        }
+    }
+
+    /// Ends key capture and adds `key` when it is not listed yet.
+    func finishAddingShortcut(_ key: HoldKey? = nil) {
+        guard isAddingShortcut else { return }
+        // Same reset as a shortcut check: a key still held when capture ends
+        // must not start a take.
+        hotkey.requireFreshHold()
+        isAddingShortcut = false
+        if let shortcutCapture { NSEvent.removeMonitor(shortcutCapture) }
+        shortcutCapture = nil
+        shortcutCaptureTimeout?.cancel()
+        shortcutCaptureTimeout = nil
+        if let key, !shortcuts.contains(key) { shortcuts.append(key) }
+    }
+
+    /// Returns true when capture uses the event, so the window never sees it.
+    private func captureShortcut(_ event: NSEvent) -> Bool {
+        if event.type == .keyDown, event.keyCode == 53 {
+            finishAddingShortcut()
+            return true
+        }
+        guard let key = HoldKey(keyCode: event.keyCode) else { return false }
+        if event.type == .keyDown {
+            // isARepeat is defined only for key events.
+            if event.isARepeat { return true }
+        } else if !(event.cgEvent.map { key.isDown(in: $0.flags) } ?? false) {
+            // A modifier counts on its press, not its release.
+            return false
+        }
+        finishAddingShortcut(key)
+        return true
     }
 
     private func appendShortcutCheck(_ message: String) {

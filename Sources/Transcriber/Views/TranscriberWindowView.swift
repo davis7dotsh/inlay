@@ -141,15 +141,34 @@ struct DictationPage: View {
     var showPreferences: () -> Void
     var showHistory: () -> Void
 
+    private var keyCaps: some View {
+        ForEach(controller.shortcuts) { key in
+            TranscriberHoldKeyCap(key: key, isPressed: controller.isRecording)
+        }
+    }
+
+    private var dictationPrompt: some View {
+        Text(controller.activationMode.dictationPrompt)
+            .font(.system(size: 28, weight: .medium))
+            .tracking(-0.7)
+            .fixedSize()
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                HStack(spacing: 20) {
-                    TranscriberHoldKeyCap(key: controller.shortcut, isPressed: controller.isRecording)
-                    Text(controller.activationMode.dictationPrompt)
-                        .font(.system(size: 28, weight: .medium))
-                        .tracking(-0.7)
-                    Spacer()
+                // Many keys move the prompt below the caps, and the caps wrap.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 20) {
+                        HStack(spacing: 10) { keyCaps }
+                        dictationPrompt
+                        Spacer()
+                    }
+                    VStack(alignment: .leading, spacing: 16) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 64), spacing: 10, alignment: .leading)],
+                                  alignment: .leading, spacing: 10) { keyCaps }
+                        dictationPrompt
+                    }
                 }
                 .padding(.top, 8)
 
@@ -283,17 +302,17 @@ struct TranscriberMicrophoneTestButton: View {
     @ObservedObject var controller: TranscriberController
     var identifier: String
     var idleTitle = "Test microphone"
-    private var isHeldFn: Bool { controller.isCapturing && !controller.canCancelWithEscape }
+    private var isHeldKey: Bool { controller.isCapturing && !controller.canCancelWithEscape }
 
     var body: some View {
         Button(action: controller.toggleTestRecording) {
-            Label(isHeldFn ? "Release fn to finish" : (controller.isCapturing ? "Finish dictation" : idleTitle),
+            Label(isHeldKey ? "Release the key to finish" : (controller.isCapturing ? "Finish dictation" : idleTitle),
                   systemImage: controller.isCapturing ? "stop.fill" : "mic")
                 .frame(maxWidth: .infinity)
                 .frame(height: 30)
         }
         .buttonStyle(TranscriberPrimaryButtonStyle())
-        .disabled(isHeldFn || (!controller.canTest && !controller.isCapturing))
+        .disabled(isHeldKey || (!controller.canTest && !controller.isCapturing))
         .help("Test \(controller.selectedInputName) without pasting text")
         .accessibilityIdentifier(identifier)
     }

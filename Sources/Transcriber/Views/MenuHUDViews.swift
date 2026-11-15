@@ -8,7 +8,7 @@ struct TranscriberMenuView: View {
     var quit: () -> Void
 
     private var idleDictationHint: String {
-        let key = controller.shortcut == .fn ? "fn" : controller.shortcut.title
+        let key = controller.shortcuts.map(\.shortTitle).orList
         return switch controller.activationMode {
         case .hold: "Press \(key) to dictate"
         case .doubleTapToggle: "Double tap \(key) to dictate"

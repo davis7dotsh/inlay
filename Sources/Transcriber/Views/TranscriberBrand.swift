@@ -33,7 +33,7 @@ enum TranscriberBrand {
 
     /// Status-bar templates must let AppKit choose their foreground. In
     /// particular, do not bridge the SwiftUI brand tint onto NSStatusBarButton.
-    static func updateStatusButton(_ button: NSButton, activity: DictationActivity, shortcut: HoldKey,
+    static func updateStatusButton(_ button: NSButton, activity: DictationActivity, shortcuts: [HoldKey],
                                    activationMode: HotkeyActivationMode = .hold) {
         button.contentTintColor = nil
         button.imagePosition = .imageLeading
@@ -49,10 +49,11 @@ enum TranscriberBrand {
         case .delivering: description = "\(TranscriberBuild.current.displayName) — delivering your words"
         case .failed: description = "\(TranscriberBuild.current.displayName) — dictation needs attention"
         case .idle, .success:
+            let keys = shortcuts.map(\.title).orList
             let action = switch activationMode {
-            case .hold: "hold \(shortcut.title) to dictate"
-            case .doubleTapToggle: "double tap \(shortcut.title) to dictate"
-            case .singleTapToggle: "press \(shortcut.title) to start or stop dictation"
+            case .hold: "hold \(keys) to dictate"
+            case .doubleTapToggle: "double tap \(keys) to dictate"
+            case .singleTapToggle: "press \(keys) to start or stop dictation"
             }
             description = "\(TranscriberBuild.current.displayName) — \(action)"
         }

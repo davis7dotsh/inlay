@@ -76,6 +76,10 @@ public actor ConfigurationFile {
                     if changedKeys.isEmpty { return latest.configuration }
                     var merged = latest.object
                     for key in changedKeys { merged[key] = after[key] }
+                    // holdKeys replaced holdKey. The first write moves the decoded list over and drops the old key.
+                    if merged.removeValue(forKey: "holdKey") != nil, merged["holdKeys"] == nil {
+                        merged["holdKeys"] = latest.configuration.holdKeys
+                    }
                     let data = try JSONSerialization.data(withJSONObject: merged,
                         options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) + Data("\n".utf8)
                     let configuration = try decoded(data)

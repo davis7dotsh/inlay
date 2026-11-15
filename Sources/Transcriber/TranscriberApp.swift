@@ -168,7 +168,7 @@ final class TranscriberAppDelegate: NSObject, NSApplicationDelegate, NSWindowDel
         // must never depend on the new image's intrinsic width.
         statusItem = NSStatusBar.system.statusItem(withLength: TranscriberBuild.current.isDevelopment ? 62 : 30)
         if let button = statusItem.button {
-            TranscriberBrand.updateStatusButton(button, activity: controller.activity, shortcut: controller.shortcut,
+            TranscriberBrand.updateStatusButton(button, activity: controller.activity, shortcuts: controller.shortcuts,
                                          activationMode: controller.activationMode)
         }
         statusItem.button?.target = self
@@ -183,11 +183,11 @@ final class TranscriberAppDelegate: NSObject, NSApplicationDelegate, NSWindowDel
         // stable while open, and remeasure current content on the next opening.
         menuContent.sizingOptions = []
         popover.contentViewController = menuContent
-        activitySubscription = controller.$activity.combineLatest(controller.$shortcut, controller.$activationMode)
+        activitySubscription = controller.$activity.combineLatest(controller.$shortcuts, controller.$activationMode)
             .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 && $0.2 == $1.2 }
-            .sink { [weak self] activity, shortcut, activationMode in
+            .sink { [weak self] activity, shortcuts, activationMode in
             guard let button = self?.statusItem.button else { return }
-            TranscriberBrand.updateStatusButton(button, activity: activity, shortcut: shortcut, activationMode: activationMode)
+            TranscriberBrand.updateStatusButton(button, activity: activity, shortcuts: shortcuts, activationMode: activationMode)
         }
     }
 

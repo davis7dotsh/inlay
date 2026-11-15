@@ -4,7 +4,9 @@ import Foundation
 /// the server; connection details and device identity have a separate client store.
 public struct TranscriberConfiguration: Codable, Equatable, Sendable {
     public let schemaVersion: Int
-    public var holdKey: String
+    /// Fork: every listed key starts and stops dictation the same way. Each
+    /// token is rightOption, rightControl, fn, or key:<virtual key code>.
+    public var holdKeys: [String]
     public var activationMode: String
     public var launchAtLogin: Bool
     public var muteOutputWhileRecording: Bool
@@ -16,12 +18,12 @@ public struct TranscriberConfiguration: Codable, Equatable, Sendable {
 
     public static let `default` = TranscriberConfiguration()
 
-    public init(holdKey: String = "rightOption", activationMode: String = "hold", launchAtLogin: Bool = false,
+    public init(holdKeys: [String] = ["rightOption"], activationMode: String = "hold", launchAtLogin: Bool = false,
                 muteOutputWhileRecording: Bool = false, dictationSoundsEnabled: Bool = true,
                 microphones: MicrophonePreferences = MicrophonePreferences(),
                 keepMicrophoneReady: Bool = true) {
         schemaVersion = 1
-        self.holdKey = holdKey
+        self.holdKeys = holdKeys
         self.activationMode = activationMode
         self.launchAtLogin = launchAtLogin
         self.muteOutputWhileRecording = muteOutputWhileRecording
@@ -31,8 +33,24 @@ public struct TranscriberConfiguration: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording, dictationSoundsEnabled, microphones
+        case schemaVersion, holdKeys, activationMode, launchAtLogin, muteOutputWhileRecording, dictationSoundsEnabled, microphones
         case keepMicrophoneReady // Fork
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey { case holdKey }
+
+    /// Key codes that can never be a "key:" token: Return (36), Tab (48),
+    /// Space (49), Escape (53), keypad Enter (76) and the modifiers (54 to 63,
+    /// which have presets). Return, Tab and Space must stay free for typing and
+    /// for keyboard use of Add key.
+    public static let reservedKeyCodes: Set<UInt16> = Set([36, 48, 49, 53, 76]).union(54...63)
+
+    /// Accepts exactly the tokens that `HoldKey(token:)` in the app parses: a
+    /// preset name, or "key:" and a canonical decimal key code that is not reserved.
+    private static func isHoldKeyToken(_ token: String) -> Bool {
+        if ["rightOption", "rightControl", "fn"].contains(token) { return true }
+        guard token.hasPrefix("key:"), let code = UInt16(token.dropFirst(4)) else { return false }
+        return token == "key:\(code)" && !reservedKeyCodes.contains(code)
     }
 
     public init(from decoder: Decoder) throws {
@@ -41,15 +59,18 @@ public struct TranscriberConfiguration: Codable, Equatable, Sendable {
         guard version == 1 else {
             throw values.invalid(.schemaVersion, "Only schemaVersion 1 is supported.")
         }
-        let holdKey = try values.value(String.self, for: .holdKey, default: "rightOption")
-        guard ["rightOption", "rightControl", "fn"].contains(holdKey) else {
-            throw values.invalid(.holdKey, "Use rightOption, rightControl, or fn.")
+        // Fork: a file written before holdKeys names its one key in holdKey.
+        let holdKeys = values.contains(.holdKeys)
+            ? try values.decode([String].self, forKey: .holdKeys)
+            : [try decoder.container(keyedBy: LegacyCodingKeys.self).value(String.self, for: .holdKey, default: "rightOption")]
+        guard !holdKeys.isEmpty, Set(holdKeys).count == holdKeys.count, holdKeys.allSatisfy(Self.isHoldKeyToken) else {
+            throw values.invalid(.holdKeys, "List one or more different keys: rightOption, rightControl, fn, or key:<code>.")
         }
         let activationMode = try values.value(String.self, for: .activationMode, default: "hold")
         guard ["hold", "doubleTap", "singleTap"].contains(activationMode) else {
             throw values.invalid(.activationMode, "Use hold, doubleTap, or singleTap.")
         }
-        self.init(holdKey: holdKey,
+        self.init(holdKeys: holdKeys,
                   activationMode: activationMode,
                   launchAtLogin: try values.value(Bool.self, for: .launchAtLogin, default: false),
                   muteOutputWhileRecording: try values.value(Bool.self, for: .muteOutputWhileRecording, default: false),
