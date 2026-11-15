@@ -90,9 +90,16 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         configuration?.stopWatching()
         controller?.shutdown()
-        guard startupTask != nil || (configuration?.pendingWriteCount ?? 0) > 0 else { return .terminateNow }
+        let drain = controller?.terminationDrain
+        guard startupTask != nil || drain != nil || (configuration?.pendingWriteCount ?? 0) > 0 else { return .terminateNow }
         startupTask?.cancel()
         Task {
+            if let drain {
+                // Bounded, so a wedged audio driver cannot block quitting.
+                let drained = TerminationFlag()
+                Task { await drain.value; drained.set() }
+                for _ in 0..<60 where !drained.isSet { try? await Task.sleep(for: .milliseconds(50)) }
+            }
             await startupTask?.value
             configuration?.stopWatching()
             await configuration?.flush()
@@ -366,4 +373,10 @@ private final class DictationPanel: NSPanel {
         }
         orderFrontRegardless()
     }
+}
+
+@MainActor
+private final class TerminationFlag {
+    private(set) var isSet = false
+    func set() { isSet = true }
 }

@@ -109,8 +109,14 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `GET /v1/health`.
     /// - Remark: Generated from `#/paths//v1/health/get(getHealth)`.
-    public func getHealth(headers: Operations.GetHealth.Input.Headers = .init()) async throws -> Operations.GetHealth.Output {
-        try await getHealth(Operations.GetHealth.Input(headers: headers))
+    public func getHealth(
+        query: Operations.GetHealth.Input.Query = .init(),
+        headers: Operations.GetHealth.Input.Headers = .init()
+    ) async throws -> Operations.GetHealth.Output {
+        try await getHealth(Operations.GetHealth.Input(
+            query: query,
+            headers: headers
+        ))
     }
     /// - Remark: HTTP `GET /v1/preferences`.
     /// - Remark: Generated from `#/paths//v1/preferences/get(getPreferences)`.

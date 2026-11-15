@@ -43,6 +43,14 @@ open --env "INLAY_CLIENT_DATA_DIR=$PWD/.local/dev-client" "build/Inlay Dev.app"
 - Record what you used and observed. State which flows could not be exercised because a Mac, microphone, permissions, or model assets were unavailable. Static checks and an HTTP health page do not establish native UI or inference behavior.
 - When changing Swift or the transport contract, run `bun run generate:api --check` and `swift build --force-resolved-versions` on macOS. Compile affected native helpers when changing C++ or MLX. These are build/static checks, not behavioral test suites.
 
+### Checking long takes on a Mac
+
+Use **Start dictation** in the Inlay Dev menu, not **Test microphone**, for recovery checks. Test mode is deliberately not recovered on relaunch. Use only your isolated development server, not a production server or the Mac’s network settings.
+
+- Dictate past the old three-minute limit, with a distinctive phrase near the start and another near the end. Finish, then inspect the duration and both phrases in **History**.
+- Stop the development server mid-take; keep speaking, finish, and relaunch Inlay Dev with the same `INLAY_CLIENT_DATA_DIR`. Start another short dictation while still offline. Restore the same server and verify the two results are individually selectable under **Copy finished dictation**, without pasting into the previous app or overwriting the clipboard.
+- Quit Inlay Dev mid-dictation, reopen it, and check the recovered transcript. An explicitly cancelled dictation should not return as a finished result. No manual step here verifies a sudden power loss.
+
 ## Bundled local server (Release)
 
 `./scripts/build-app.sh --with-server` bundles `build/server` into the app. On first run the Release app lands on **This Mac**, where model downloads and the background-service install live. To remove the agent, use the Uninstall button beside **Local server**, which removes it while keeping data and models; `./scripts/install-service.sh --uninstall` does the same from a checkout.
