@@ -31,10 +31,29 @@ enum LocalServerPaths {
     }
     static let label = "dev.davis.inlay.server-agent"
     static var bundledServerDirectory: URL? {
-        Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/Server", isDirectory: true)
+        Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Server", isDirectory: true)
             .nilIfMissing
     }
+    /// Pre-1.0 bundles kept the server at Contents/Helpers/Server. The directory is
+    /// no longer packaged; the path only identifies a LaunchAgent saved by an older app.
+    static var legacyBundledServerDirectory: URL {
+        Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/Server", isDirectory: true)
+    }
     static var installedMarkerExists: Bool { installedMarker() != nil }
+
+    /// True when `path` is this app bundle's old Helpers server, or a file inside it.
+    static func refersToLegacyBundledServer(_ path: String) -> Bool {
+        let stored = URL(fileURLWithPath: path)
+        let legacy = legacyBundledServerDirectory
+        let pairs = [
+            (stored.path, legacy.path),
+            (stored.standardizedFileURL.path, legacy.standardizedFileURL.path),
+            (stored.resolvingSymlinksInPath().path, legacy.resolvingSymlinksInPath().path),
+        ]
+        return pairs.contains { candidate, root in
+            candidate == root || candidate.hasPrefix(root + "/")
+        }
+    }
 
     /// The current marker, or one left by an earlier layout. A legacy install is
     /// adopted where it stands: its marker records the data directory and token

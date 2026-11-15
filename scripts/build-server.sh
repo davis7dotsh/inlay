@@ -77,9 +77,8 @@ test -f "$vad_model"
 bun install --frozen-lockfile
 
 if [[ -z "${INLAY_SERVER_VERSION:-}" ]]; then
-    described=$(git describe --tags --match 'server-v*' --always 2>/dev/null || true)
-    INLAY_SERVER_VERSION="${described#server-v}"
-    [[ -n "$INLAY_SERVER_VERSION" ]] || INLAY_SERVER_VERSION="0.0.0-dev"
+    # package.json is the release version; Docker builds have no Git metadata.
+    INLAY_SERVER_VERSION=$(bun --print 'require("./package.json").version')
 fi
 export INLAY_SERVER_VERSION
 

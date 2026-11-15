@@ -74,7 +74,7 @@ cp Resources/swift-openapi-runtime-LICENSE.txt Resources/swift-http-types-LICENS
 swift scripts/make-icon.swift "$project_dir/.build/Inlay.iconset"
 iconutil -c icns .build/Inlay.iconset -o "$staged_app/Contents/Resources/Inlay.icns"
 if [[ "$with_server" == 1 ]]; then
-    ditto "$project_dir/build/server" "$staged_app/Contents/Helpers/Server"
+    ditto "$project_dir/build/server" "$staged_app/Contents/Resources/Server"
     cp Server/dev.davis.inlay.server-agent.plist "$staged_app/Contents/Resources/"
 fi
 
@@ -84,12 +84,12 @@ if [[ "$dist" == 1 ]]; then
     # Inside-out, hardened-runtime signing of every bundled Mach-O.
     while IFS= read -r -d '' macho; do
         codesign --force --options runtime --timestamp --sign "$signing_identity" "$macho"
-    done < <(find "$staged_app/Contents/Helpers" -type f -name '*.dylib' -print0)
-    find "$staged_app/Contents/Helpers" -type d -name '*.bundle' -print0 |
+    done < <(find "$staged_app/Contents/Resources/Server" -type f -name '*.dylib' -print0)
+    find "$staged_app/Contents/Resources/Server" -type d -name '*.bundle' -print0 |
         while IFS= read -r -d '' bundle; do
             codesign --force --options runtime --timestamp --sign "$signing_identity" "$bundle"
         done
-    find "$staged_app/Contents/Helpers" -type f -perm -u+x -print0 |
+    find "$staged_app/Contents/Resources/Server" -type f -perm -u+x -print0 |
         while IFS= read -r -d '' macho; do
             file "$macho" | grep -q 'Mach-O' || continue
             codesign --force --options runtime --timestamp \
