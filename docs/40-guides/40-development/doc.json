@@ -334,16 +334,16 @@
       },
       "text": [
         {
-          "insert": "Change the shortcut and its trigger under "
+          "insert": "Change the dictation keys under "
         },
         {
-          "insert": "This Mac",
+          "insert": "Keys",
           "attributes": {
             "bold": true
           }
         },
         {
-          "insert": ", and choose inputs under "
+          "insert": " and the trigger in the card below it, and choose inputs under "
         },
         {
           "insert": "Microphone",
@@ -912,7 +912,22 @@
       },
       "text": [
         {
-          "insert": "Set the Transcriber Dev key to Right Option. A Fn press also starts a take in the installed app."
+          "insert": "Give Transcriber Dev only keys that the installed app does not list, such as Right Option. Both apps get global key events, so a shared key starts a take in both."
+        }
+      ],
+      "children": [
+        "dev-transcriber-key-ford"
+      ]
+    },
+    "dev-transcriber-key-ford": {
+      "id": "dev-transcriber-key-ford",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "On Ford's Mac the installed app lists Fn / Globe and F20."
         }
       ],
       "children": []
@@ -990,6 +1005,59 @@
       "text": [
         {
           "insert": "Grant Transcriber Dev Microphone and Accessibility the first time it asks."
+        }
+      ],
+      "children": [
+        "dev-transcriber-permissions-keep",
+        "dev-transcriber-permissions-adhoc"
+      ]
+    },
+    "dev-transcriber-permissions-keep": {
+      "id": "dev-transcriber-permissions-keep",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "A rebuild with "
+        },
+        {
+          "insert": "./scripts/rebuild-local.sh --dev",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " keeps the grants, because the pinned certificate signs each build."
+        }
+      ],
+      "children": []
+    },
+    "dev-transcriber-permissions-adhoc": {
+      "id": "dev-transcriber-permissions-adhoc",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "./scripts/build-dev-app.sh",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " signs with "
+        },
+        {
+          "insert": "TRANSCRIBER_SIGNING_IDENTITY",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": ", the one Apple Development identity, or ad hoc. An ad hoc build loses its Accessibility and Input Monitoring grants on each rebuild."
         }
       ],
       "children": []

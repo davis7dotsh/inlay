@@ -30,6 +30,7 @@
         "fork-diff-scripts",
         "fork-diff-recording-lead",
         "fork-diff-single-tap",
+        "fork-diff-keys",
         "fork-diff-capture",
         "fork-diff-durable",
         "fork-diff-ports-heading",
@@ -653,7 +654,7 @@
       "props": {},
       "text": [
         {
-          "insert": "The fork differs from upstream in seven areas. Check each one when you port an upstream feature, because each adds files or fields that upstream does not have. The first six areas are fork features, and the seventh is the set of hand-ported upstream fixes."
+          "insert": "The fork differs from upstream in eight areas. Check each one when you port an upstream feature, because each adds files or fields that upstream does not have. The first seven areas are fork features, and the eighth is the set of hand-ported upstream fixes."
         }
       ],
       "children": []
@@ -1004,7 +1005,7 @@
       "props": {},
       "text": [
         {
-          "insert": "Three of the first six areas change how the Mac app records a take. The "
+          "insert": "Four of the first seven areas change how the Mac app records a take. The "
         },
         {
           "insert": "Architecture",
@@ -1239,6 +1240,163 @@
         },
         {
           "insert": "singleTap",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": "."
+        }
+      ],
+      "children": []
+    },
+    "fork-diff-keys": {
+      "id": "fork-diff-keys",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "Each key in a list of dictation keys starts and stops a take. The "
+        },
+        {
+          "insert": "Keys",
+          "attributes": {
+            "bold": true
+          }
+        },
+        {
+          "insert": " card in Preferences adds and removes keys."
+        }
+      ],
+      "children": [
+        "fork-diff-keys-why",
+        "fork-diff-keys-f13",
+        "fork-diff-keys-config",
+        "fork-diff-keys-files"
+      ]
+    },
+    "fork-diff-keys-why": {
+      "id": "fork-diff-keys-why",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "Ford added the list so a Work Louder macro pad can start a take. The pad cannot send Fn, so its key sends F20."
+        }
+      ],
+      "children": []
+    },
+    "fork-diff-keys-f13": {
+      "id": "fork-diff-keys-f13",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "Give a macro pad key one of F13 to F20, because macOS often drops F21 to F24."
+        }
+      ],
+      "children": []
+    },
+    "fork-diff-keys-config": {
+      "id": "fork-diff-keys-config",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "config.json",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " stores the list as "
+        },
+        {
+          "insert": "holdKeys",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": ". A file with only the older "
+        },
+        {
+          "insert": "holdKey",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " string still loads."
+        }
+      ],
+      "children": []
+    },
+    "fork-diff-keys-files": {
+      "id": "fork-diff-keys-files",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "The change is mostly in "
+        },
+        {
+          "insert": "Sources/Transcriber/System/HotkeyMonitor.swift",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": ", "
+        },
+        {
+          "insert": "Sources/Transcriber/TranscriberController.swift",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": ", and "
+        },
+        {
+          "insert": "Sources/Transcriber/Views/PreferencesPage.swift",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": ". It also touches "
+        },
+        {
+          "insert": "TranscriberConfiguration.swift",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " and "
+        },
+        {
+          "insert": "ConfigurationFile.swift",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " under "
+        },
+        {
+          "insert": "Sources/TranscriberCore",
           "attributes": {
             "code": true
           }
@@ -1594,7 +1752,7 @@
       "props": {},
       "text": [
         {
-          "insert": "The seventh area is 30 upstream reliability and usability commits that the fork hand-ports in five units. The commits come from upstream "
+          "insert": "The eighth area is 30 upstream reliability and usability commits that the fork hand-ports in five units. The commits come from upstream "
         },
         {
           "insert": "main",

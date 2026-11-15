@@ -28,6 +28,17 @@
         "arch-durable-text",
         "arch-cancel-lead",
         "arch-cancel",
+        "arch-keys-lead",
+        "arch-keys-rows",
+        "arch-keys-add",
+        "arch-keys-macro",
+        "arch-keys-switch",
+        "arch-keys-config-lead",
+        "arch-keys-shape",
+        "arch-keys-rules-lead",
+        "arch-keys-reject",
+        "arch-keys-reserved",
+        "arch-keys-legacy",
         "architecture-activation-modes",
         "architecture-mode-hold",
         "architecture-mode-double",
@@ -1021,6 +1032,348 @@
       ],
       "children": []
     },
+    "arch-keys-lead": {
+      "id": "arch-keys-lead",
+      "type": "paragraph",
+      "props": {},
+      "text": [
+        {
+          "insert": "The "
+        },
+        {
+          "insert": "Keys",
+          "attributes": {
+            "bold": true
+          }
+        },
+        {
+          "insert": " card, below the "
+        },
+        {
+          "insert": "This Mac",
+          "attributes": {
+            "bold": true
+          }
+        },
+        {
+          "insert": " card in Preferences, lists the dictation keys. Every key in the list starts and ends a take in the one "
+        },
+        {
+          "insert": "Trigger",
+          "attributes": {
+            "bold": true
+          }
+        },
+        {
+          "insert": " mode."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-rows": {
+      "id": "arch-keys-rows",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "Each key is a row with a "
+        },
+        {
+          "insert": "−",
+          "attributes": {
+            "bold": true
+          }
+        },
+        {
+          "insert": " button that removes the key. The button is off while the list holds one key."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-add": {
+      "id": "arch-keys-add",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "Add key",
+          "attributes": {
+            "bold": true
+          }
+        },
+        {
+          "insert": " captures the next key press in a Transcriber window by its virtual key code. The captured press never starts a take."
+        }
+      ],
+      "children": [
+        "arch-keys-add-pick",
+        "arch-keys-add-cancel",
+        "arch-keys-add-reserved"
+      ]
+    },
+    "arch-keys-add-pick": {
+      "id": "arch-keys-add-pick",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "While capture is open, the card shows a button for each key from Right Option, Right Control, Fn / Globe, and F13 to F20 that the list does not hold. A click adds that key, so you can add a key that your keyboard lacks."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-add-cancel": {
+      "id": "arch-keys-add-cancel",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "Escape, "
+        },
+        {
+          "insert": "Cancel",
+          "attributes": {
+            "bold": true
+          }
+        },
+        {
+          "insert": ", or 60 s without a key ends capture and adds nothing."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-add-reserved": {
+      "id": "arch-keys-add-reserved",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "Capture ignores a reserved key, such as Return, Tab, or Space."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-macro": {
+      "id": "arch-keys-macro",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "A macro pad cannot send Fn, so a pad key sends one of F13 to F20 instead. macOS often drops F21 to F24."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-switch": {
+      "id": "arch-keys-switch",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "Between presses, any listed key can make the next press."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-config-lead": {
+      "id": "arch-keys-config-lead",
+      "type": "paragraph",
+      "props": {},
+      "text": [
+        {
+          "insert": "config.json",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " stores the key list as "
+        },
+        {
+          "insert": "holdKeys",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " and the trigger mode as "
+        },
+        {
+          "insert": "activationMode",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": "."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-shape": {
+      "id": "arch-keys-shape",
+      "type": "state-shape",
+      "props": {
+        "example": "{\"holdKeys\": [\"fn\", \"key:90\"], \"activationMode\": \"singleTap\"}",
+        "fields": [
+          {
+            "name": "holdKeys",
+            "type": "[String]",
+            "description": "One or more different tokens: `rightOption`, `rightControl`, `fn`, or `key:<code>` with a decimal virtual key code. F13 is `key:105`, and F20 is `key:90`. The default is `[\"rightOption\"]`."
+          },
+          {
+            "name": "activationMode",
+            "type": "String",
+            "description": "`hold`, `doubleTap`, or `singleTap`. Every key in `holdKeys` uses this mode. The default is `hold`."
+          }
+        ],
+        "name": "Dictation key settings",
+        "source": {
+          "path": "Sources/TranscriberCore/TranscriberConfiguration.swift",
+          "symbol": "TranscriberConfiguration"
+        }
+      },
+      "children": []
+    },
+    "arch-keys-rules-lead": {
+      "id": "arch-keys-rules-lead",
+      "type": "paragraph",
+      "props": {},
+      "text": [
+        {
+          "insert": "A file that breaks a "
+        },
+        {
+          "insert": "holdKeys",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " rule leaves the last good configuration active."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-reject": {
+      "id": "arch-keys-reject",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "TranscriberConfiguration",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " rejects an empty list, a repeated token, and a token that is not canonical, such as "
+        },
+        {
+          "insert": "key:090",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": "."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-reserved": {
+      "id": "arch-keys-reserved",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "A "
+        },
+        {
+          "insert": "key:<code>",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " token cannot name a reserved code. The reserved codes are Return 36, Tab 48, Space 49, Escape 53, keypad Enter 76, and the modifiers 54 to 63."
+        }
+      ],
+      "children": [
+        "arch-keys-reserved-presets"
+      ]
+    },
+    "arch-keys-reserved-presets": {
+      "id": "arch-keys-reserved-presets",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "Right Option, Right Control, and Fn use their own tokens."
+        }
+      ],
+      "children": []
+    },
+    "arch-keys-legacy": {
+      "id": "arch-keys-legacy",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "A file with only the older "
+        },
+        {
+          "insert": "holdKey",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " string still loads as a one-key list. The first settings change rewrites the file with "
+        },
+        {
+          "insert": "holdKeys",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " and without "
+        },
+        {
+          "insert": "holdKey",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": "."
+        }
+      ],
+      "children": []
+    },
     "architecture-activation-modes": {
       "id": "architecture-activation-modes",
       "type": "paragraph",
@@ -1036,16 +1389,16 @@
           }
         },
         {
-          "insert": " setting under "
+          "insert": " setting, in the card below "
         },
         {
-          "insert": "This Mac",
+          "insert": "Keys",
           "attributes": {
             "bold": true
           }
         },
         {
-          "insert": " selects one of three ways for the dictation key to start and end a take."
+          "insert": ", selects one of three ways for a dictation key to start and end a take."
         }
       ],
       "children": []
@@ -1083,7 +1436,7 @@
           }
         },
         {
-          "insert": " starts recording on a double tap and ends it on a second double tap."
+          "insert": " starts recording on a double tap and ends it on a second double tap. A double tap needs two taps of the same key."
         }
       ],
       "children": []
@@ -1168,7 +1521,7 @@
       },
       "text": [
         {
-          "insert": "A press within 200 ms of the previous press is ignored. Escape cancels a latched take."
+          "insert": "A second press of the same key within 200 ms is ignored. Escape cancels a latched take."
         }
       ],
       "children": []
@@ -3004,7 +3357,16 @@
                 }
               },
               {
-                "insert": " and "
+                "insert": ", "
+              },
+              {
+                "insert": "Keys",
+                "attributes": {
+                  "bold": true
+                }
+              },
+              {
+                "insert": ", and "
               },
               {
                 "insert": "Microphone",
@@ -3013,7 +3375,7 @@
                 }
               }
             ],
-            "Endpoint/token, device name, shortcut and trigger mode, launch at login, output muting while recording, dictation sounds, microphone priority/selection, keep microphone ready, transcription channels per device."
+            "Endpoint/token, device name, dictation keys and trigger mode, launch at login, output muting while recording, dictation sounds, microphone priority/selection, keep microphone ready, transcription channels per device."
           ],
           [
             "Shared server",
@@ -3206,7 +3568,7 @@
           }
         },
         {
-          "insert": " stores shortcut/microphone settings. "
+          "insert": " stores dictation key and microphone settings. "
         },
         {
           "insert": "client.json",

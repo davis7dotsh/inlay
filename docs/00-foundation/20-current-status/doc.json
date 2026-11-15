@@ -65,16 +65,7 @@
       "props": {},
       "text": [
         {
-          "insert": "The fork last merged upstream, then named V07, through PR #23, and later hand-ported 30 upstream Inlay commits. Those ports are merged to "
-        },
-        {
-          "insert": "main",
-          "attributes": {
-            "code": true
-          }
-        },
-        {
-          "insert": ", but "
+          "insert": "The fork last merged upstream, then named V07, through PR #23, and later hand-ported 30 upstream Inlay commits. "
         },
         {
           "insert": "/Applications/Transcriber.app",
@@ -83,7 +74,25 @@
           }
         },
         {
-          "insert": " and its server still run the 2026-10-15 build. Speech recognition uses Deepgram "
+          "insert": " runs those ports from "
+        },
+        {
+          "insert": "main",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " at "
+        },
+        {
+          "insert": "dfd49a6",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": ", installed on 2026-11-15, but its server still runs the 2026-10-15 build. Speech recognition uses Deepgram "
         },
         {
           "insert": "nova-3",
@@ -150,7 +159,7 @@
             ],
             [
               {
-                "insert": "/Users/Ford/workspace/codecaine/utilities/sotto",
+                "insert": "/Users/Ford/workspace/codebases/codecaine/utilities/transcriber",
                 "attributes": {
                   "code": true
                 }
@@ -168,13 +177,13 @@
                 "insert": " is at "
               },
               {
-                "insert": "50120b3",
+                "insert": "dfd49a6",
                 "attributes": {
                   "code": true
                 }
               },
               {
-                "insert": " and includes commits "
+                "insert": ", which PR #7 merged on 2026-11-15. It includes commits "
               },
               {
                 "insert": "deb2c36",
@@ -276,7 +285,7 @@
                 }
               },
               {
-                "insert": ", not yet installed"
+                "insert": ", installed in the app but not the server"
               }
             ],
             [
@@ -344,7 +353,16 @@
                 }
               },
               {
-                "insert": ". The installed app and server still run the 2026-10-15 build"
+                "insert": ". The installed app runs the ports from "
+              },
+              {
+                "insert": "dfd49a6",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": " since 2026-11-15. The server still runs the 2026-10-15 build"
               }
             ]
           ],
@@ -371,7 +389,7 @@
                 "insert": ", signed with the pinned certificate Sotto.app used. "
               },
               {
-                "insert": "./scripts/rebuild-local.sh",
+                "insert": "python3 scripts/install-local.py",
                 "attributes": {
                   "code": true
                 }
@@ -386,10 +404,19 @@
                 }
               },
               {
-                "insert": " on 2026-10-15 without a change of signing identity or a reset of macOS permissions. The rollback copy is "
+                "insert": " at "
               },
               {
-                "insert": ".local/install-backups/20261015-142908-109296/Transcriber.app",
+                "insert": "dfd49a6",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": " on 2026-11-15 without a change of signing identity or a reset of macOS permissions. The rollback copy is "
+              },
+              {
+                "insert": ".local/install-backups/20261115-155500-762051/Transcriber.app",
                 "attributes": {
                   "code": true
                 }
@@ -449,24 +476,42 @@
                 }
               },
               {
-                "insert": ", key Fn / Globe"
+                "insert": ", keys Fn / Globe and F20"
               }
             ],
             [
               {
-                "insert": "Set under "
+                "insert": "Set in Preferences under "
               },
               {
-                "insert": "This Mac",
+                "insert": "Keys",
                 "attributes": {
                   "bold": true
                 }
               },
               {
-                "insert": ", and "
+                "insert": " and "
               },
               {
-                "insert": "~/Library/Application Support/Transcriber/config.json",
+                "insert": "Trigger",
+                "attributes": {
+                  "bold": true
+                }
+              },
+              {
+                "insert": ". "
+              },
+              {
+                "insert": "config.json",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": " in "
+              },
+              {
+                "insert": "~/Library/Application Support/Transcriber",
                 "attributes": {
                   "code": true
                 }
@@ -475,13 +520,31 @@
                 "insert": " has "
               },
               {
+                "insert": "\"holdKeys\" : [\"fn\", \"key:90\"]",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": " and "
+              },
+              {
                 "insert": "\"activationMode\" : \"singleTap\"",
                 "attributes": {
                   "code": true
                 }
               },
               {
-                "insert": ". No real Fn take is confirmed in the installed app"
+                "insert": ". The installed app shows source revision "
+              },
+              {
+                "insert": "dfd49a6",
+                "attributes": {
+                  "code": true
+                }
+              },
+              {
+                "insert": ". An F20 press from the Work Louder macro pad started a take on 2026-11-15. No real Fn take is confirmed in the installed app"
               }
             ]
           ],
@@ -1692,7 +1755,7 @@
       },
       "text": [
         {
-          "insert": "Install the ported build.",
+          "insert": "Install the ported server build.",
           "attributes": {
             "bold": true
           }
@@ -1712,16 +1775,16 @@
       },
       "text": [
         {
-          "insert": "The installed app and the launchd server on 127.0.0.1:8391 run the 2026-10-15 build. They get the ports only after "
+          "insert": "The installed app runs "
         },
         {
-          "insert": "./scripts/rebuild-local.sh",
+          "insert": "dfd49a6",
           "attributes": {
             "code": true
           }
         },
         {
-          "insert": " and a server rebuild."
+          "insert": " since 2026-11-15. The launchd server on 127.0.0.1:8391 still runs the 2026-10-15 build, and it gets the server-side ports only after a server rebuild."
         }
       ],
       "children": []

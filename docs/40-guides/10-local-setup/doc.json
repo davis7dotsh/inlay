@@ -171,16 +171,54 @@
       },
       "text": [
         {
-          "insert": "For dictation, focus a text field, hold the configured key, speak, and release. The key on this Mac is fn. "
+          "insert": "For dictation, focus a text field, press a dictation key, speak, and press a dictation key again."
+        }
+      ],
+      "children": [
+        "local-setup-keys-this-mac",
+        "local-setup-keys-where"
+      ]
+    },
+    "local-setup-keys-this-mac": {
+      "id": "local-setup-keys-this-mac",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "The keys on this Mac are Fn / Globe and F20, with the trigger "
         },
         {
-          "insert": "This Mac",
+          "insert": "Press to start and stop",
           "attributes": {
             "bold": true
           }
         },
         {
-          "insert": " shows the current key and trigger mode."
+          "insert": "."
+        }
+      ],
+      "children": []
+    },
+    "local-setup-keys-where": {
+      "id": "local-setup-keys-where",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "The "
+        },
+        {
+          "insert": "Keys",
+          "attributes": {
+            "bold": true
+          }
+        },
+        {
+          "insert": " card in Preferences shows the current keys, and the card below it shows the trigger."
         }
       ],
       "children": []

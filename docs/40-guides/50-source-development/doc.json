@@ -25,7 +25,6 @@
         "b-development-native-app-14",
         "b-development-transcriber-has-no-brows-15",
         "b-development-on-an-apple-silicon-mac-16",
-        "b-development-sh-17",
         "b-development-under-this-mac-sele-18",
         "srcdev-right-option",
         "b-development-grant-transcriber-dev-19",
@@ -702,7 +701,7 @@
           "insert": "On an Apple Silicon Mac with Xcode 26+ and Swift 6.2+, run "
         },
         {
-          "insert": "./scripts/build-dev-app.sh",
+          "insert": "./scripts/rebuild-local.sh --dev",
           "attributes": {
             "code": true
           }
@@ -730,8 +729,83 @@
         }
       ],
       "children": [
+        "b-development-sh-17",
+        "srcdev-dev-signing",
+        "srcdev-dev-adhoc",
         "srcdev-dev-tmp"
       ]
+    },
+    "b-development-sh-17": {
+      "id": "b-development-sh-17",
+      "type": "code",
+      "props": {
+        "language": "sh"
+      },
+      "text": [
+        {
+          "insert": "mkdir -p .local/dev-client\nchmod 700 .local/dev-client\nopen --env \"TRANSCRIBER_CLIENT_DATA_DIR=$PWD/.local/dev-client\" \\\n  \"build/Transcriber Dev.app\""
+        }
+      ],
+      "children": []
+    },
+    "srcdev-dev-signing": {
+      "id": "srcdev-dev-signing",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "--dev",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " signs the app with the pinned local certificate, so macOS keeps its Accessibility and Input Monitoring grants across rebuilds. "
+        },
+        {
+          "insert": "Development",
+          "attributes": {
+            "reference": {
+              "kind": "doc",
+              "path": "40-guides/40-development"
+            }
+          }
+        },
+        {
+          "insert": " covers the one-time certificate setup."
+        }
+      ],
+      "children": []
+    },
+    "srcdev-dev-adhoc": {
+      "id": "srcdev-dev-adhoc",
+      "type": "list-item",
+      "props": {
+        "ordered": false
+      },
+      "text": [
+        {
+          "insert": "./scripts/build-dev-app.sh",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": " signs with "
+        },
+        {
+          "insert": "TRANSCRIBER_SIGNING_IDENTITY",
+          "attributes": {
+            "code": true
+          }
+        },
+        {
+          "insert": ", the one Apple Development identity, or ad hoc. An ad hoc build loses those grants on each rebuild."
+        }
+      ],
+      "children": []
     },
     "srcdev-dev-tmp": {
       "id": "srcdev-dev-tmp",
@@ -769,19 +843,6 @@
         },
         {
           "insert": "."
-        }
-      ],
-      "children": []
-    },
-    "b-development-sh-17": {
-      "id": "b-development-sh-17",
-      "type": "code",
-      "props": {
-        "language": "sh"
-      },
-      "text": [
-        {
-          "insert": "mkdir -p .local/dev-client\nchmod 700 .local/dev-client\nopen --env \"TRANSCRIBER_CLIENT_DATA_DIR=$PWD/.local/dev-client\" \"build/Transcriber Dev.app\""
         }
       ],
       "children": []
@@ -958,7 +1019,7 @@
       },
       "text": [
         {
-          "insert": "The installed app and Transcriber Dev both get global key events. A Fn press starts a take in the installed app too."
+          "insert": "The installed app and Transcriber Dev both get global key events, so a key in both lists starts a take in both apps. The installed app lists Fn / Globe and F20, so never add either key to Transcriber Dev."
         }
       ],
       "children": []
@@ -989,7 +1050,7 @@
           }
         },
         {
-          "insert": " for an in-app transcript; use the recording shortcut in a separate editable app to verify insertion."
+          "insert": " for an in-app transcript, and press the dictation key in a separate editable app to verify insertion."
         }
       ],
       "children": []
@@ -1135,7 +1196,7 @@
       },
       "text": [
         {
-          "insert": "Press Right Option for each Transcriber Dev take, never Fn."
+          "insert": "Press Right Option for each Transcriber Dev take, never Fn / Globe or F20."
         }
       ],
       "children": [
