@@ -700,7 +700,14 @@ export class GenerationService {
             : "Loading server models; recordings will queue."
           : (failure ??
             (this.warming ? "Loading server models…" : "Server models are unavailable."));
-    if (!state.speechLoaded) this.beginWarmup();
+    // Recover a failed proof warmup between takes too, rather than making the
+    // next recording pay for its restart. beginWarmup preserves backoff and
+    // never competes with an active generation or another warmup.
+    if (
+      !state.speechLoaded ||
+      (this.preferences.preferences.textCorrectionEnabled && !state.proofLoaded)
+    )
+      this.beginWarmup();
     return {
       apiVersion: API_VERSION,
       serverVersion: SERVER_VERSION,
