@@ -36,3 +36,7 @@ The server keeps the model warm. Terminating the helper cancels active work. `{"
 ## Verify
 
 Build with `./scripts/build-server.sh`, then use **Inlay Dev** to record speech and inspect progress, transcripts, and the unavailable recognition-vocabulary status in history. Verify cancellation and subsequent recordings interactively when changing helper lifecycle behavior. See [the development guide](../docs/development.md). Automated test harnesses are not allowed.
+
+## Idle latency on macOS
+
+On macOS, the helper extends ggml’s three-minute Metal residency expiry to 24 hours after the last inference, preserving an explicit `GGML_METAL_RESIDENCY_KEEP_ALIVE_S` override. This keeps model buffers in Metal’s residency sets between dictations without wiring arbitrary process memory. It retains the existing residency heartbeat while idle, trading some power and resident memory for predictable interactive latency. Residency sets require macOS 15+ and supported Metal hardware; older systems retain normal pageable behavior. A real one-second silent model evaluation prepares graphs before readiness, with fresh context for every subsequent dictation. Linux behavior is unchanged.

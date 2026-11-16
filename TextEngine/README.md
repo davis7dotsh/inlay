@@ -6,7 +6,7 @@ Build with `scripts/build-server.sh`; see [model setup](../Server/README.md#mode
 
 ## Protocol
 
-After verifying/loading the model, the helper emits a `ready` JSON object with `engineVersion`. Requests and responses are newline-delimited UTF-8 JSON:
+After verifying/loading and preparing the model, the helper emits a `ready` JSON object with `engineVersion`. Requests and responses are newline-delimited UTF-8 JSON:
 
 ```json
 {"type":"correct","id":"example","text":"i use code ex.","terms":["Codex"],"language":"en","systemPrompt":"Return only the cleaned transcript. Preserve wording and use preferred names only when they match."}
@@ -21,7 +21,10 @@ An error contains `type: "error"`, `message`, and the request `id` when availabl
 - Context: 8,192 tokens including role framing, prompt, JSON input, and the 2,048-token output reservation. Greedy decoding; overflow, output exhaustion, and empty output fail rather than truncate.
 - Inference: 15-second helper deadline. The MLX helper adds a two-second process-exit backstop; the server resets either hung helper at 18 seconds and bounds proofreading startup at 30 seconds.
 - User text and custom prompts cannot introduce structural control-token IDs. Semantic model mistakes are still possible; [rewrite guards](../docs/text-correction.md#preservation-checks) determine whether output is accepted.
+- On macOS, the helper keeps an active MLX residency ticket while it owns the model. The budget is the loaded MLX allocation size plus 256 MiB, capped at one quarter of physical RAM and Metal’s recommended working set. A one-token evaluation with fixed text prepares kernels before `ready`; its cache is discarded. This deliberately keeps model memory resident between dictations. Unsupported residency control falls back to normal pageable allocations.
 - Request state is cleared after each correction. Cancellation of active work terminates the process. Quit, stdin EOF, and parent death release the model. The server retains idle warm helpers.
+
+Result/error events may include optional numeric `metrics` (elapsed/tokenization time, input/output token counts, first-token latency, and generation time/rate). Older servers ignore the field. Metrics never include prompts or transcripts.
 
 Diagnostics use stderr and omit transcripts. The server drains them without storing them.
 

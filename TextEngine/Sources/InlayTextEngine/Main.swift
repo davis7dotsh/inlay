@@ -28,6 +28,19 @@ enum InlayTextEngine {
             writer.error(.init(message: "Could not load the local text model."))
             return 1
         }
+        do {
+            try await engine.prepare()
+        } catch {
+            await engine.releaseResidency()
+            writer.error(.init(message: "The local text model could not prepare for correction."))
+            return 1
+        }
+        let status = await serve(engine: engine, writer: writer)
+        await engine.releaseResidency()
+        return status
+    }
+
+    private static func serve(engine: CorrectionEngine, writer: ProtocolWriter) async -> Int32 {
         writer.emit(.init(type: "ready", engineVersion: Limits.engineVersion))
         let input = BoundedLineReader()
         while true {
