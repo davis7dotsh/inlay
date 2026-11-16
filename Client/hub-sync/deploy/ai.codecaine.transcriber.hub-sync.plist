@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The daily sync of the Transcriber archive to the Transcriber Hub, a LaunchAgent of the logged-in user.
+  It runs at 23:30 local time. When the Mac sleeps through 23:30, launchd runs it once after wake.
+  install.sh fills in __HOME__ and __BUN__ and copies this file to ~/Library/LaunchAgents.
+  The sync writes its own log lines (no token) to ~/Library/Logs/transcriber-hub-sync.log.
+  --since is the import cut-off: older records wait for the audio backfill (checkpoint 6).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.codecaine.transcriber.hub-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__BUN__</string>
+    <string>__HOME__/.local/share/transcriber-hub-client/current/Client/hub-sync/src/main.ts</string>
+    <string>--since</string>
+    <string>2026-11-16T18:28:20Z</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>23</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/transcriber-hub-sync.log</string>
+</dict>
+</plist>

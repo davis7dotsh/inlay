@@ -1,0 +1,13 @@
+{
+  "name": "@transcriber/hub-sync",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "bun src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "typescript": "5.9.3"
+  }
+}

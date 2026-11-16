@@ -4,7 +4,8 @@
 // For each address it posts a small generated FLAC record, replays it, cuts a post off twice and
 // resends it, sends a wrong hash, no token, a wrong token and a record of the MacBook device, then
 // reconfirms and searches. It posts one new recording from both test devices at once (one wins,
-// the other gets 403) and resends a record with new texts (the rows take the new texts). It reads the share and the database on services-01 over ssh (read only).
+// the other gets 403) and resends a record with new texts (the rows take the new texts). From a
+// checkout with Client/hub-sync, it also checks that the client refuses an http hub address. It reads the share and the database on services-01 over ssh (read only).
 // With HUB_CHECK_LOCAL=1 it runs on services-01 itself and reads them directly. It makes each FLAC
 // from a generated 1-second WAV with macOS afconvert.
 // It prints one JSON line per check and exits 1 when a check fails. It never prints the token.
@@ -383,6 +384,29 @@ async function checkAddress(address: string, n: number) {
   report(address, "reconfirm with the old text hashes now fails", reOld.ok === false, reOld);
 }
 
+/// The client refuses an http hub address before it reads a record or sends a byte. It runs the
+/// client of this checkout (when it is there) with a throwaway log file.
+async function checkClientRefusesHttp(address: string) {
+  const main = `${import.meta.dir}/../../Client/hub-sync/src/main.ts`;
+  if (!(await Bun.file(main).exists())) return;
+  const logFile = `/tmp/hub-live-client-${randomBytes(4).toString("hex")}.log`;
+  const p = Bun.spawn(
+    ["bun", main, "--hub", `http://${address}:${PORT}`, "--dry-run", "--log", logFile],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const out = await new Response(p.stdout).text();
+  const code = await p.exited;
+  await Bun.file(logFile)
+    .delete()
+    .catch(() => {});
+  report(
+    address,
+    "the client refuses an http hub address",
+    code === 1 && out.includes("is not an https URL"),
+    { exit: code, out: out.trim().slice(0, 300) },
+  );
+}
+
 async function checkRevoked(address: string) {
   const flac = await makeFlac(300);
   const res = await call(address, "/v1/records", {
@@ -396,6 +420,9 @@ async function checkRevoked(address: string) {
 
 for (const [n, address] of addresses.entries()) {
   if (revokedMode) await checkRevoked(address);
-  else await checkAddress(address, n);
+  else {
+    await checkAddress(address, n);
+    await checkClientRefusesHttp(address);
+  }
 }
 process.exit(failed ? 1 : 0);
