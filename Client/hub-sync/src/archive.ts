@@ -1,9 +1,10 @@
-// Read one Transcriber archive record (~/Transcripts/records/transcriber/<id>/) into the hub's post
-// body, the way importer.py transcriber_rows maps it, so a sync and the import write the same rows.
+// Read one archive record into the hub's post body, the way importer.py maps it, so a sync and the
+// import write the same rows: a Transcriber record (~/Transcripts/records/transcriber/<id>/, as
+// transcriber_rows) or a Wispr Flow record (~/Transcripts/records/wispr-flow/<id>/, as wispr_rows).
 // It only reads the archive. It never writes, moves or deletes a file there.
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { stamp } from "../../../Hub/src/ids.ts";
+import { basename, dirname, join } from "node:path";
+import { NS, stamp, uuid5 } from "../../../Hub/src/ids.ts";
 import { parseSha, sha256Hex, type RecordPost, type Sha256 } from "../../../Hub/src/record.ts";
 
 type Obj = Record<string, unknown>;
@@ -31,41 +32,187 @@ function numOrNull(from: Obj, key: string): number | null {
 /// Python's `x.get(key) or fallback`.
 const strOr = (from: Obj, key: string, fallback: string) => strOrNull(from, key) || fallback;
 
-/// The original WAV that metadata.json lists as the "original-audio" artifact.
-export type OriginalAudio = { path: string; sha256: Sha256; bytes: number | null };
+/// The WAV the record's audio comes from, as metadata.json lists it: the "original-audio" artifact
+/// of a Transcriber record (not its "audio" inference WAV), the "audio" artifact of a Wispr Flow one.
+export type SourceWav = { path: string; sha256: Sha256; bytes: number | null };
+
+export type TextSha256 = { raw: Sha256 | null; clean: Sha256 | null };
 
 /// One archive record: the post body without its audio, and what the confirm must hold.
 export type ArchiveRecord = {
   dir: string;
   recordingId: string; // lowercase
-  recordedAt: string; // stamp() form, for --since
+  recordedAt: string | null; // stamp() form; null for a Wispr Flow row without a timestamp
   post: Omit<RecordPost, "audio">;
-  originalAudio: OriginalAudio | null;
-  textSha256: { raw: Sha256 | null; clean: Sha256 | null };
+  sourceWav: SourceWav | null;
+  textSha256: TextSha256;
 };
 
-export const transcriberRecords = (archiveRoot: string) =>
-  join(archiveRoot, "records", "transcriber");
+export const SOURCES = ["transcriber", "wispr-flow"] as const;
+export type Source = (typeof SOURCES)[number];
 
-/// The record folders, by name. A folder name is the lowercase recording ID.
+/// The source of a record folder: the name of the folder it sits in.
+export function sourceOf(dir: string): Source {
+  const s = basename(dirname(dir));
+  if (s !== "transcriber" && s !== "wispr-flow") throw new Error(`not a record folder: ${dir}`);
+  return s;
+}
+
+/// The record folders of every source, by path. A missing source folder holds no records.
 export async function recordDirs(archiveRoot: string): Promise<string[]> {
-  const root = transcriberRecords(archiveRoot);
-  const entries = await readdir(root, { withFileTypes: true });
-  return entries
-    .filter((e) => e.isDirectory() && !e.name.startsWith("."))
-    .map((e) => join(root, e.name))
-    .sort();
+  const out: string[] = [];
+  for (const source of SOURCES) {
+    const root = join(archiveRoot, "records", source);
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
+    for (const e of entries)
+      if (e.isDirectory() && !e.name.startsWith(".")) out.push(join(root, e.name));
+  }
+  return out.sort();
+}
+
+/// The MacBook: importer.py stores it as the device of every Wispr Flow recording.
+export const MACBOOK = "05d8dedd-c925-4924-8db9-45f3e7452d34";
+
+/// importer.py wispr_recording_id: transcriptEntityId in lowercase, or uuid5 of the archiver key
+/// (missing-id:<db>:<rowid>) when the row has no ID.
+export function wisprRecordingId(sourceId: string): string {
+  if (sourceId && !sourceId.startsWith("missing-id:")) return sourceId.toLowerCase();
+  return uuid5(NS, `wispr|${sourceId}`);
 }
 
 /// The recording ID and stamped time of a record, from metadata.json only.
-export async function readHead(dir: string): Promise<{ recordingId: string; recordedAt: string }> {
+export async function readHead(
+  dir: string,
+): Promise<{ recordingId: string; recordedAt: string | null }> {
   const m = o(JSON.parse(await readFile(join(dir, "metadata.json"), "utf8")));
+  if (sourceOf(dir) === "wispr-flow")
+    return {
+      recordingId: wisprRecordingId(str(m, "source_id")),
+      recordedAt: stamp(strOrNull(m, "timestamp")),
+    };
   const at = stamp(str(m, "timestamp"));
   if (!at) throw new Error("metadata.json has no timestamp");
   return { recordingId: str(m, "id").toLowerCase(), recordedAt: at };
 }
 
+/// The artifact of one kind that metadata.json lists, as a path inside the record folder.
+function sourceWav(dir: string, m: Obj, kind: string): SourceWav | null {
+  const artifacts = Array.isArray(m.artifacts) ? m.artifacts.map(o) : [];
+  const a = artifacts.find((x) => x.kind === kind);
+  if (!a) return null;
+  return {
+    path: join(dir, str(a, "path")),
+    sha256: parseSha(a.sha256, `${kind} sha256`),
+    bytes: numOrNull(a, "bytes"),
+  };
+}
+
+export const textShas = (post: Omit<RecordPost, "audio">): TextSha256 => ({
+  raw: post.transcription ? sha256Hex(post.transcription.text) : null,
+  clean: post.cleanup ? sha256Hex(post.cleanup.text) : null,
+});
+
 export async function readRecord(dir: string): Promise<ArchiveRecord> {
+  return sourceOf(dir) === "wispr-flow" ? readWispr(dir) : readTranscriber(dir);
+}
+
+/// The fields of one Wispr Flow take, from an archive folder or a flow.sqlite History row.
+export type WisprFields = {
+  recordingId: string;
+  timestamp: string | null;
+  status: string | null;
+  durationSeconds: number | null;
+  app: string | null;
+  language: string | null;
+  detectedLanguage: string | null;
+  raw: string;
+  clean: string;
+};
+
+/// importer.py wispr_rows: device the MacBook, provider and engine "Wispr Flow", model "unknown".
+/// A missing timestamp goes as "", which the hub stamps to null, as the importer stores it.
+export function wisprPost(f: WisprFields): Omit<RecordPost, "audio"> {
+  const post: Omit<RecordPost, "audio"> = {
+    recording: {
+      recording_id: f.recordingId,
+      recorded_at: f.timestamp ?? "",
+      device_id: MACBOOK,
+      mode: null,
+      status: f.status || "unknown",
+      language: f.language,
+      app: f.app,
+      duration_seconds: f.durationSeconds,
+    },
+    transcription: null,
+    cleanup: null,
+  };
+  if (!(f.raw || f.clean)) return post;
+  post.transcription = {
+    provider: "Wispr Flow",
+    model: "unknown",
+    model_version: null,
+    settings: {},
+    processing_seconds: null,
+    detected_language: f.detectedLanguage,
+    text: f.raw,
+  };
+  if (f.clean)
+    post.cleanup = {
+      engine: "Wispr Flow",
+      engine_version: null,
+      model: "unknown",
+      model_sha256: null,
+      prompt_sha256: null,
+      status: f.status,
+      text: f.clean,
+    };
+  return post;
+}
+
+/// importer.py wispr_row_texts (archive.py): raw = asrText; clean = the first non-empty of
+/// pastedText, serverFinalizedText, formattedText, asrText.
+export function wisprRowTexts(v: Record<string, unknown>): { raw: string; clean: string } {
+  const text = (k: string) => {
+    const t = v[k];
+    return typeof t === "string" ? t : "";
+  };
+  const key =
+    ["pastedText", "serverFinalizedText", "formattedText", "asrText"].find((k) => text(k)) ??
+    "formattedText";
+  return { raw: text("asrText"), clean: text(key) };
+}
+
+async function readWispr(dir: string): Promise<ArchiveRecord> {
+  const m = o(JSON.parse(await readFile(join(dir, "metadata.json"), "utf8")));
+  const head = await readHead(dir);
+  const ctx = o(m.context);
+  const post = wisprPost({
+    recordingId: head.recordingId,
+    timestamp: strOrNull(m, "timestamp"),
+    status: strOrNull(m, "status"),
+    durationSeconds: numOrNull(m, "duration_seconds"),
+    app: strOrNull(ctx, "app"),
+    language: strOrNull(ctx, "language"),
+    detectedLanguage: strOrNull(ctx, "detectedLanguage"),
+    raw: await readFile(join(dir, "raw.txt"), "utf8"),
+    clean: await readFile(join(dir, "clean.txt"), "utf8"),
+  });
+  return {
+    dir,
+    ...head,
+    post,
+    sourceWav: sourceWav(dir, m, "audio"),
+    textSha256: textShas(post),
+  };
+}
+
+async function readTranscriber(dir: string): Promise<ArchiveRecord> {
   const m = o(JSON.parse(await readFile(join(dir, "metadata.json"), "utf8")));
   const head = await readHead(dir);
   const versions = Array.isArray(m.source_versions) ? m.source_versions : [];
@@ -121,25 +268,11 @@ export async function readRecord(dir: string): Promise<ArchiveRecord> {
     }
   }
 
-  const artifacts = Array.isArray(m.artifacts) ? m.artifacts.map(o) : [];
-  const original = artifacts.find((a) => a.kind === "original-audio");
-  let originalAudio: OriginalAudio | null = null;
-  if (original) {
-    originalAudio = {
-      path: join(dir, str(original, "path")),
-      sha256: parseSha(original.sha256, "original-audio sha256"),
-      bytes: numOrNull(original, "bytes"),
-    };
-  }
-
   return {
     dir,
     ...head,
     post,
-    originalAudio,
-    textSha256: {
-      raw: post.transcription ? sha256Hex(post.transcription.text) : null,
-      clean: post.cleanup ? sha256Hex(post.cleanup.text) : null,
-    },
+    sourceWav: sourceWav(dir, m, "original-audio"),
+    textSha256: textShas(post),
   };
 }

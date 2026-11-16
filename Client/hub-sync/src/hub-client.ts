@@ -4,7 +4,7 @@
 // fails before fetch sends the request line.
 import { createHash, X509Certificate } from "node:crypto";
 import { checkServerIdentity, type PeerCertificate } from "node:tls";
-import type { RecordPost } from "../../../Hub/src/record.ts";
+import type { Held, RecordPost } from "../../../Hub/src/record.ts";
 
 export type HubTarget = {
   addresses: string[]; // base URLs in the order to try, such as https://10.10.20.128:8797
@@ -120,15 +120,30 @@ export class HubClient {
     });
   }
 
-  /// POST one record. Returns the reply body, which the caller checks against the record. A lost connection retries connect() once, then
-  /// stops the run.
-  async post(body: RecordPost, timeoutMs = 15 * 60_000): Promise<unknown> {
+  /// POST one record. Returns the reply body, which the caller checks against the record.
+  post(body: RecordPost, timeoutMs = 15 * 60_000): Promise<unknown> {
+    return this.request("/v1/records", body, timeoutMs);
+  }
+
+  /// Ask the hub to hash the record's FLAC on the share again and compare every stored hash with
+  /// the confirm. Returns the reply body: { ok: true } or { ok: false, mismatches }.
+  reconfirm(recordingId: string, held: Held, timeoutMs = 5 * 60_000): Promise<unknown> {
+    return this.request(
+      `/v1/records/${encodeURIComponent(recordingId)}/reconfirm`,
+      { recording_id: recordingId, ...held },
+      timeoutMs,
+    );
+  }
+
+  /// POST JSON. A lost connection retries connect() once, then stops the run. A 503, a refused
+  /// pin or a refused token stops the run. Another error reply throws RecordRefused.
+  private async request(path: string, body: unknown, timeoutMs: number): Promise<unknown> {
     const json = JSON.stringify(body);
     for (let attempt = 0; ; attempt++) {
       const base = this.base ?? (await this.connect());
       let res: Response;
       try {
-        res = await fetch(`${base}/v1/records`, {
+        res = await fetch(`${base}${path}`, {
           ...tlsOptions(this.target),
           method: "POST",
           headers: {

@@ -113,14 +113,25 @@ export async function scanWav(path: string): Promise<WavScan> {
   }
 }
 
+/// afconvert's FLAC encoder writes 4608-frame blocks. For a WAV shorter than one block it writes a
+/// file with no "fLaC" header and no audio, so a short WAV gets 192-frame blocks. Below 192 frames
+/// afconvert writes no FLAC at all, and the take fails here.
+const DEFAULT_BLOCK = 4608;
+const SHORT_BLOCK = 192;
+
 /// Convert the WAV to a mono FLAC (channel 0, same rate, 24-bit for a float source) in tempDir.
-export async function monoFlac(wav: string, tempDir: string): Promise<Uint8Array> {
+/// frames: the WAV's frame count, which picks the block size.
+export async function monoFlac(wav: string, tempDir: string, frames: number): Promise<Uint8Array> {
   const out = join(tempDir, "take.flac");
-  const p = Bun.spawn(["/usr/bin/afconvert", "-f", "flac", "-d", "flac", "-c", "1", wav, out], {
+  const format = frames < DEFAULT_BLOCK ? `flac#${SHORT_BLOCK}` : "flac";
+  const p = Bun.spawn(["/usr/bin/afconvert", "-f", "flac", "-d", format, "-c", "1", wav, out], {
     stdout: "ignore",
     stderr: "pipe",
   });
   const err = await new Response(p.stderr).text();
   if ((await p.exited) !== 0) throw new Error(`afconvert failed: ${err.trim().slice(0, 300)}`);
-  return new Uint8Array(await readFile(out));
+  const flac = new Uint8Array(await readFile(out));
+  if (Buffer.from(flac.subarray(0, 4)).toString("latin1") !== "fLaC")
+    throw new Error(`afconvert wrote no FLAC for a WAV of ${frames} frames`);
+  return flac;
 }

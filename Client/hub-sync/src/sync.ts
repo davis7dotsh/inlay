@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stamp } from "../../../Hub/src/ids.ts";
 import { sha256Hex, type RecordPost, type Sha256 } from "../../../Hub/src/record.ts";
-import { readHead, readRecord, recordDirs, type ArchiveRecord } from "./archive.ts";
+import { windowWait } from "../../../Hub/src/share.ts";
+import { readHead, readRecord, recordDirs, type TextSha256 } from "./archive.ts";
 import { monoFlac, scanWav, type ChannelResult } from "./audio.ts";
 import type { ConfirmedTexts, ConfirmStore } from "./confirms.ts";
 import { HubClient, RecordRefused, StopRun, type HubTarget, type Stop } from "./hub-client.ts";
@@ -25,7 +26,12 @@ export type SyncOptions = {
 };
 
 /// resend: the record has a confirm, but its texts changed since.
-export type Selected = { dir: string; recordingId: string; recordedAt: string; resend: boolean };
+export type Selected = {
+  dir: string;
+  recordingId: string;
+  recordedAt: string | null;
+  resend: boolean;
+};
 
 export type RunSummary = {
   event: "run";
@@ -53,7 +59,7 @@ export async function selectRecords(opts: {
     try {
       const head = await readHead(dir);
       if (only && head.recordingId !== only) continue;
-      if (since && head.recordedAt < since) continue;
+      if (since && (head.recordedAt === null || head.recordedAt < since)) continue;
       const confirmed = opts.confirmed.get(head.recordingId);
       if (confirmed) {
         const now = (await readRecord(dir)).textSha256;
@@ -64,55 +70,84 @@ export async function selectRecords(opts: {
       opts.onError(dir, error);
     }
   }
-  return out.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+  return out.sort((a, b) => (a.recordedAt ?? "").localeCompare(b.recordedAt ?? ""));
 }
 
-type Prepared = {
+/// What a post holds and what its confirm must hold.
+export type Prepared = {
   post: RecordPost;
-  record: ArchiveRecord;
+  recordingId: string;
+  textSha256: TextSha256;
   flacSha: Sha256 | null;
   flacBytes: number | null;
   channels: ChannelResult | null;
 };
 
-/// Read the record and make its mono FLAC in a temp folder (never in the archive).
-async function prepare(dir: string): Promise<Prepared> {
-  const record = await readRecord(dir);
-  if (!record.originalAudio)
-    return {
-      post: { ...record.post, audio: null },
-      record,
-      flacSha: null,
-      flacBytes: null,
-      channels: null,
-    };
-  const scan = await scanWav(record.originalAudio.path);
-  if (scan.sha256 !== record.originalAudio.sha256)
-    throw new Error("the original WAV does not hash to the sha256 in metadata.json");
+export type FlacAudio = {
+  audio: NonNullable<RecordPost["audio"]>;
+  flacSha: Sha256;
+  flacBytes: number;
+  channels: ChannelResult;
+};
+
+/// Scan a source WAV and make its mono FLAC in a temp folder (never in the archive). The post sends
+/// the WAV's SHA-256 as audio.source_sha256. A WAV that does not hash to `expected` fails.
+/// A WAV with 0 frames holds no audio: it returns null, like a take with no WAV.
+export async function flacAudio(wav: string, expected: Sha256): Promise<FlacAudio | null> {
+  const scan = await scanWav(wav);
+  if (scan.sha256 !== expected)
+    throw new Error("the source WAV does not hash to its listed sha256");
+  const frames = Math.floor(scan.layout.dataBytes / scan.layout.blockAlign);
+  if (frames === 0) return null;
   const temp = await mkdtemp(join(tmpdir(), "transcriber-hub-sync-"));
   try {
-    const flac = await monoFlac(record.originalAudio.path, temp);
+    const flac = await monoFlac(wav, temp, frames);
     const flacSha = sha256Hex(flac);
     return {
-      record,
       flacSha,
       flacBytes: flac.length,
       channels: scan.channels,
-      post: {
-        ...record.post,
-        audio: {
-          sha256: flacSha,
-          source_sha256: scan.sha256,
-          source_bytes: scan.bytes,
-          sample_rate: scan.layout.sampleRate,
-          frame_count: Math.floor(scan.layout.dataBytes / scan.layout.blockAlign),
-          flac_base64: Buffer.from(flac).toString("base64"),
-        },
+      audio: {
+        sha256: flacSha,
+        source_sha256: scan.sha256,
+        source_bytes: scan.bytes,
+        sample_rate: scan.layout.sampleRate,
+        frame_count: frames,
+        flac_base64: Buffer.from(flac).toString("base64"),
       },
     };
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
+}
+
+async function prepare(dir: string): Promise<Prepared> {
+  const record = await readRecord(dir);
+  const base = { recordingId: record.recordingId, textSha256: record.textSha256 };
+  if (!record.sourceWav)
+    return {
+      ...base,
+      post: { ...record.post, audio: null },
+      flacSha: null,
+      flacBytes: null,
+      channels: null,
+    };
+  const a = await flacAudio(record.sourceWav.path, record.sourceWav.sha256);
+  if (!a)
+    return {
+      ...base,
+      post: { ...record.post, audio: null },
+      flacSha: null,
+      flacBytes: null,
+      channels: null,
+    };
+  return {
+    ...base,
+    post: { ...record.post, audio: a.audio },
+    flacSha: a.flacSha,
+    flacBytes: a.flacBytes,
+    channels: a.channels,
+  };
 }
 
 /// The fields of the hub's reply that differ from what was sent. Empty: the hub holds the record.
@@ -124,10 +159,10 @@ export function confirmMismatches(reply: unknown, p: Prepared): string[] {
       ? (r.text_sha256 as Record<string, unknown>)
       : {};
   const want: [string, unknown, unknown][] = [
-    ["recording_id", r.recording_id, p.record.recordingId],
+    ["recording_id", r.recording_id, p.recordingId],
     ["flac_sha256", r.flac_sha256, p.flacSha],
-    ["text_sha256.raw", texts.raw, p.record.textSha256.raw],
-    ["text_sha256.clean", texts.clean, p.record.textSha256.clean],
+    ["text_sha256.raw", texts.raw, p.textSha256.raw],
+    ["text_sha256.clean", texts.clean, p.textSha256.clean],
   ];
   return want.filter(([, got, expected]) => got !== expected).map(([field]) => field);
 }
@@ -168,6 +203,7 @@ export async function runSync(opts: SyncOptions): Promise<RunSummary> {
   try {
     summary.hub = await hub.connect();
     for (const s of selected) {
+      assertClientWindow(now());
       const started = Date.now();
       const base = {
         event: "record",
@@ -190,9 +226,10 @@ export async function runSync(opts: SyncOptions): Promise<RunSummary> {
         channels: p.channels?.channels ?? null,
         differing_channels: p.channels?.differing ?? null,
         silent_channels: p.channels?.silent ?? null,
-        has_raw: p.record.textSha256.raw !== null,
-        has_clean: p.record.textSha256.clean !== null,
+        has_raw: p.textSha256.raw !== null,
+        has_clean: p.textSha256.clean !== null,
       };
+      assertClientWindow(now()); // preparation can end inside the window
       try {
         const reply = await hub.post(p.post);
         const mismatches = confirmMismatches(reply, p);
@@ -203,10 +240,10 @@ export async function runSync(opts: SyncOptions): Promise<RunSummary> {
           continue;
         }
         opts.store.put({
-          recording_id: p.record.recordingId,
+          recording_id: p.recordingId,
           flac_sha256: p.flacSha,
-          raw_sha256: p.record.textSha256.raw,
-          clean_sha256: p.record.textSha256.clean,
+          raw_sha256: p.textSha256.raw,
+          clean_sha256: p.textSha256.clean,
           channels: p.channels,
           confirmed_at: now().toISOString(),
           hub: hub.address ?? "",
@@ -244,5 +281,16 @@ export async function runSync(opts: SyncOptions): Promise<RunSummary> {
   return summary;
 }
 
-const message = (error: unknown) =>
+/// The client stops itself in the NAS window (10:57 to 12:00 UTC) before it sends the next record,
+/// the same way the hub would refuse it with 503.
+export function assertClientWindow(at: Date) {
+  const wait = windowWait(at);
+  if (wait > 0)
+    throw new StopRun({
+      kind: "nas_window",
+      retryAfter: String(wait),
+    });
+}
+
+export const message = (error: unknown) =>
   (error instanceof Error ? error.message : String(error)).slice(0, 300);

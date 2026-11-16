@@ -1,5 +1,6 @@
 // The confirms the hub sent back, in a local SQLite file. A record is skipped by the next run only
-// when its confirm is stored here and its texts still hash to the confirmed texts. Checkpoint 6 (the local delete) reconfirms from these rows.
+// when its confirm is stored here and its texts still hash to the confirmed texts. The delete dry
+// run (delete-dry-run.ts) reconfirms from these rows.
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -50,6 +51,44 @@ export class ConfirmStore {
         .all()
         .map((r) => [r.recording_id, { raw: r.raw_sha256, clean: r.clean_sha256 }]),
     );
+  }
+
+  /// The stored confirm of one recording, or null.
+  get(recordingId: string): StoredConfirm | null {
+    const row = this.db
+      .query<
+        {
+          recording_id: string;
+          flac_sha256: Sha256 | null;
+          raw_sha256: Sha256 | null;
+          clean_sha256: Sha256 | null;
+          channels: number | null;
+          differing_channels: string | null;
+          silent_channels: string | null;
+          confirmed_at: string;
+          hub: string;
+        },
+        [string]
+      >("select * from confirms where recording_id = ?")
+      .get(recordingId);
+    if (!row) return null;
+    const list = (text: string | null): number[] => (text ? (JSON.parse(text) as number[]) : []);
+    return {
+      recording_id: row.recording_id,
+      flac_sha256: row.flac_sha256,
+      raw_sha256: row.raw_sha256,
+      clean_sha256: row.clean_sha256,
+      channels:
+        row.channels === null
+          ? null
+          : {
+              channels: row.channels,
+              differing: list(row.differing_channels),
+              silent: list(row.silent_channels),
+            },
+      confirmed_at: row.confirmed_at,
+      hub: row.hub,
+    };
   }
 
   put(c: StoredConfirm) {
