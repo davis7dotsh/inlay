@@ -1,0 +1,64 @@
+#!/bin/bash
+# The forced command of the hub's ssh key, installed to /usr/local/libexec/transcriber-hub/ by
+# install-daemon.sh, which fills in the settings below. It ignores any command the ssh client asks for.
+# macOS denies a LaunchDaemon access to network volumes, and sshd holds Full Disk Access, so the hub
+# runs inside this ssh session (the agent-traces trace-nas pattern).
+#   1. Stop a hub that an earlier session left behind.
+#   2. Mount or repair the share when it is not healthy (mounted read-write, marker there, a write
+#      probe passes), never in the NAS window, and at most once in 5 minutes: the NAS
+#      blocks an address after 10 failed sign-ins in 5 minutes.
+#   3. Start the hub. Every 15 minutes outside the window, check the mount again.
+#   4. When the ssh session ends (launchd stopped hub-job), its stdin closes and the hub stops.
+set -uo pipefail
+app=@APP@
+export HOME=/Users/services-admin
+export PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+export HUB_HOSTS=@HOSTS@
+export HUB_PORT=@PORT@
+bun=/opt/homebrew/bin/bun
+state="$HOME/.config/transcriber-hub"
+say() { echo "hub-run: $(date -u +%FT%TZ) $*"; }
+
+[ -f "$app/src/main.ts" ] || { say "FAILED: $app/src/main.ts is missing. Run install-daemon.sh with the current folder." >&2; exit 1; }
+
+in_window() { local m=$((10#$(date -u +%H%M))); [ "$m" -ge 1057 ] && [ "$m" -lt 1200 ]; }
+share="$HOME/mnt/nas-transcripts"
+# Healthy: mounted read-write, the marker is there, and a small file writes, reads back and goes.
+# The write probe is skipped (healthy) when the NAS window has started by the time it would run.
+healthy() {
+  mount | grep " on $share (smbfs" | grep -qv "read-only" &&
+    perl -e 'alarm 20; exec @ARGV' /bin/test -f "$share/.transcriber-hub-share" &&
+    { in_window || perl -e 'alarm 20; exec @ARGV' /bin/sh -c 'f=$(mktemp "$1/.nas-probe.XXXXXX") && printf probe > "$f" && [ "$(cat "$f")" = probe ] && rm -f "$f"' sh "$share" 2>/dev/null; }
+}
+mount_check() {
+  in_window && return 0
+  local stamp="$state/last-mount-try"
+  healthy && return 0
+  if [ -f "$stamp" ] && [ $(( $(date +%s) - $(stat -f %m "$stamp") )) -lt 300 ]; then
+    say "the share is not ready, and the last mount try was less than 5 minutes ago"
+    return 0
+  fi
+  # The probes above can take 40 s. Check the window again before mount.sh touches the share.
+  in_window && return 0
+  touch "$stamp"
+  /bin/bash "$app/deploy/mount.sh" || say "the mount failed. Share routes answer 503 until a later check mounts it." >&2
+}
+
+pkill -u "$(id -u)" -f "^$bun $app/src/main.ts" && sleep 1
+mount_check
+
+exec 3<&0
+cd "$app" || exit 1
+"$bun" "$app/src/main.ts" </dev/null &
+hub=$!
+( cat <&3 >/dev/null; say "the ssh session ended. Stopping the hub."; kill -TERM "$hub" 2>/dev/null ) &
+watcher=$!
+( while sleep 900; do mount_check; done ) </dev/null &
+checker=$!
+exec 3<&-
+wait "$hub"
+rc=$?
+pkill -P "$watcher" 2>/dev/null; kill "$watcher" 2>/dev/null
+pkill -P "$checker" 2>/dev/null; kill "$checker" 2>/dev/null
+say "the hub exited with $rc"
+exit "$rc"

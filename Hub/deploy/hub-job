@@ -1,0 +1,14 @@
+#!/bin/bash
+# The program of the LaunchDaemon ai.codecaine.transcriber-hub, installed to /usr/local/libexec/transcriber-hub/.
+# It opens an ssh session to 127.0.0.1 with the hub's own key, whose authorized_keys line forces the
+# command hub-run. The session lives as long as the hub. Its stdin stays open (tail -f /dev/null), and
+# when launchd stops this job, ssh exits, the remote stdin closes and hub-run stops the hub.
+set -uo pipefail
+cfg=/Users/services-admin/.config/transcriber-hub
+echo "hub-job: start $(date -u +%FT%TZ)"
+exec /usr/bin/ssh -F /dev/null -T \
+  -i "$cfg/hub-job-ed25519" -o IdentitiesOnly=yes -o IdentityAgent=none \
+  -o BatchMode=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no \
+  -o UserKnownHostsFile="$cfg/hub-job-known_hosts" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes \
+  -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
+  services-admin@127.0.0.1 < <(exec tail -f /dev/null)
