@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { access } from "node:fs/promises";
-import { constants } from "node:fs";
+import { constants, write } from "node:fs";
 import { InferenceError, checkCancellation } from "./inference-error";
 import { logError, logInfo, logWarn } from "../log";
 
@@ -18,6 +18,63 @@ export interface HelperResponse {
   omittedTerms?: string[];
   tokenCount?: number;
   tokenBudget?: number;
+  metrics?: ProofreadingMetrics;
+}
+
+interface ProofreadingMetrics {
+  elapsedSeconds: number;
+  tokenizationSeconds?: number;
+  inputTokens?: number;
+  timeToFirstTokenSeconds?: number;
+  outputTokens: number;
+  generationSeconds?: number;
+  generationTokensPerSecond?: number;
+}
+
+// One asynchronous write in flight: diagnostics must neither block completion
+// nor accumulate an unbounded queue when stderr has a stalled reader.
+let diagnosticPending = false;
+function writeDiagnostic(line: string) {
+  if (diagnosticPending) return;
+  diagnosticPending = true;
+  try {
+    write(2, line + "\n", () => {
+      diagnosticPending = false;
+    });
+  } catch {
+    diagnosticPending = false;
+  }
+}
+
+function decodeMetrics(value: unknown): ProofreadingMetrics | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const source = value as Record<string, unknown>;
+  const metrics: Record<string, number> = {};
+  for (const key of [
+    "elapsedSeconds",
+    "tokenizationSeconds",
+    "inputTokens",
+    "timeToFirstTokenSeconds",
+    "outputTokens",
+    "generationSeconds",
+    "generationTokensPerSecond",
+  ]) {
+    const number = source[key];
+    if (number == null) continue;
+    if (typeof number !== "number" || !Number.isFinite(number) || number < 0) return;
+    if ((key === "inputTokens" || key === "outputTokens") && !Number.isSafeInteger(number)) return;
+    metrics[key] = number;
+  }
+  if (metrics.elapsedSeconds === undefined || metrics.outputTokens === undefined) return;
+  return {
+    elapsedSeconds: metrics.elapsedSeconds,
+    outputTokens: metrics.outputTokens,
+    tokenizationSeconds: metrics.tokenizationSeconds,
+    inputTokens: metrics.inputTokens,
+    timeToFirstTokenSeconds: metrics.timeToFirstTokenSeconds,
+    generationSeconds: metrics.generationSeconds,
+    generationTokensPerSecond: metrics.generationTokensPerSecond,
+  };
 }
 
 export interface HelperConfiguration {
@@ -73,6 +130,8 @@ function decodeResponse(line: Buffer): HelperResponse | undefined {
   }
   // JSON null is the same as an absent optional field in Swift's decoder.
   for (const key of Object.keys(response)) if (response[key] === null) delete response[key];
+  // Optional diagnostics cannot invalidate a valid inference result.
+  response.metrics = decodeMetrics(response.metrics);
   return response as unknown as HelperResponse;
 }
 
@@ -324,6 +383,7 @@ export class HelperProcess {
         break;
       case "result": {
         if (response.id !== this.requestID || !this.result) return;
+        this.logMetrics(response);
         const result = this.result;
         this.result = undefined;
         this.requestID = undefined;
@@ -337,6 +397,7 @@ export class HelperProcess {
           logWarn("helper_error_unknown_id", { helper: this.configuration.name });
           return;
         }
+        this.logMetrics(response);
         const failure = new InferenceError(
           "unavailable",
           response.message ?? `${this.configuration.name} inference failed.`,
@@ -369,6 +430,19 @@ export class HelperProcess {
 
   private transportFailed(current: number, message: string) {
     if (this.generation === current) this.reset(new InferenceError("unavailable", message));
+  }
+
+  private logMetrics(response: HelperResponse) {
+    if (this.configuration.name !== "Qwen" || !response.metrics) return;
+    writeDiagnostic(
+      JSON.stringify({
+        time: new Date().toISOString(),
+        event: "proofreading_metrics",
+        helperRequestID: this.requestID,
+        outcome: response.type,
+        metrics: response.metrics,
+      }),
+    );
   }
 
   private setTimeout(seconds: number, message: string) {

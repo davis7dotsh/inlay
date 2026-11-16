@@ -158,7 +158,7 @@ extension DictationDeliveryStatus {
 }
 
 struct DictationHUD: View {
-    static let width: CGFloat = 200 + (InlayBuild.current.isDevelopment ? 32 : 0)
+    static let width: CGFloat = 232 + (InlayBuild.current.isDevelopment ? 32 : 0)
     static let height: CGFloat = 44
     static let noticeHeight: CGFloat = 30
     static let morphDuration = 0.18
@@ -228,7 +228,7 @@ struct DictationHUD: View {
             .opacity(expanded ? 0 : 1)
             .allowsHitTesting(!expanded)
             .accessibilityHidden(expanded)
-            .accessibilityLabel(controller.activity.isBusy ? stageText : hudLabel)
+            .accessibilityLabel(controller.activity.isBusy ? processingLabel : hudLabel)
             .accessibilityHint(controller.activity.isBusy ? "" : !showsSavedTake && result.needsAttention ? "Open Inlay for details" : "Dismiss status")
             .accessibilityIdentifier("hud.circle")
         }
@@ -246,10 +246,10 @@ struct DictationHUD: View {
             if controller.canCancelWithEscape { controller.cancelDictation() }
             else if !controller.activity.isBusy { controller.dismissFeedback() }
         }
-        .help(controller.errorMessage ?? hudLabel)
+        .help(controller.errorMessage ?? (controller.activity.isBusy ? processingLabel : hudLabel))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(InlayBuild.current.displayName) dictation")
-        .accessibilityValue(controller.errorMessage ?? hudLabel)
+        .accessibilityValue(controller.errorMessage ?? (controller.activity.isBusy ? processingLabel : hudLabel))
         .accessibilityIdentifier("hud.status")
     }
 
@@ -266,6 +266,8 @@ struct DictationHUD: View {
                 } else if controller.activity == .starting {
                     InlayMark(size: 18)
                     Text("Starting").lineLimit(1)
+                } else if let model = controller.hudModelState {
+                    modelProgress(model)
                 } else {
                     ProgressView().controlSize(.small)
                     Text(stageText).lineLimit(1).minimumScaleFactor(0.8)
@@ -285,6 +287,30 @@ struct DictationHUD: View {
             }
         }
         .padding(.horizontal, 12)
+    }
+
+    private func modelProgress(_ model: HUDModelState) -> some View {
+        let cold = model.ready == false || model.hadColdStart
+        return HStack(spacing: 8) {
+            Image(systemName: model.symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(cold ? InlayPalette.warning : InlayPalette.accentInk)
+                .accessibilityHidden(true)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let elapsed = max(0, Int(context.date.timeIntervalSince(model.startedAt)))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(stageText).lineLimit(1).minimumScaleFactor(0.8)
+                    Text(model.ready == false ? "Cold start · preparing model · \(elapsed)s"
+                         : model.hadColdStart ? "After cold start · \(elapsed)s"
+                         : "\(elapsed)s")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(cold ? InlayPalette.warning : InlayPalette.muted)
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("hud.model-state")
+            }
+        }
     }
 
     private var attentionContent: some View {
@@ -330,7 +356,12 @@ struct DictationHUD: View {
         case .idle, .starting, .recording:
             InlayMark(size: 21)
         case .transcribing, .delivering:
-            ProgressView().controlSize(.small)
+            if let model = controller.hudModelState {
+                Image(systemName: model.symbol)
+                    .foregroundStyle(model.ready == false || model.hadColdStart ? InlayPalette.warning : InlayPalette.accentInk)
+            } else {
+                ProgressView().controlSize(.small)
+            }
         case .success, .failed:
             Image(systemName: showsSavedTake ? "internaldrive" : result.hudSymbol)
                 .font(.system(size: 18, weight: .semibold))
@@ -362,6 +393,12 @@ struct DictationHUD: View {
         let stage = controller.hudProgressText ?? hudLabel
         return controller.pendingDictationCount > 1
             ? "\(stage) · \(controller.pendingDictationCount - 1) more" : stage
+    }
+
+    private var processingLabel: String {
+        guard let model = controller.hudModelState else { return stageText }
+        if model.ready == false { return "\(stageText). Cold start. Preparing model." }
+        return model.hadColdStart ? "\(stageText). After cold start." : stageText
     }
 
     private func activateCircle() {

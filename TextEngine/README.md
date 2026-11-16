@@ -26,7 +26,7 @@ An error contains `type: "error"`, `message`, and the request `id` when availabl
 
 Result/error events may include optional numeric `metrics` (elapsed/tokenization time, input/output token counts, first-token latency, and generation time/rate). Older servers ignore the field. Metrics never include prompts or transcripts.
 
-Diagnostics use stderr and omit transcripts. The server drains them without storing them.
+The TypeScript server records validated numeric proofreading metrics through a bounded, best-effort asynchronous sink. Malformed optional metrics are ignored without dropping valid inference results. Raw helper stderr is drained into a bounded in-memory tail; diagnostics omit transcripts and prompts.
 
 ## Verify
 
