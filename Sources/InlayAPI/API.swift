@@ -137,7 +137,7 @@ public struct ServerHealth: Codable, Equatable, Sendable {
     public var serverVersion: String
     public var maximumRecordingSeconds: Int?
     public var supportedRecordingSeconds: Int {
-        // v4 servers predating capability negotiation enforce a three-minute limit.
+        // Treat a server that omits its limit as enforcing the original three minutes.
         let advertised = maximumRecordingSeconds.flatMap { $0 > 0 ? $0 : nil } ?? 180
         return min(InlayAPI.maximumRecordingSeconds, advertised)
     }

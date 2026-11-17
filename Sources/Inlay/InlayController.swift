@@ -1125,7 +1125,9 @@ final class InlayController: ObservableObject {
                     activeGenerationID = created.id
                     sharedPreferences = created.settings
                 } else {
+                    // A take saved only on this Mac never sends screen terms.
                     destinationTask?.cancel(); destinationTask = nil
+                    screenContextTask?.cancel(); screenContextTask = nil
                     insertionDestination = .clipboard
                 }
                 activeClient = connection
