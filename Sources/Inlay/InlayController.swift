@@ -656,15 +656,17 @@ final class InlayController: ObservableObject {
         // Only the explicit HUD dismissal closes Undo. A duplicate Escape from
         // the key listener/view cannot dismiss the window it just opened.
         guard !isUndoPending else { return }
-        if activity == .recording,
+        // A microphone test is never pasted, so cancelling it discards it as before.
+        if activity == .recording, !isTestSession,
            ProcessInfo.processInfo.systemUptime - recordingStart >= 0.25 {
             finishDictation(cancelled: true)
         } else if isCapturing {
             discardCapture()
         } else if let pending = pendingDictations.last(where: { $0.session == sessionID }),
                   !pending.settlingReceipt {
+            if pending.spool.manifest.isTest { discardPendingTest(pending) }
             // A take saved only on this Mac is never pasted, so there is nothing to undo.
-            if pending.upload == nil { pending.gate.keepInHistory() }
+            else if pending.upload == nil { pending.gate.keepInHistory() }
             else if pending.gate.hold() { openUndoWindow(for: pending) }
             else if pending.gate.state == .deliver, pending.gate.requiresOriginalSelection {
                 // A deliberate second Cancel after Undo revokes permission,
@@ -692,6 +694,31 @@ final class InlayController: ObservableObject {
             statusMessage = "Cancelled"; errorMessage = nil
             onHUDVisibility?(false)
         }
+        if let discardError {
+            if remaining == nil { showError(discardError) }
+            else { errorMessage = discardError; announceOutcome(discardError, .failure) }
+        }
+        refreshServer()
+    }
+
+    private func discardPendingTest(_ pending: PendingDictation) {
+        pendingDictations.removeAll { $0 === pending }
+        pending.cancel()
+        var discardError: String?
+        if let id = pending.id {
+            if let endpoint = pending.spool.manifest.endpoint, !removePendingEntry(id, endpoint: endpoint) {
+                discardError = "Could not save the cancellation. This result may reappear after relaunch."
+            }
+            Task { try? await pending.client.cancel(id) }
+        }
+        discardError = discardRecording(pending.spool) ?? discardError
+        let remaining = pendingDictations.last?.session
+        sessionID = remaining ?? UUID()
+        activity = remaining == nil ? .idle : .transcribing
+        if remaining == nil { hudProgressText = nil }
+        statusMessage = remaining == nil ? "Cancelled" : "Cancelled · Earlier dictation is still processing"
+        errorMessage = nil
+        onHUDVisibility?(remaining != nil)
         if let discardError {
             if remaining == nil { showError(discardError) }
             else { errorMessage = discardError; announceOutcome(discardError, .failure) }
@@ -1433,6 +1460,9 @@ final class InlayController: ObservableObject {
                 let deliveryDestination = rebasedDestination(resolved)
                 var receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
                                             clipboardCount: clipboardCount, session: current, pending: pending)
+                // Quitting before dispatch records no outcome, so the take is
+                // offered for copy after relaunch.
+                if Task.isCancelled, pending.gate.state == .deliver { throw CancellationError() }
                 if interruption != nil {
                     let message = "Recording was interrupted. \(receipt.message ?? "")".trimmingCharacters(in: .whitespaces)
                     receipt.message = message

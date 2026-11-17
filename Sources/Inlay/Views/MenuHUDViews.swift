@@ -297,8 +297,8 @@ struct DictationHUD: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(controller.isCapturing ? "Discard this recording without transcribing it" : "Cancel processing this dictation")
-            .accessibilityLabel(controller.isCapturing ? "Discard recording" : "Cancel dictation")
+            .help(controller.isCapturing ? "Stop recording without pasting it. A usable dictation is kept in History" : "Cancel processing this dictation")
+            .accessibilityLabel(controller.isCapturing ? "Cancel recording" : "Cancel dictation")
             .accessibilityIdentifier("hud.cancel")
             }
         }
