@@ -186,6 +186,7 @@ export class NativeInference implements InferenceBackend {
   private readonly proofManifestSHA256?: string;
   private proofWake?: Promise<void>;
   private proofWakeStartedAt = 0;
+  private proofLastUsedAt = 0;
 
   constructor(configuration: ConfigurationInput) {
     this.configuration = createInferenceConfiguration(configuration);
@@ -298,13 +299,16 @@ export class NativeInference implements InferenceBackend {
    * macOS may page an idle helper's weights out under memory pressure; the
    * next prefill then faults them back in and can exceed the correction
    * deadline. A one-word correction at recording start does that work while
-   * the user speaks. It is skipped while the helper is loading or busy (both
-   * leave the weights resident), and correct() waits for it rather than
-   * failing as busy.
+   * the user speaks. It is skipped while the helper is loading, busy or used
+   * within the last minute (all leave the weights resident), and correct()
+   * waits for it rather than failing as busy. MLX only: the Linux CPU helper
+   * cannot answer even a resident wake fast enough to stay off a short take.
    */
   wakeProofreader() {
+    if (process.platform !== "darwin") return;
     const state = this.proof.snapshot();
     if (this.proofWake || !state.loaded || state.loading || state.busy) return;
+    if (performance.now() - this.proofLastUsedAt < 60_000) return;
     const id = randomUUID();
     const request = {
       type: "correct",
@@ -316,8 +320,9 @@ export class NativeInference implements InferenceBackend {
     };
     const started = performance.now();
     this.proofWakeStartedAt = started;
-    // A wake that outlasts a model load is as cold as one; the helper is then
-    // reset and the take's correction reloads it.
+    // The helper stops any correction at 15 s, so a stalled page-in ends as a
+    // per-request error (or a helper exit the take's correction reloads from);
+    // the server deadline here is only a backstop.
     const wake = this.proof
       .request(request, id, this.configuration.proofLoadTimeout)
       .then(
@@ -329,6 +334,7 @@ export class NativeInference implements InferenceBackend {
           }),
       )
       .finally(() => {
+        this.proofLastUsedAt = performance.now();
         if (this.proofWake === wake) this.proofWake = undefined;
       });
     this.proofWake = wake;
@@ -459,13 +465,11 @@ export class NativeInference implements InferenceBackend {
     // The helper takes one request at a time; let an in-flight wake finish.
     // request() claims the helper synchronously once this loop exits.
     while (this.proofWake) await abortable(this.proofWake, signal);
-    const response = await this.proof.request(
-      request,
-      request.id,
-      this.configuration.proofTimeout,
-      undefined,
-      signal,
-    );
+    const response = await this.proof
+      .request(request, request.id, this.configuration.proofTimeout, undefined, signal)
+      .finally(() => {
+        this.proofLastUsedAt = performance.now();
+      });
     if (
       response.text === undefined ||
       !response.text.length ||
