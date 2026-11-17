@@ -30,9 +30,6 @@ struct HUDModelState: Equatable {
         hadColdStart = hadColdStart || !ready
     }
 
-    var symbol: String {
-        if ready == false || hadColdStart { return "snowflake" }
-        return stage == .speech ? "waveform" : "text.badge.checkmark"
-    }
+    var isCold: Bool { ready == false || hadColdStart }
 }
 
