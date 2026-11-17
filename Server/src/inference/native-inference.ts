@@ -321,17 +321,24 @@ export class NativeInference implements InferenceBackend {
     const started = performance.now();
     this.proofWakeStartedAt = started;
     // The helper stops any correction at 15 s, so a stalled page-in ends as a
-    // per-request error (or a helper exit the take's correction reloads from);
-    // the server deadline here is only a backstop.
+    // per-request error; a failed wake retires the helper so the take's
+    // correction reloads it. The server deadline here is only a backstop.
     const wake = this.proof
       .request(request, id, this.configuration.proofLoadTimeout)
       .then(
         () => logInfo("proofreader_woken", { ms: Math.round(performance.now() - started) }),
-        (error) =>
+        (error) => {
+          const code = error instanceof InferenceError ? error.code : "unknown";
           logWarn("proofreader_wake_failed", {
             ms: Math.round(performance.now() - started),
-            code: error instanceof InferenceError ? error.code : "unknown",
-          }),
+            code,
+          });
+          // At its hard deadline the MLX helper reports this request's error
+          // and then exits. Retire it now so the waiting correction loads a
+          // fresh helper instead of writing to the dying one.
+          if (code !== "cancelled")
+            this.proof.discard(new InferenceError("unavailable", "The Qwen wake failed."));
+        },
       )
       .finally(() => {
         this.proofLastUsedAt = performance.now();
