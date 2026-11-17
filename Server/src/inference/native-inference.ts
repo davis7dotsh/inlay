@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { availableParallelism } from "node:os";
-import type { ModelHintUsage } from "../api";
+import { MAXIMUM_RECORDING_SECONDS, type ModelHintUsage } from "../api";
 import { HelperProcess, type HelperResponse } from "./helper-process";
 import { checkCancellation, InferenceError } from "./inference-error";
 import { ModelVerifier, type ModelPin } from "./model-verification";
@@ -47,7 +47,8 @@ function deadline(value: number | undefined, fallback: number) {
 function speechDeadline(base: number, audioSeconds?: number) {
   if (audioSeconds === undefined || !Number.isFinite(audioSeconds) || audioSeconds <= 0)
     return base;
-  return Math.min(900, Math.max(base, Math.ceil(60 + 2 * audioSeconds)));
+  // Long takes are decoded window by window; allow at least real time.
+  return Math.max(base, Math.ceil(60 + 2 * Math.min(audioSeconds, MAXIMUM_RECORDING_SECONDS)));
 }
 
 export function createInferenceConfiguration(input: ConfigurationInput): InferenceConfiguration {
@@ -323,7 +324,7 @@ export class NativeInference implements InferenceBackend {
     );
     if (
       response.text === undefined ||
-      bytes(response.text) > 256 * 1024 ||
+      bytes(response.text) > 512 * 1024 ||
       response.text.includes("\0") ||
       response.duration === undefined ||
       !Number.isFinite(response.duration) ||

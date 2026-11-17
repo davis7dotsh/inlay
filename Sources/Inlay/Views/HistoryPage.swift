@@ -154,7 +154,7 @@ struct HistoryPage: View {
         .overlay {
             if filtered.isEmpty {
                 ContentUnavailableView("No dictations", systemImage: "waveform",
-                                       description: Text("Record while connected to add a dictation."))
+                                       description: Text("Finished dictations appear here after they reach the server."))
             }
         }
         .accessibilityIdentifier("history.list")
@@ -203,7 +203,7 @@ struct HistoryPage: View {
                                     .font(.caption)
                                     .foregroundStyle(InlayPalette.muted)
                             } else {
-                                Text("Audio was removed by the retention setting.")
+                                Text("No audio is available for this session on the server.")
                                     .font(.caption)
                                     .foregroundStyle(InlayPalette.muted)
                             }
@@ -336,7 +336,7 @@ struct HistoryPage: View {
 
     private func statusLabel(_ status: GenerationStatus) -> String {
         switch status {
-        case .receiving: "Recording"
+        case .receiving: "Receiving audio"
         case .queued: "Queued"
         case .transcribing: "Transcribing"
         case .proofreading: "Proofreading"

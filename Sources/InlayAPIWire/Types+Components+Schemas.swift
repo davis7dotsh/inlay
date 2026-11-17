@@ -837,6 +837,10 @@ extension Components {
             public var apiVersion: Swift.Int
             /// - Remark: Generated from `#/components/schemas/ServerHealth/serverVersion`.
             public var serverVersion: Swift.String
+            /// Maximum supported take length in seconds, sent only when requested. Servers predating this field accept up to 180 seconds.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServerHealth/maximumRecordingSeconds`.
+            public var maximumRecordingSeconds: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/ServerHealth/isDev`.
             public var isDev: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/ServerHealth/ready`.
@@ -852,6 +856,7 @@ extension Components {
             /// - Parameters:
             ///   - apiVersion:
             ///   - serverVersion:
+            ///   - maximumRecordingSeconds: Maximum supported take length in seconds, sent only when requested. Servers predating this field accept up to 180 seconds.
             ///   - isDev:
             ///   - ready:
             ///   - speech:
@@ -860,6 +865,7 @@ extension Components {
             public init(
                 apiVersion: Swift.Int,
                 serverVersion: Swift.String,
+                maximumRecordingSeconds: Swift.Int? = nil,
                 isDev: Swift.Bool,
                 ready: Swift.Bool,
                 speech: Components.Schemas.ModelRuntimeInfo,
@@ -868,6 +874,7 @@ extension Components {
             ) {
                 self.apiVersion = apiVersion
                 self.serverVersion = serverVersion
+                self.maximumRecordingSeconds = maximumRecordingSeconds
                 self.isDev = isDev
                 self.ready = ready
                 self.speech = speech
@@ -877,6 +884,7 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case apiVersion
                 case serverVersion
+                case maximumRecordingSeconds
                 case isDev
                 case ready
                 case speech
@@ -892,6 +900,10 @@ extension Components {
                 self.serverVersion = try container.decode(
                     Swift.String.self,
                     forKey: .serverVersion
+                )
+                self.maximumRecordingSeconds = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .maximumRecordingSeconds
                 )
                 self.isDev = try container.decode(
                     Swift.Bool.self,
@@ -916,6 +928,7 @@ extension Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "apiVersion",
                     "serverVersion",
+                    "maximumRecordingSeconds",
                     "isDev",
                     "ready",
                     "speech",
