@@ -247,6 +247,10 @@ private struct DevicePreferencesForm: View {
         .onDisappear { stopKeyRecording() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in stopKeyRecording() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stopKeyRecording() }
+        // Recording starts from a click in this window, so it is the key
+        // window. Any key change, such as the menu-bar popover taking focus
+        // while Inlay stays active, means the next key press is not for us.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in stopKeyRecording() }
         .onChange(of: preferences.token) { _, newToken in token = newToken }
         .confirmationDialog("Revoke this device?", isPresented: Binding(
             get: { deviceToRevoke != nil }, set: { if !$0 { deviceToRevoke = nil } })) {
