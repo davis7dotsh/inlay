@@ -907,7 +907,7 @@ export class WisprFlowImports {
       throw new ServiceError(
         413,
         "metadata_too_large",
-        "The imported metadata exceeded its 1 MiB storage limit.",
+        "The imported metadata exceeded its 4 MiB storage limit.",
       );
     await atomicPrivateWrite(join(directory, "transcript.txt"), Buffer.from(record.finalText));
     await atomicPrivateWrite(join(directory, "metadata.json"), metadata);

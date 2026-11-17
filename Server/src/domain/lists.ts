@@ -729,6 +729,7 @@ export function formatSpokenList(
   });
   if (!text.trim()) return empty("");
   const events = scan(text);
+  if (!events.length && !initialContext) return empty(text);
   const inferred = inferredMarkers(events, text);
   const containsInlineCandidates = events.some((event) => event.evidence === "inlineSeries");
   let context = initialContext;
@@ -753,7 +754,7 @@ export function formatSpokenList(
     if (!value) return;
     if (!context) {
       pieces.push({ text: value, isList: false });
-      emittedContent.push(...contentTokens(value));
+      for (const token of contentTokens(value)) emittedContent.push(token);
       return;
     }
     const item = itemText(value);
@@ -768,7 +769,7 @@ export function formatSpokenList(
         nextNumber: Math.min(Number.MAX_SAFE_INTEGER, context.nextNumber + 1),
       };
     } else pieces.push({ text: `- ${item}`, isList: true });
-    emittedContent.push(...contentTokens(item));
+    for (const token of contentTokens(item)) emittedContent.push(token);
     pendingSourceNumber = undefined;
     containsList = true;
   };

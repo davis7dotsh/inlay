@@ -1,3 +1,4 @@
+import InlayAPI
 import InlayCore
 import SwiftUI
 
@@ -8,6 +9,11 @@ struct InlayMenuView: View {
     var quit: () -> Void
     var closeMenu: () -> Void = {}
 
+    private var dictationAction: String {
+        guard controller.isCapturing else { return "Start dictation" }
+        return controller.canCancelWithEscape ? "Stop dictation" : "Release fn to finish"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -17,7 +23,12 @@ struct InlayMenuView: View {
                 Spacer(minLength: 8)
                 HStack(spacing: 6) {
                     StatusDot(isReady: controller.isServerReady)
-                    if !controller.isServerReady {
+                    if controller.savedRecordingsNeedServerUpdate {
+                        Text("Update server").font(.caption).foregroundStyle(InlayPalette.warning)
+                    } else if controller.savedRecordingCount > 0 {
+                        Text("\(controller.savedRecordingCount) saved locally")
+                            .font(.caption).lineLimit(1)
+                    } else if !controller.isServerReady {
                         Text(controller.serverStatusMessage)
                             .font(.caption)
                             .foregroundStyle(InlayPalette.muted)
@@ -25,7 +36,7 @@ struct InlayMenuView: View {
                     }
                 }
                 .frame(width: 112, alignment: .trailing)
-                .help(controller.serverStatusMessage)
+                .help(controller.savedRecordingsNeedServerUpdate ? "Update this server to transcribe your saved long dictations." : controller.savedRecordingCount > 0 ? "\(controller.serverStatusMessage) · Saved dictations retry automatically." : controller.serverStatusMessage)
                 .accessibilityIdentifier("server.status")
             }
             .frame(height: 28)
@@ -34,32 +45,32 @@ struct InlayMenuView: View {
                 if !controller.isCapturing { closeMenu() }
                 controller.toggleMenuDictation()
             } label: {
-                Label(controller.isCapturing ? "Stop dictation" : "Start dictation",
+                Label(dictationAction,
                       systemImage: controller.isCapturing ? "stop.fill" : "mic")
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .frame(height: 26)
             }
-            .disabled(!controller.canTest && !controller.isCapturing)
-            .help("Dictate at your cursor. Without a placed cursor, the text is copied.")
-            .accessibilityLabel(controller.isCapturing ? "Stop dictation" : "Start dictation")
+            .disabled(controller.isCapturing ? !controller.canCancelWithEscape : !controller.canStartDictationFromUI)
+            .help(controller.isCapturing ? "Finish this dictation" : controller.isServerReady
+                  ? "Dictate at your cursor" : "Save this dictation on this Mac for transcription when the server returns")
+            .accessibilityLabel(dictationAction)
             .accessibilityIdentifier("menu.dictate")
 
             InlayMicrophoneTestButton(controller: controller, identifier: "menu.test")
-            ForEach(controller.undeliveredResults, id: \.id) { record in
-                Button { controller.copyUndeliveredResult(record) } label: {
-                    Label("Copy finished dictation", systemImage: "doc.badge.plus")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: 26)
+            Group {
+                if controller.undeliveredResults.isEmpty {
+                    Button { controller.copyLastTranscript() } label: {
+                        Label(controller.lastRecordingSavedLocally ? "Copy previous transcript" : "Copy last message", systemImage: "doc.on.doc")
+                    }
+                    .disabled(controller.lastTranscript.isEmpty || controller.isBusy)
+                    .accessibilityIdentifier("menu.copy-last")
+                } else {
+                    FinishedDictationCopy(controller: controller)
+                        .accessibilityIdentifier("menu.copy-undelivered")
                 }
-                .accessibilityIdentifier("menu.copy-undelivered")
             }
-            Button { controller.copyLastTranscript() } label: {
-                Label("Copy last message", systemImage: "doc.on.doc")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: 26)
-            }
-            .disabled(controller.lastTranscript.isEmpty || controller.isBusy)
-            .accessibilityIdentifier("menu.copy-last")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 26)
 
             Button("Open \(InlayBuild.current.displayName)…", action: openWindow)
                 .keyboardShortcut(",", modifiers: .command)
@@ -73,6 +84,41 @@ struct InlayMenuView: View {
         .fixedSize(horizontal: false, vertical: true)
         .tint(InlayPalette.accentInk)
         .background { InlayMenuSurface() }
+    }
+}
+
+/// A single copy control keeps the menu bar bounded as recovered takes finish.
+struct FinishedDictationCopy: View {
+    @ObservedObject var controller: InlayController
+
+    var body: some View {
+        let results = controller.undeliveredResults
+        if let first = results.first {
+            Group {
+                if results.count == 1 {
+                    Button { controller.copyUndeliveredResult(first) } label: {
+                        Label("Copy finished dictation", systemImage: "doc.on.doc")
+                    }
+                    .help(choice(for: first))
+                } else {
+                    Menu {
+                        ForEach(results) { record in
+                            Button(choice(for: record)) { controller.copyUndeliveredResult(record) }
+                        }
+                    } label: {
+                        Label("Copy finished dictation (\(results.count))", systemImage: "doc.on.doc")
+                    }
+                }
+            }
+            .disabled(controller.isBusy)
+        }
+    }
+
+    private func choice(for record: GenerationRecord) -> String {
+        let date = record.createdAt.formatted(date: .abbreviated, time: .shortened)
+        let prefix = record.finalText.prefix(48)
+        let words = prefix.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return words.isEmpty ? date : "\(date) · \(words)\(prefix.endIndex == record.finalText.endIndex ? "" : "…")"
     }
 }
 
@@ -182,8 +228,8 @@ struct DictationHUD: View {
             .opacity(expanded ? 0 : 1)
             .allowsHitTesting(!expanded)
             .accessibilityHidden(expanded)
-            .accessibilityLabel(controller.isBusy ? stageText : hudLabel)
-            .accessibilityHint(controller.isBusy ? "" : result.needsAttention ? "Open Inlay for details" : "Dismiss status")
+            .accessibilityLabel(controller.activity.isBusy ? stageText : hudLabel)
+            .accessibilityHint(controller.activity.isBusy ? "" : !showsSavedTake && result.needsAttention ? "Open Inlay for details" : "Dismiss status")
             .accessibilityIdentifier("hud.circle")
         }
         .frame(width: expanded ? Self.width : Self.height, height: Self.height)
@@ -198,7 +244,7 @@ struct DictationHUD: View {
         .opacity(entered ? 1 : 0)
         .onExitCommand {
             if controller.canCancelWithEscape { controller.cancelDictation() }
-            else if !controller.isBusy { controller.dismissFeedback() }
+            else if !controller.activity.isBusy { controller.dismissFeedback() }
         }
         .help(controller.errorMessage ?? hudLabel)
         .accessibilityElement(children: .contain)
@@ -210,7 +256,7 @@ struct DictationHUD: View {
     private var expandedContent: some View {
         HStack(spacing: 10) {
             DevBadge()
-            if controller.attentionPresented, !controller.isBusy {
+            if controller.attentionPresented, !controller.activity.isBusy {
                 attentionContent
             } else {
             HStack(spacing: 8) {
@@ -233,8 +279,8 @@ struct DictationHUD: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Cancel dictation")
-            .accessibilityLabel("Cancel dictation")
+            .help(controller.isCapturing ? "Discard this recording without transcribing it" : "Cancel processing this dictation")
+            .accessibilityLabel(controller.isCapturing ? "Discard recording" : "Cancel dictation")
             .accessibilityIdentifier("hud.cancel")
             }
         }
@@ -243,15 +289,15 @@ struct DictationHUD: View {
 
     private var attentionContent: some View {
         HStack(spacing: 8) {
-            Image(systemName: result.hudSymbol)
+            Image(systemName: showsSavedTake ? "internaldrive" : result.hudSymbol)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(InlayPalette.warning)
-            Text(result.hudLabel)
+                .foregroundStyle(showsSavedTake ? InlayPalette.accentInk : InlayPalette.warning)
+            Text(hudLabel)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(InlayPalette.muted)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            if result != .copied, !controller.lastTranscript.isEmpty {
+            if !showsSavedTake, result != .copied, !controller.lastTranscript.isEmpty {
                 Button {
                     controller.copyLastTranscript()
                     if controller.lastDeliveryStatus == .copied { controller.dismissFeedback() }
@@ -265,7 +311,7 @@ struct DictationHUD: View {
                 .accessibilityLabel("Copy again")
                 .accessibilityIdentifier("hud.copy-again")
             }
-            if result != .copied {
+            if showsSavedTake || result != .copied {
                 Button { controller.dismissFeedback() } label: {
                     Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
                         .frame(width: 22, height: 28)
@@ -286,15 +332,19 @@ struct DictationHUD: View {
         case .transcribing, .delivering:
             ProgressView().controlSize(.small)
         case .success, .failed:
-            Image(systemName: result.hudSymbol)
+            Image(systemName: showsSavedTake ? "internaldrive" : result.hudSymbol)
                 .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(result.needsAttention ? InlayPalette.warning : InlayPalette.accentInk)
+                .foregroundStyle(result.needsAttention && !showsSavedTake ? InlayPalette.warning : InlayPalette.accentInk)
                 .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
         }
     }
 
     private var result: DictationDeliveryStatus {
         controller.activity == .failed ? .failed : controller.lastDeliveryStatus
+    }
+
+    private var showsSavedTake: Bool {
+        controller.lastRecordingSavedLocally && (controller.activity == .success || controller.activity == .failed)
     }
 
     private var hudLabel: String {
@@ -304,7 +354,7 @@ struct DictationHUD: View {
         case .recording: "Listening"
         case .transcribing: "Processing"
         case .delivering: "Inserting"
-        case .success, .failed: result.hudLabel
+        case .success, .failed: showsSavedTake ? "Saved on this Mac" : result.hudLabel
         }
     }
 
@@ -315,9 +365,9 @@ struct DictationHUD: View {
     }
 
     private func activateCircle() {
-        if controller.isBusy { /* Processing is shown expanded; the ✕ button cancels. */ }
+        if controller.activity.isBusy { /* Processing is shown expanded; the ✕ button cancels. */ }
         else {
-            if result.needsAttention { controller.onShowWindow?() }
+            if !showsSavedTake, result.needsAttention { controller.onShowWindow?() }
             controller.dismissFeedback()
         }
     }

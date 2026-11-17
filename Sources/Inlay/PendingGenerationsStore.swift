@@ -10,6 +10,7 @@ struct PendingGenerationEntry: Codable, Equatable {
     var originalFrames: Int64?
     /// Inference count to seal with if the server holds an unacknowledged chunk.
     var fallbackInferenceFrames: Int64? = nil
+    var continuationID: UUID?
     var isTest: Bool
     var sealedAt: Date
 }
@@ -40,8 +41,7 @@ struct PendingGenerationsStore {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(entries).write(to: url, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try RecordingSpool.replacePrivateFile(at: url, with: encoder.encode(entries))
             return true
         } catch { return false }
     }

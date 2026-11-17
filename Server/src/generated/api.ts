@@ -540,6 +540,8 @@ export interface components {
     ServerHealth: {
       apiVersion: number;
       serverVersion: string;
+      /** @description Maximum supported take length in seconds, sent only when requested. Servers predating this field accept up to 180 seconds. */
+      maximumRecordingSeconds?: number;
       isDev: boolean;
       ready: boolean;
       speech: components["schemas"]["ModelRuntimeInfo"];
@@ -789,7 +791,10 @@ export interface operations {
   };
   getHealth: {
     parameters: {
-      query?: never;
+      query?: {
+        /** @description Opt in to maximumRecordingSeconds; older clients require the original health response shape. */
+        includeRecordingLimit?: boolean;
+      };
       header?: never;
       path?: never;
       cookie?: never;

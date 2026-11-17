@@ -144,6 +144,21 @@ public enum Operations {
     public enum GetHealth {
         public static let id: Swift.String = "getHealth"
         public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/health/GET/query`.
+            public struct Query: Sendable, Hashable {
+                /// Opt in to maximumRecordingSeconds; older clients require the original health response shape.
+                ///
+                /// - Remark: Generated from `#/paths/v1/health/GET/query/includeRecordingLimit`.
+                public var includeRecordingLimit: Swift.Bool?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - includeRecordingLimit: Opt in to maximumRecordingSeconds; older clients require the original health response shape.
+                public init(includeRecordingLimit: Swift.Bool? = nil) {
+                    self.includeRecordingLimit = includeRecordingLimit
+                }
+            }
+            public var query: Operations.GetHealth.Input.Query
             /// - Remark: Generated from `#/paths/v1/health/GET/header`.
             public struct Headers: Sendable, Hashable {
                 public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetHealth.AcceptableContentType>]
@@ -159,8 +174,13 @@ public enum Operations {
             /// Creates a new `Input`.
             ///
             /// - Parameters:
+            ///   - query:
             ///   - headers:
-            public init(headers: Operations.GetHealth.Input.Headers = .init()) {
+            public init(
+                query: Operations.GetHealth.Input.Query = .init(),
+                headers: Operations.GetHealth.Input.Headers = .init()
+            ) {
+                self.query = query
                 self.headers = headers
             }
         }
