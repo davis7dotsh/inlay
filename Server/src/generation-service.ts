@@ -722,10 +722,13 @@ export class GenerationService {
       proofreading: {
         modelID: "Qwen3-4B-Instruct-2507",
         backend: this.proofBackend,
-        ready: state.proofLoaded,
+        // The HUD marks proofreading that waits on this wake as a cold start.
+        ready: state.proofLoaded && !state.proofWaking,
         message: this.preferences.preferences.textCorrectionEnabled
           ? state.proofLoaded
-            ? undefined
+            ? state.proofWaking
+              ? "Paging the model back into memory."
+              : undefined
             : (this.proofLoadError ?? "Unavailable; deterministic text is preserved.")
           : "Disabled",
       },
@@ -839,12 +842,15 @@ export class GenerationService {
         this.beginWarmup();
         throw new ServiceError(503, "server_unavailable", failure ?? state.message);
       }
-      // Starting a take loads any cold model now, not when the recording is sealed.
+      // Starting a take loads any cold model now, not when the recording is sealed,
+      // and pages a loaded but idle proofreader back in while the user speaks.
       if (
         !state.speechLoaded ||
         (this.preferences.preferences.textCorrectionEnabled && !state.proofLoaded)
       )
         this.beginWarmup();
+      else if (this.preferences.preferences.textCorrectionEnabled)
+        this.inference.wakeProofreader?.();
       await requireDiskSpace(this.configuration.dataDirectory);
       const record = this.newRecord(
         uuid(),
