@@ -125,11 +125,20 @@ struct ServerConnectionStatus: View {
     var body: some View {
         HStack(spacing: 8) {
             StatusDot(isReady: controller.isServerReady)
-            Text(controller.serverStatusMessage)
-                .font(compact ? .caption : .callout)
-                .foregroundStyle(InlayPalette.ink)
-                .lineLimit(compact ? 2 : 1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(controller.serverStatusMessage)
+                    .font(compact ? .caption : .callout)
+                    .foregroundStyle(InlayPalette.ink)
+                    .lineLimit(compact && controller.savedRecordingCount == 0 ? 2 : 1)
+                if controller.savedRecordingCount > 0 {
+                    let saved = controller.savedRecordingCount == 1 ? "1 dictation saved on this Mac" : "\(controller.savedRecordingCount) dictations saved on this Mac"
+                    Text(controller.savedRecordingsNeedServerUpdate ? (compact ? "Update server for long takes" : "\(saved) · Update server for long takes") : saved)
+                        .font(.caption2)
+                        .foregroundStyle(controller.savedRecordingsNeedServerUpdate ? InlayPalette.warning : InlayPalette.muted)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             if !compact {
                 Text(controller.preferences.endpoint)
                     .font(.caption)
@@ -143,7 +152,7 @@ struct ServerConnectionStatus: View {
             }
         }
         .frame(minHeight: compact ? 30 : 22)
-        .help(controller.serverStatusMessage)
+        .help(controller.savedRecordingsNeedServerUpdate ? "Update this server to transcribe your saved long dictations." : controller.serverStatusMessage)
         .accessibilityIdentifier("server.status")
     }
 }
@@ -152,6 +161,7 @@ struct DictationPage: View {
     @ObservedObject var controller: InlayController
     var showPreferences: () -> Void
     var showHistory: () -> Void
+    private var showsSavedTake: Bool { !controller.activity.isBusy && controller.lastRecordingSavedLocally }
 
     var body: some View {
         ScrollView {
@@ -187,12 +197,18 @@ struct DictationPage: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text(controller.isBusy ? "Current dictation" : "Last dictation").font(.headline)
+                        Text(controller.isBusy && !showsSavedTake ? "Current dictation" : "Last dictation").font(.headline)
                         Spacer()
-                        Button { controller.copyLastTranscript() } label: {
-                            Label("Copy", systemImage: "doc.on.doc")
+                        if !controller.isBusy, !controller.undeliveredResults.isEmpty {
+                            FinishedDictationCopy(controller: controller)
+                                .accessibilityIdentifier("dictation.copy-undelivered")
                         }
-                        .disabled(controller.lastTranscript.isEmpty || controller.isBusy)
+                        if !showsSavedTake {
+                            Button { controller.copyLastTranscript() } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                            .disabled(controller.lastTranscript.isEmpty || controller.isBusy)
+                        }
                     }
                     .frame(height: 28)
                     Divider()
@@ -205,8 +221,12 @@ struct DictationPage: View {
                             .foregroundStyle(controller.errorMessage == nil ? InlayPalette.muted : InlayPalette.warning)
                             .lineLimit(2)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        if !controller.isBusy, let seconds = controller.lastAudioSeconds {
-                            Text("\(seconds, specifier: "%.1f") s audio").monospacedDigit()
+                        if !controller.isBusy, !showsSavedTake, let seconds = controller.lastAudioSeconds {
+                            if seconds >= 60 {
+                                Text("\(inlayDuration(seconds)) audio").monospacedDigit()
+                            } else {
+                                Text("\(seconds, specifier: "%.1f") s audio").monospacedDigit()
+                            }
                         }
                     }
                     .font(.caption)
@@ -214,7 +234,7 @@ struct DictationPage: View {
                 }
 
                 HStack(spacing: 12) {
-                    InlayMicrophoneTestButton(controller: controller, identifier: "dictation.test")
+                    InlayMicrophoneTestButton(controller: controller, identifier: "dictation.test", allowOfflineStart: true)
                     Button("History", action: showHistory)
                     Button { showPreferences() } label: { Image(systemName: "gearshape") }
                         .help("This Mac preferences")
@@ -228,7 +248,7 @@ struct DictationPage: View {
     }
 
     @ViewBuilder private var transcript: some View {
-        if controller.isBusy {
+        if controller.isBusy && !showsSavedTake {
             HStack(spacing: 20) {
                 if controller.isRecording {
                     RecordingWaveform(feedback: controller.recordingFeedback, height: 34)
@@ -249,25 +269,15 @@ struct DictationPage: View {
                 }
                 Spacer()
                 Button { controller.cancelDictation() } label: { Image(systemName: "xmark") }
-                    .help("Cancel dictation")
-                    .accessibilityLabel("Cancel dictation")
+                    .help(controller.isCapturing ? "Discard this recording without transcribing it" : "Cancel processing this dictation")
+                    .accessibilityLabel(controller.isCapturing ? "Discard recording" : "Cancel dictation")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if showsSavedTake {
+            Label("Saved on this Mac", systemImage: "internaldrive")
+                .foregroundStyle(InlayPalette.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            if !controller.undeliveredResults.isEmpty {
-                HStack {
-                    Text("A dictation finished while Inlay was closed.")
-                        .font(.callout)
-                        .foregroundStyle(InlayPalette.ink)
-                    Spacer()
-                    Button("Copy") {
-                        if let record = controller.undeliveredResults.first {
-                            controller.copyUndeliveredResult(record)
-                        }
-                    }
-                }
-                .padding(.vertical, 6)
-            }
             ScrollView {
                 Text(controller.lastTranscript.isEmpty ? "Your next thought will appear here." : controller.lastTranscript)
                     .font(.body)
@@ -328,19 +338,32 @@ struct InlayPageHeading: View {
 struct InlayMicrophoneTestButton: View {
     @ObservedObject var controller: InlayController
     var identifier: String
-    var idleTitle = "Test microphone"
-    private var isHeldFn: Bool { controller.isCapturing && !controller.canCancelWithEscape }
+    var allowOfflineStart = false
 
     var body: some View {
-        Button(action: controller.toggleTestRecording) {
-            Label(isHeldFn ? "Release fn to finish" : (controller.isCapturing ? "Finish dictation" : idleTitle),
-                  systemImage: controller.isCapturing ? "stop.fill" : "mic")
+        let capturing = controller.isCapturing
+        let heldFn = capturing && !controller.canCancelWithEscape
+        let local = allowOfflineStart && !controller.isServerReady && controller.canStartDictation
+        let title = heldFn ? "Release fn to finish" : capturing ? "Stop recording" : local ? "Record on this Mac" : "Test microphone"
+        Button {
+            if capturing || local { controller.toggleMenuDictation() }
+            else { controller.toggleTestRecording() }
+        } label: {
+            Label(title, systemImage: capturing ? "stop.fill" : "mic")
                 .frame(maxWidth: .infinity)
                 .frame(height: 30)
         }
         .buttonStyle(InlayPrimaryButtonStyle())
-        .disabled(isHeldFn || (!controller.canTest && !controller.isCapturing))
-        .help("Test \(controller.selectedInputName) without pasting text")
-        .accessibilityIdentifier(identifier)
+        .disabled(capturing ? heldFn : local ? !controller.canStartDictationFromUI : !controller.canTest)
+        .help(capturing ? "Stop and keep this recording" : local ? "Save a dictation for transcription when the server returns" : "Test \(controller.selectedInputName) without pasting text")
+        .accessibilityIdentifier(local && !capturing ? "dictation.record-local" : identifier)
+    }
+}
+
+extension InlayController {
+    /// Capture controls must stay usable after a network or device change;
+    /// these prerequisites apply only when beginning a new dictation.
+    var canStartDictationFromUI: Bool {
+        canStartDictation && permissions.microphone && microphones.resolution.device != nil && insertionMode != .unavailable
     }
 }
