@@ -137,7 +137,7 @@ public struct ServerHealth: Codable, Equatable, Sendable {
     public var serverVersion: String
     public var maximumRecordingSeconds: Int?
     public var supportedRecordingSeconds: Int {
-        // v4 servers predating capability negotiation enforce a three-minute limit.
+        // Treat a server that omits its limit as enforcing the original three minutes.
         let advertised = maximumRecordingSeconds.flatMap { $0 > 0 ? $0 : nil } ?? 180
         return min(InlayAPI.maximumRecordingSeconds, advertised)
     }
@@ -187,8 +187,13 @@ public struct FinishGenerationRequest: Codable, Sendable {
     public var inferenceFrames: Int64
     public var originalFrames: Int64?
     public var continuationID: UUID?
-    public init(inferenceFrames: Int64, originalFrames: Int64? = nil, continuationID: UUID? = nil) {
+    /// Ranked terms read from the destination window; they follow dictionary names as
+    /// Qwen proofreading hints. The window image and its recognized text stay on the Mac.
+    public var screenContextTerms: [String]?
+    public init(inferenceFrames: Int64, originalFrames: Int64? = nil, continuationID: UUID? = nil,
+                screenContextTerms: [String]? = nil) {
         self.inferenceFrames = inferenceFrames; self.originalFrames = originalFrames; self.continuationID = continuationID
+        self.screenContextTerms = screenContextTerms
     }
 }
 
@@ -351,6 +356,7 @@ public struct GenerationRecord: Codable, Equatable, Sendable, Identifiable {
     public var speech: ModelProvenance?
     public var proofreading: ModelProvenance?
     public var textProcessing: TextProcessingRecord?
+    public var screenContextTerms: [String]?
     public var recognitionHints: ModelHintUsage?
     public var proofreadingHints: ModelHintUsage?
     public var formattingRejectionReason: String?

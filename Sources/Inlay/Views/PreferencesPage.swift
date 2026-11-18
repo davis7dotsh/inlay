@@ -26,6 +26,16 @@ private struct DevicePreferencesForm: View {
 
     private var usesPlainHTTP: Bool { (try? ServerEndpoint(endpoint))?.usesPlainHTTP ?? false }
 
+    /// Screen hints need Screen Recording to capture and Accessibility to find the focused window.
+    private var screenContextWarning: String? {
+        guard controller.useScreenContext else { return nil }
+        if !controller.permissions.screenRecording {
+            return "Allow Screen Recording below, then reopen \(InlayBuild.current.displayName)."
+        }
+        return controller.permissions.accessibility ? nil
+            : "Allow Accessibility below so screen hints can find the window you are dictating into."
+    }
+
     var body: some View {
         Form {
             Section {
@@ -163,6 +173,14 @@ private struct DevicePreferencesForm: View {
                     .foregroundStyle(InlayPalette.muted)
                 Toggle("Play dictation sounds", isOn: $controller.dictationSoundsEnabled)
                     .accessibilityIdentifier("preferences.dictation-sounds")
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Use on-screen words as vocabulary hints", isOn: $controller.useScreenContext)
+                        .accessibilityIdentifier("preferences.screen-context")
+                    Text(screenContextWarning
+                         ?? "Reads the focused window on this Mac when a take starts. Only unusual names and terms are sent to the server as proofreading hints; screenshots and screen text are not.")
+                        .font(.caption)
+                        .foregroundStyle(screenContextWarning == nil ? InlayPalette.muted : InlayPalette.warning)
+                }
                 Toggle("Never leave transcripts on the clipboard", isOn: $controller.preserveClipboard)
                     .accessibilityIdentifier("preferences.preserve-clipboard")
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
@@ -185,6 +203,11 @@ private struct DevicePreferencesForm: View {
                               reviewGranted: true, action: controller.requestAccessibility)
                 PermissionRow(title: "Input Monitoring", detail: "Recognize your dictation key. With only this permission, dictations are copied, not inserted.", granted: controller.permissions.inputMonitoring,
                               reviewGranted: true, action: controller.requestInputMonitoring)
+                if controller.useScreenContext {
+                    PermissionRow(title: "Screen Recording", detail: "Read on-screen words for proofreading hints.",
+                                  granted: controller.permissions.screenRecording, reviewGranted: true,
+                                  action: controller.requestScreenRecording)
+                }
                 if !controller.permissions.accessibility && controller.permissions.inputMonitoring {
                     Text("Shortcut is on. Dictations will be copied, not inserted; paste with Command-V.")
                         .font(.caption)

@@ -56,6 +56,8 @@ import {
   defaultDictionary,
   dictionaryValidationError,
   dictionaryVocabularyTerms,
+  proofreadingTerms,
+  validScreenContextTerm,
 } from "./domain/dictionary.ts";
 import { cleanTranscript } from "./domain/cleaner.ts";
 import { composeDictation } from "./domain/composition.ts";
@@ -1112,6 +1114,14 @@ export class GenerationService {
           "This recording does not retain original audio.",
         );
       const previous = this.continuation(request.continuationID, record);
+      // Screen terms only follow dictionary names as Qwen proofreading hints, so a
+      // take without text correction keeps none. Drop malformed terms rather than
+      // failing a take over an optional hint.
+      const screenTerms = record.settings.preferences.textCorrectionEnabled
+        ? request.screenContextTerms?.filter(validScreenContextTerm)
+        : undefined;
+      if (screenTerms?.length) record.screenContextTerms = screenTerms;
+      else delete record.screenContextTerms;
       try {
         record.inferenceAudio = await this.seal(id, "inference", speech);
         if (sealOriginal) record.originalAudio = await this.seal(id, "original", sealOriginal);
@@ -1685,6 +1695,7 @@ export class GenerationService {
         const processing = await this.proofread(
           structured.text,
           settings,
+          record.screenContextTerms,
           cleaned !== transcript,
           speech.language === "auto" ? settings.language : speech.language,
           signal,
@@ -1693,7 +1704,7 @@ export class GenerationService {
         signal.throwIfAborted();
         record.textProcessing = processing;
         if (["applied", "unchanged", "rejected"].includes(processing.status)) {
-          const all = dictionaryVocabularyTerms(settings.dictionary),
+          const all = proofreadingTerms(settings.dictionary, record.screenContextTerms),
             included = modelHints(all);
           record.proofreadingHints = {
             includedTerms: included,
@@ -1770,18 +1781,23 @@ export class GenerationService {
   private async proofread(
     text: string,
     settings: ServerPreferences,
+    screenContextTerms: string[] | undefined,
     dictionaryChanged: boolean,
     language: string,
     signal: AbortSignal,
   ) {
     const started = performance.now(),
-      terms = dictionaryVocabularyTerms(settings.dictionary);
+      dictionaryTerms = dictionaryVocabularyTerms(settings.dictionary),
+      terms = proofreadingTerms(settings.dictionary, screenContextTerms),
+      // The validator trusts near-spellings of dictionary terms only; screen
+      // terms that are not already dictionary terms get the weaker tier.
+      screenTerms = terms.slice(dictionaryTerms.length);
     const make = (
       status: TextProcessingRecord["status"],
       extra: Partial<TextProcessingRecord> = {},
     ) =>
       processingRecord({
-        dictionaryTerms: terms,
+        dictionaryTerms,
         dictionaryChangedText: dictionaryChanged,
         inputText: text,
         outputText: text,
@@ -1803,7 +1819,15 @@ export class GenerationService {
       }
       const lead = part.text.slice(0, part.text.length - part.text.trimStart().length);
       const tail = part.text.slice(part.text.trimEnd().length);
-      const result = await this.proofreadPart(core, settings, terms, language, signal);
+      const result = await this.proofreadPart(
+        core,
+        settings,
+        terms,
+        dictionaryTerms,
+        screenTerms,
+        language,
+        signal,
+      );
       results.push({
         ...result,
         offset: part.offset + lead.length,
@@ -1856,6 +1880,8 @@ export class GenerationService {
     text: string,
     settings: ServerPreferences,
     terms: string[],
+    dictionaryTerms: string[],
+    screenTerms: string[],
     language: string,
     signal: AbortSignal,
   ): Promise<Omit<ProofreadPart, "offset" | "text">> {
@@ -1869,7 +1895,13 @@ export class GenerationService {
       );
       signal.throwIfAborted();
       const candidate = applyDictionary(settings.dictionary, proof.text.trim(), 24 * 1024);
-      const evaluation = await evaluateCorrectionInWorker(text, candidate, terms, signal);
+      const evaluation = await evaluateCorrectionInWorker(
+        text,
+        candidate,
+        dictionaryTerms,
+        screenTerms,
+        signal,
+      );
       signal.throwIfAborted();
       const extra = {
         proposedText: candidate,

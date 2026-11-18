@@ -1,6 +1,6 @@
 # Architecture
 
-Inlay's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use API version 4. The contract is `Server/api/openapi.yaml` (OpenAPI 3.1). HTTP paths stay under `/v1`, and the client requires `apiVersion` 4 for live dictation and recovery. The same contract applies on one machine or across the network.
+Inlay's native Swift macOS client handles microphone capture, shortcuts, and cursor insertion. An independent TypeScript/Fastify server, compiled with Bun, owns inference, shared settings, and history. Both processes use API version 5. The contract is `Server/api/openapi.yaml` (OpenAPI 3.1). HTTP paths stay under `/v1`, and the client requires `apiVersion` 5 for live dictation and recovery. The same contract applies on one machine or across the network.
 
 ## Code map
 
@@ -25,7 +25,7 @@ Bun manages all JavaScript dependencies and compiles the coordinator plus its co
 
 1. For a live take, the client asks the server to create a generation with its device identity. The server freezes shared settings and accepts independent uploads from connected clients. A configured client can start a dictation while offline and upload later to the same endpoint. Offline-start takes capture inference audio only, without an insertion target; **Test microphone** still requires online admission.
 2. The client pins its microphone and uploads acknowledged, sequenced PCM chunks while recording. Inference audio is mono 16 kHz float32; optional original audio keeps the microphone rate/channels as float32.
-3. Release stops capture, drains uploads, and sends final frame counts. The microphone is available for the next take while earlier uploads finish. The server checks the complete intervals and seals WAV files. Recordings must be at least 0.25 seconds. This server advertises a two-hour limit; the client uses three minutes for a live connection to an older v4 server that does not advertise one. A longer offline take stays on the Mac until the selected server supports its duration. Transcripts over 2,400 characters are proofread in sentence-aligned parts of about 1,200 characters, each checked by the rewrite guards on its own.
+3. Release stops capture, drains uploads, and sends final frame counts. The microphone is available for the next take while earlier uploads finish. The server checks the complete intervals and seals WAV files. Recordings must be at least 0.25 seconds. This server advertises a two-hour limit, and the client caps live dictation at the limit its server advertises. A longer offline take stays on the Mac until the selected server supports its duration. Transcripts over 2,400 characters are proofread in sentence-aligned parts of about 1,200 characters, each checked by the rewrite guards on its own.
 4. Sealed recordings enter a FIFO processing queue. Jobs run concurrently, but each helper stage is serialized: one job at a time runs Parakeet, mechanical cleanup, dictionary rules, and list formatting, and one job at a time proofreads, so speech for one take can overlap proofreading for another. Optional Qwen output passes through dictionary rules and deterministic rewrite checks. Rejection or proofreading failure retains the pre-proofreading text. Cancelling one upload or queued job does not interrupt another.
 5. NDJSON events carry progress and the saved final result for each generation. Each pending client take retains its original server connection and destination. The client serializes delivery attempts, verifies focus/caret safety, and reports each outcome separately from inference completion.
 
@@ -49,11 +49,13 @@ With **Mute system audio while recording** enabled under **This Mac**, the defau
 
 ## Settings
 
-| Scope          | Where to edit                    | What it owns                                                                                                                                  |
-| -------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, clipboard preservation, microphone priority/selection. |
-| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                              |
-| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                  |
+| Scope          | Where to edit                    | What it owns                                                                                                                                                |
+| -------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| This Mac       | **This Mac** and **Microphone**  | Endpoint/token, device name, shortcut, launch at login, output muting while recording, clipboard preservation, screen hints, microphone priority/selection. |
+| Shared server  | **Server preferences**           | Language, cleanup prompt, vocabulary, dictionary, proofreading toggle, original-audio retention.                                                            |
+| Server process | Command arguments or environment | Bind address, port, data directory, token file, helper/model paths. See [server setup](../Server/README.md).                                                |
+
+With **Use on-screen words as vocabulary hints** enabled under **This Mac** (off by default), the client reads the focused window when a take starts, never Inlay's own window or a non-focused fallback, and skips capture while secure input is active before or after the screenshot. It needs Screen Recording, and Accessibility to find the focused window. Vision OCR and term ranking run on the Mac; the screenshot and recognized text are never sent or saved. Emails, URLs, domains, paths, and long numbers are filtered out, and at most 40 ranked terms are sent with the finish request. The client waits at most 500 ms for them, so a slow capture sends none. The server stores the terms on the take and appends them after dictionary names as Qwen proofreading hints. Parakeet receives no hints, and takes without text correction keep no screen terms. **Test microphone** never captures the screen.
 
 Shared saves use revisions to reject stale concurrent edits. Settings are snapshotted when the server accepts a take; changes affect future recordings. Update shared settings through the UI/API rather than editing files while the server runs.
 
@@ -81,3 +83,5 @@ All clients read shared, paginated history. Deleting an inactive generation dele
 Only one server may own a data directory. Back up preferences and generation directories together. Inlay does not add filesystem encryption; protect this directory as you would the recordings it contains. Authentication and remote transport are described in the [server guide](../Server/README.md#remote-access).
 
 See the [HTTP contract](client-server-contract.md) for request details and [text correction](text-correction.md) for behavior and limitations.
+
+Screen hints are attached at Finish. If combined with capture-time proofreading, earlier committed windows proceed without those hints; late terms must never rewrite committed text. Providing hints to future windows requires a bounded, take-owned context snapshot rather than reading whichever window is focused later.

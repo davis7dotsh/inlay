@@ -140,10 +140,17 @@ export function processingRecord(record: TextProcessingRecord): TextProcessingRe
   };
 }
 
+/** Dictionary terms are user-curated: they join split fragments in the source, and an
+ * output word within two edits of one counts as the same word. Screen terms are only
+ * read off the window, so the rewrite must keep any the source already contains, but
+ * they never rewrite the source for comparison: joining fragments into one or swapping
+ * toward one is an ordinary word change, and source negations stay as spoken.
+ */
 export function evaluateCorrection(
   original: string,
   candidate: string,
-  preferredTerms: string[] = [],
+  dictionaryTerms: string[] = [],
+  screenTerms: string[] = [],
 ) {
   let verifiedRepairs: VerifiedTextRepair[] = [];
   const reject = (rejectionReason?: string) => ({ rejectionReason, verifiedRepairs });
@@ -186,6 +193,7 @@ export function evaluateCorrection(
   const protectedSource = repairCheck.protectedSource;
   if (!same(numbers(protectedSource), numbers(output)))
     return reject("The rewrite changed a number.");
+  const preferredTerms = [...dictionaryTerms, ...screenTerms];
   const foldedSource = preferredTerms.length ? foldedIndex(protectedSource) : undefined;
   const foldedOutput = preferredTerms.length ? foldedIndex(output) : undefined;
   for (const term of preferredTerms) {
@@ -203,28 +211,28 @@ export function evaluateCorrection(
   )
     return reject("The rewrite changed a quantity.");
   if (!before.length) return reject(output === original ? undefined : "The rewrite added content.");
-  const allowed = new Set(preferredTerms.flatMap(words));
-  const comparedBefore = recognizedTerms(protectedSource, intersection(allowed, after)).map(
+  const trusted = new Set(dictionaryTerms.flatMap(words));
+  const comparedBefore = recognizedTerms(protectedSource, intersection(trusted, after)).map(
     (token) => token.word,
   );
   const ratio = after.length / comparedBefore.length;
   if (ratio < 0.75 || ratio > 1.35) return reject("The rewrite changed too much text.");
   if (
-    orderedOverlap(comparedBefore, after, allowed) / Math.max(comparedBefore.length, after.length) <
+    orderedOverlap(comparedBefore, after, trusted) / Math.max(comparedBefore.length, after.length) <
     0.72
   ) {
     return reject("The rewrite changed too much wording.");
   }
-  const reason = preservationReason(protectedSource, output, allowed);
+  const reason = preservationReason(protectedSource, output, trusted);
   if (reason) return reject(reason);
   const originalItems = listItems(protectedSource);
   const rewrittenItems = listItems(output);
   for (let index = 0; index < Math.min(originalItems.length, rewrittenItems.length); index++) {
     const b = words(rewrittenItems[index]!);
-    const a = recognizedTerms(originalItems[index]!, intersection(allowed, b)).map(
+    const a = recognizedTerms(originalItems[index]!, intersection(trusted, b)).map(
       (token) => token.word,
     );
-    if (orderedOverlap(a, b, allowed) / Math.max(1, a.length, b.length) < 0.72)
+    if (orderedOverlap(a, b, trusted) / Math.max(1, a.length, b.length) < 0.72)
       return reject("The rewrite changed a list item.");
   }
   return reject();
@@ -413,12 +421,12 @@ function alignment(before: Token[], after: Token[], preferred: Set<string>) {
   return result.reverse();
 }
 
-function preservationReason(original: string, candidate: string, preferred: Set<string>) {
+function preservationReason(original: string, candidate: string, trusted: Set<string>) {
   const output = tokens(candidate);
   const input = recognizedTerms(
     original,
     intersection(
-      preferred,
+      trusted,
       output.map((token) => token.word),
     ),
   );
@@ -431,16 +439,16 @@ function preservationReason(original: string, candidate: string, preferred: Set<
     )
   )
     return "The rewrite changed a negation.";
-  const aligned = alignment(input, output, preferred);
+  const aligned = alignment(input, output, trusted);
   const matchedOutput = new Set(aligned.map((pair) => pair[1]));
-  if (output.some((token, index) => preferred.has(token.word) && !matchedOutput.has(index)))
+  if (output.some((token, index) => trusted.has(token.word) && !matchedOutput.has(index)))
     return "The rewrite introduced an unsupported dictionary term.";
   const positiveInput = input.flatMap((token, index) => (!isNegative(token.word) ? [index] : []));
   const positiveOutput = output.flatMap((token, index) => (!isNegative(token.word) ? [index] : []));
   const positiveAlignment = alignment(
     positiveInput.map((index) => input[index]!),
     positiveOutput.map((index) => output[index]!),
-    preferred,
+    trusted,
   ).map(([i, j]): [number, number] => [positiveInput[i]!, positiveOutput[j]!]);
   for (let index = 0; index < inputNegatives.length; index++) {
     const sourceNegative = inputNegatives[index]!;
@@ -656,7 +664,11 @@ function recognizedTerms(text: string, candidates: Set<string>) {
     for (const width of [3, 2]) {
       if (index + width > input.length) continue;
       const fragments = input.slice(index, index + width);
-      if (!fragments.every((token) => characterCount(token.word, 1) >= 2)) continue;
+      // Joining across a negation would delete it before the negation check ("not able" → Notable).
+      if (
+        !fragments.every((token) => characterCount(token.word, 1) >= 2 && !isNegative(token.word))
+      )
+        continue;
       if (
         !fragments.slice(1).every((right, offset) => {
           const left = fragments[offset]!;
