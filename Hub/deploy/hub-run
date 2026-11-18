@@ -8,9 +8,15 @@
 #      probe passes), never in the NAS window, and at most once in 5 minutes: the NAS
 #      blocks an address after 10 failed sign-ins in 5 minutes.
 #   3. Start the hub. Every 15 minutes outside the window, check the mount again, and from 03:00
-#      local time make the day's database copy on the share once (src/backup.ts), at most one try
-#      an hour.
-#   4. When the ssh session ends (launchd stopped hub-job), its stdin closes and the hub stops.
+#      local time make the day's database copy on the share once (src/backup.ts), then run its
+#      --restore-check --day <day> and --jsonl-check --day <day>, at most one try an hour. From 07:30 Central
+#      (DSM task 5 writes the snapshot list from 07:10 Central, 92 s on 2026-11-18), run the NAS status job
+#      (src/nas-status.ts) once a day, inside deploy/mount-ro.sh, which mounts agents read-only as
+#      nas-status for two short folder listings. The share totals come from that task's file, not
+#      from a walk. One try a day and no retry: one sign-in a day.
+#   4. When the ssh session ends (launchd stopped hub-job), its stdin closes and the hub stops. On
+#      a stop, hub-run signals the running check (such as mount-ro.sh, which then unmounts) and waits
+#      for it, so no check is left running without hub-run.
 set -uo pipefail
 app=@APP@
 export HOME=/Users/services-admin
@@ -46,8 +52,9 @@ mount_check() {
   /bin/bash "$app/deploy/mount.sh" || say "the mount failed. Share routes answer 503 until a later check mounts it." >&2
 }
 
-# The day's database copy, once a day from 03:00 local time (after the 23:30 client syncs). A failed
-# copy tries again an hour later. The copy takes seconds and never runs in the NAS window.
+# The day's database copy, once a day from 03:00 local time (after the 23:30 client syncs), then the
+# restore check and the JSONL check. A failed copy or check tries again an hour later (a copy that
+# is already whole on the share is kept). None of the three runs in the NAS window.
 backup_check() {
   in_window && return 0
   [ "$((10#$(date +%H)))" -ge 3 ] || return 0
@@ -57,10 +64,46 @@ backup_check() {
   if [ -f "$try" ] && [ $(( $(date +%s) - $(stat -f %m "$try") )) -lt 3600 ]; then return 0; fi
   touch "$try"
   healthy || { say "the share is not ready. The database copy waits for the next check."; return 0; }
-  if (cd "$app" && perl -e 'alarm 1800; exec @ARGV' "$bun" "$app/src/backup.ts" --day "$today"); then
-    echo "$today" > "$done"
-  else
+  # No subshell: perl execs bun, so it is a direct child of the checker and a stop reaches it.
+  # hub-run is already in $app.
+  if ! perl -e 'alarm 1800; exec @ARGV' "$bun" "$app/src/backup.ts" --day "$today"; then
     say "the database copy failed. It tries again in an hour."
+    return 0
+  fi
+  # Both checks read the day that the copy wrote. The JSONL check rebuilds the day's JSONL against
+  # its own manifest, so a live write after the copy cannot fail it.
+  local check
+  for check in "--restore-check --day $today" "--jsonl-check --day $today"; do
+    in_window && { say "the NAS window started. The $check waits for the next check."; return 0; }
+    # $check is unquoted on purpose: "--jsonl-check --day <day>" is three arguments.
+    # shellcheck disable=SC2086
+    if ! perl -e 'alarm 1800; exec @ARGV' "$bun" "$app/src/backup.ts" $check; then
+      say "FAILED: backup.ts $check. The copy and its checks try again in an hour." >&2
+      return 0
+    fi
+  done
+  echo "$today" > "$done"
+}
+
+# The NAS status job, once a day from 07:30 Central, never in the NAS window. The time and the day
+# are read in TZ, or America/Chicago when TZ is not set. 07:30 Central is 13:30 UTC in winter and
+# 12:30 UTC in summer, after the window ends at 12:00 UTC. The day is
+# recorded before the run, so a failed run (a failed sign-in too) is not tried again that day:
+# one sign-in a day, far below the NAS lockout of 10 failed sign-ins in 5 minutes. The job writes
+# nas-status.json even when a source fails, with that source marked unavailable.
+status_check() {
+  in_window && return 0
+  local tz="${TZ:-America/Chicago}"
+  [ "$((10#$(TZ="$tz" date +%H%M)))" -ge 730 ] || return 0
+  local today done="$state/last-status-day"
+  today=$(TZ="$tz" date +%F)
+  [ "$(cat "$done" 2>/dev/null)" = "$today" ] && return 0
+  # A day that cannot be recorded is not run: the run could then repeat every 15 minutes.
+  echo "$today" > "$done" || { say "FAILED: cannot write $done. The NAS status job does not run." >&2; return 0; }
+  # No subshell: perl execs mount-ro.sh, so it is a direct child of the checker and a stop reaches it.
+  # hub-run is already in $app.
+  if ! perl -e 'alarm 1800; exec @ARGV' /bin/bash "$app/deploy/mount-ro.sh" agents "$HOME/mnt/nas-status-agents" -- "$bun" "$app/src/nas-status.ts"; then
+    say "the NAS status job failed. It runs again tomorrow from 07:30 Central." >&2
   fi
 }
 
@@ -73,12 +116,22 @@ cd "$app" || exit 1
 hub=$!
 ( cat <&3 >/dev/null; say "the ssh session ended. Stopping the hub."; kill -TERM "$hub" 2>/dev/null ) &
 watcher=$!
-( while sleep 900; do mount_check; backup_check; done ) </dev/null &
+# The checker stops on TERM only after its running check ends, so that check can clean up.
+( trap 'exit 143' TERM; while sleep 900; do mount_check; backup_check; status_check; done ) </dev/null &
 checker=$!
 exec 3<&-
-wait "$hub"
-rc=$?
+# A stop of hub-run stops the hub first, and the steps below then stop the rest.
+trap 'kill -TERM "$hub" 2>/dev/null' TERM HUP INT
+while :; do
+  wait "$hub"
+  rc=$?
+  kill -0 "$hub" 2>/dev/null || break
+done
+trap - TERM HUP INT
 pkill -P "$watcher" 2>/dev/null; kill "$watcher" 2>/dev/null
-pkill -P "$checker" 2>/dev/null; kill "$checker" 2>/dev/null
+# TERM to the checker, then to its running check (sleep, mount-ro.sh, backup.ts or mount.sh), and
+# wait: mount-ro.sh stops its command and unmounts before it exits.
+kill -TERM "$checker" 2>/dev/null; pkill -TERM -P "$checker" 2>/dev/null
+wait "$checker" 2>/dev/null
 say "the hub exited with $rc"
 exit "$rc"

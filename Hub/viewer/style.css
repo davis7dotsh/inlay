@@ -1,0 +1,752 @@
+/* The look of the Transcriber Data tab (scripts/archive/style.css), with 3 tabs. No external fonts. */
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #242e2c;
+  background: #f7f7f2;
+  font-size: 14px;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  overflow-x: hidden;
+}
+[hidden] {
+  display: none !important;
+}
+header {
+  padding: 28px 36px 10px;
+}
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #557466;
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+h1 {
+  font-family: Georgia, serif;
+  font-size: 37px;
+  font-weight: 400;
+  margin: 0;
+}
+.subtitle {
+  color: #697571;
+  margin: 8px 0;
+}
+a {
+  color: #355b45;
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button {
+  cursor: pointer;
+  border: 1px solid #d3dad2;
+  border-radius: 7px;
+  background: #fff;
+  padding: 8px 12px;
+  color: #264b3d;
+}
+button:hover {
+  background: #e9eee7;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+input,
+select {
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #d1d8d0;
+  border-radius: 7px;
+  background: #fff;
+  color: inherit;
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 24px;
+  margin: 0 36px;
+  border-bottom: 1px solid #dce1d9;
+}
+.tabs a {
+  padding: 10px 0;
+  color: #697571;
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tabs a:hover {
+  color: #264b3d;
+}
+.tabs a[aria-current="page"] {
+  color: #242e2c;
+  font-weight: 600;
+  border-bottom-color: #264b3d;
+}
+.pad {
+  padding: 22px 36px 30px;
+}
+
+/* Browse */
+main {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  min-height: 65vh;
+}
+aside {
+  border-right: 1px solid #dce1d9;
+  padding: 20px;
+  min-width: 0;
+}
+.filters {
+  display: grid;
+  gap: 10px;
+}
+.filterrow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+/* min-width 0 lets a grid cell shrink below its date control's natural width. */
+.filterrow > * {
+  min-width: 0;
+}
+/* Two date controls need about 150 px each. Where the sidebar is narrower, they stack. */
+.filterrow.dates {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.fieldnote {
+  margin: -4px 0 0;
+  font-size: 11px;
+  color: #a73829;
+}
+.filterrow label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: #68766d;
+}
+.listheading {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #79827c;
+  font-size: 11px;
+  padding: 17px 0 8px;
+}
+#records {
+  max-height: 65vh;
+  overflow: auto;
+}
+.record {
+  display: block;
+  text-align: left;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  margin: 3px 0;
+  padding: 13px 11px;
+  background: transparent;
+  color: inherit;
+}
+.record.selected {
+  background: #dfe8db;
+}
+.record .top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #718073;
+  margin-bottom: 7px;
+}
+.record .preview {
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.record .preview.none {
+  color: #8a948d;
+  font-style: italic;
+}
+.record .tags {
+  color: #688071;
+  font-size: 10px;
+  display: block;
+  margin-top: 7px;
+}
+mark {
+  background: #f2dd8c;
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+}
+#page {
+  font-size: 11px;
+  color: #68766d;
+}
+article {
+  padding: 26px 30px;
+  min-width: 0;
+}
+article:focus {
+  outline: none;
+}
+.empty {
+  padding: 60px 20px;
+  text-align: center;
+  color: #6d796f;
+}
+.empty.small {
+  padding: 30px 10px;
+}
+.failure {
+  padding: 16px 18px;
+  margin: 10px 0;
+  border: 1px solid #e4c3bb;
+  background: #fbf0ec;
+  border-radius: 9px;
+  color: #a73829;
+  overflow-wrap: anywhere;
+}
+.failure button {
+  margin-top: 10px;
+}
+.loading {
+  color: #79827c;
+  font-size: 12px;
+  padding: 20px 0;
+}
+h2 {
+  font-family: Georgia, serif;
+  font-size: 25px;
+  font-weight: 400;
+  margin: 0 0 12px;
+}
+.recordmeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+.pill {
+  padding: 4px 9px;
+  background: #e8eee3;
+  border-radius: 20px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.texts {
+  display: grid;
+  gap: 16px;
+}
+.textcard {
+  border: 1px solid #dde2d9;
+  background: #fff;
+  border-radius: 9px;
+  padding: 17px;
+  min-width: 0;
+}
+.textcard h3 {
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #6a7c6a;
+  margin: 0 0 6px;
+}
+.textcard .about {
+  font-size: 11px;
+  color: #7a857d;
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+.transcript {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+  max-height: 420px;
+  overflow: auto;
+  margin: 0;
+}
+.transcript.none {
+  color: #8a948d;
+  font-style: italic;
+}
+.textcard.clean {
+  border-top: 3px solid #729270;
+}
+.section {
+  margin-top: 24px;
+}
+.section > h3 {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0 0 10px;
+}
+.player {
+  padding: 14px;
+  background: #eef1e9;
+  border-radius: 8px;
+}
+.player p {
+  margin: 0;
+}
+.player small {
+  display: block;
+  color: #6e7b6e;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+.player .note {
+  color: #8a5a1f;
+}
+audio {
+  width: 100%;
+  margin-top: 10px;
+  display: block;
+}
+details {
+  margin: 10px 0;
+  border: 1px solid #dce2d8;
+  border-radius: 7px;
+  background: #fbfcf9;
+  padding: 12px;
+}
+summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+th,
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #e7ebe2;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+th {
+  color: #617566;
+  font-weight: 500;
+  font-size: 11px;
+}
+.fields td:first-child {
+  color: #617566;
+  width: 190px;
+}
+
+/* Insights */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.card {
+  background: #eef1e9;
+  border: 1px solid #dfe5d9;
+  padding: 14px 18px;
+  border-radius: 10px;
+  min-width: 0;
+}
+.card strong {
+  font-size: 26px;
+  font-weight: 500;
+  display: block;
+}
+.card .label {
+  letter-spacing: 1.5px;
+  font-size: 10px;
+  color: #647568;
+  margin-top: 2px;
+}
+.card .formula {
+  border-top: 1px solid #d6dccf;
+  margin-top: 10px;
+  padding-top: 8px;
+  color: #4b5a51;
+  font-size: 12px;
+}
+.card h3 {
+  font-family: Georgia, serif;
+  font-size: 19px;
+  font-weight: 400;
+  margin: 0 0 10px;
+}
+.bars {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+.bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 10px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.bar .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bar .value {
+  color: #4b5a51;
+  font-variant-numeric: tabular-nums;
+}
+.bar .track {
+  grid-column: 1 / -1;
+  height: 12px;
+  background: #e0e6dc;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.bar .fill {
+  height: 100%;
+  background: #264b3d;
+  border-radius: 4px;
+  min-width: 2px;
+}
+.computed {
+  color: #79827c;
+  font-size: 11px;
+  margin-top: 14px;
+}
+
+/* Widths of the bars, in steps of 2 %, so no inline style is needed under the CSP. */
+.w0 {
+  width: 0;
+}
+.w2 {
+  width: 2%;
+}
+.w4 {
+  width: 4%;
+}
+.w6 {
+  width: 6%;
+}
+.w8 {
+  width: 8%;
+}
+.w10 {
+  width: 10%;
+}
+.w12 {
+  width: 12%;
+}
+.w14 {
+  width: 14%;
+}
+.w16 {
+  width: 16%;
+}
+.w18 {
+  width: 18%;
+}
+.w20 {
+  width: 20%;
+}
+.w22 {
+  width: 22%;
+}
+.w24 {
+  width: 24%;
+}
+.w26 {
+  width: 26%;
+}
+.w28 {
+  width: 28%;
+}
+.w30 {
+  width: 30%;
+}
+.w32 {
+  width: 32%;
+}
+.w34 {
+  width: 34%;
+}
+.w36 {
+  width: 36%;
+}
+.w38 {
+  width: 38%;
+}
+.w40 {
+  width: 40%;
+}
+.w42 {
+  width: 42%;
+}
+.w44 {
+  width: 44%;
+}
+.w46 {
+  width: 46%;
+}
+.w48 {
+  width: 48%;
+}
+.w50 {
+  width: 50%;
+}
+.w52 {
+  width: 52%;
+}
+.w54 {
+  width: 54%;
+}
+.w56 {
+  width: 56%;
+}
+.w58 {
+  width: 58%;
+}
+.w60 {
+  width: 60%;
+}
+.w62 {
+  width: 62%;
+}
+.w64 {
+  width: 64%;
+}
+.w66 {
+  width: 66%;
+}
+.w68 {
+  width: 68%;
+}
+.w70 {
+  width: 70%;
+}
+.w72 {
+  width: 72%;
+}
+.w74 {
+  width: 74%;
+}
+.w76 {
+  width: 76%;
+}
+.w78 {
+  width: 78%;
+}
+.w80 {
+  width: 80%;
+}
+.w82 {
+  width: 82%;
+}
+.w84 {
+  width: 84%;
+}
+.w86 {
+  width: 86%;
+}
+.w88 {
+  width: 88%;
+}
+.w90 {
+  width: 90%;
+}
+.w92 {
+  width: 92%;
+}
+.w94 {
+  width: 94%;
+}
+.w96 {
+  width: 96%;
+}
+.w98 {
+  width: 98%;
+}
+.w100 {
+  width: 100%;
+}
+
+/* NAS */
+.banner {
+  padding: 14px 18px;
+  border-radius: 9px;
+  margin-bottom: 16px;
+  border: 1px solid #cfdccb;
+  background: #e8efe4;
+  overflow-wrap: anywhere;
+}
+.banner strong {
+  display: block;
+  margin-bottom: 4px;
+}
+.banner.alarm {
+  border-color: #e4c3bb;
+  background: #fbf0ec;
+  color: #8f2f22;
+}
+.banner.unknown {
+  border-color: #e6d7b5;
+  background: #fbf5e6;
+  color: #7a5a17;
+}
+.block {
+  margin-top: 22px;
+}
+.block > h3 {
+  font-family: Georgia, serif;
+  font-size: 19px;
+  font-weight: 400;
+  margin: 0 0 10px;
+}
+.tablecard {
+  background: #fff;
+  border: 1px solid #dde2d9;
+  border-radius: 9px;
+  padding: 4px 8px;
+}
+.unavail {
+  color: #9a6a12;
+}
+.unavail small,
+.sub {
+  display: block;
+  color: #7a857d;
+  font-size: 11px;
+  margin-top: 3px;
+}
+.unavail small {
+  color: #8a6a2a;
+}
+.mini {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.num .sub {
+  white-space: normal;
+}
+.check {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+}
+
+footer {
+  border-top: 1px solid #dce2d9;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 36px;
+  color: #798077;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1000px) {
+  main {
+    grid-template-columns: 300px 1fr;
+  }
+  .bars {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Phone width: the list and the record pane stack, and each table row becomes a block. */
+@media (max-width: 700px) {
+  header {
+    padding: 18px 16px 6px;
+  }
+  h1 {
+    font-size: 30px;
+  }
+  .tabs {
+    margin: 0 16px;
+  }
+  .pad {
+    padding: 18px 16px 24px;
+  }
+  main {
+    display: block;
+  }
+  aside {
+    border-right: 0;
+    border-bottom: 1px solid #dce1d9;
+    padding: 16px;
+  }
+  #records {
+    max-height: 340px;
+  }
+  article {
+    padding: 18px 16px;
+  }
+  .cards,
+  .mini {
+    grid-template-columns: 1fr;
+  }
+  .fields td:first-child {
+    width: 40%;
+  }
+  table.stack thead {
+    display: none;
+  }
+  table.stack,
+  table.stack tbody,
+  table.stack tr,
+  table.stack td {
+    display: block;
+    width: 100%;
+  }
+  table.stack tr {
+    border-bottom: 1px solid #dce2d9;
+    padding: 6px 0;
+  }
+  table.stack td {
+    border: 0;
+    padding: 4px 4px;
+    display: grid;
+    grid-template-columns: 38% minmax(0, 1fr);
+    gap: 8px;
+  }
+  table.stack td::before {
+    content: attr(data-label);
+    color: #617566;
+    font-size: 11px;
+  }
+  footer {
+    display: block;
+    padding: 16px;
+  }
+  footer a {
+    display: block;
+    margin-top: 6px;
+  }
+}

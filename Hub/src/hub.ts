@@ -5,8 +5,12 @@
 //   GET  /v1/search?q=...                  keyword search over the cleaned text
 //   GET  /healthz                          "ok", no auth
 // It logs one line per request (time, route, device_id, status, recording_id) and never a token,
-// a header, a query or a text.
+// a header, a query or a text. After each 200 POST /v1/records it writes the time to the sync state
+// file (syncStatePath), through a temp file and a rename, so the last client sync survives a log
+// rotation and a restart. A failed state write is logged and never fails the sync.
 import type { Database } from "bun:sqlite";
+import { randomBytes } from "node:crypto";
+import { rename, rm, writeFile } from "node:fs/promises";
 import { HttpError } from "./errors.ts";
 import {
   parseHeld,
@@ -24,6 +28,8 @@ export type HubConfig = {
   db: Database;
   shareRoot: string;
   tokensPath: string;
+  /// The file that holds the time of the last 200 POST /v1/records, as {"last_sync": ISO time}.
+  syncStatePath?: string;
   clock?: Clock;
   log?: (line: string) => void;
 };
@@ -48,6 +54,34 @@ export function createHub(config: HubConfig) {
   const log = config.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   const share = new Share(config.shareRoot, clock);
   const { db } = config;
+  /// The state writes, one after another, so a later sync never lands before an earlier one.
+  let syncWrites: Promise<void> = Promise.resolve();
+
+  /// Write the time of a sync to the state file. It never throws and is never awaited by a request.
+  function recordSync(time: Date) {
+    const path = config.syncStatePath;
+    if (!path) return;
+    syncWrites = syncWrites.then(async () => {
+      const temp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+      try {
+        await writeFile(temp, `${JSON.stringify({ last_sync: time.toISOString() })}\n`, {
+          mode: 0o600,
+          flag: "wx",
+        });
+        await rename(temp, path);
+      } catch (error) {
+        await rm(temp, { force: true }).catch(() => {});
+        try {
+          const message = error instanceof Error ? error.message.slice(0, 300) : "unknown";
+          process.stderr.write(
+            `${JSON.stringify({ time: clock().toISOString(), event: "error", route: "sync state", message })}\n`,
+          );
+        } catch {
+          // A failed log line never fails the sync.
+        }
+      }
+    });
+  }
 
   const authenticate = async (req: Request, ctx: Context) => {
     ctx.device = deviceFor(await readTokens(config.tokensPath), req.headers.get("authorization"));
@@ -175,6 +209,13 @@ export function createHub(config: HubConfig) {
       recording_id: ctx.recording,
     };
     log(JSON.stringify(line));
+    if (name === "POST /v1/records" && res.status === 200) {
+      try {
+        recordSync(clock());
+      } catch {
+        // A failed state write never fails the sync.
+      }
+    }
     return res;
   }
 

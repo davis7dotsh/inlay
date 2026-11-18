@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Transcripts · Codecaine</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">CODECAINE · DATA</p>
+        <h1>Transcripts</h1>
+        <p class="subtitle">Every machine's words, on nas-01.</p>
+      </div>
+    </header>
+    <nav class="tabs" aria-label="Views">
+      <a href="/" data-tab="browse">Browse</a>
+      <a href="/insights" data-tab="insights">Insights</a>
+      <a href="/nas" data-tab="nas">NAS</a>
+    </nav>
+
+    <section id="browse" class="view" hidden>
+      <main>
+        <aside>
+          <form class="filters" id="filters" role="search">
+            <input
+              id="q"
+              type="search"
+              maxlength="200"
+              placeholder="Search every transcript…"
+              aria-label="Search every transcript"
+              aria-describedby="q-note"
+            />
+            <p class="fieldnote" id="q-note" role="alert" hidden></p>
+            <div class="filterrow">
+              <select id="source" aria-label="Source">
+                <option value="">All sources</option>
+                <option value="transcriber">Transcriber</option>
+                <option value="wispr-flow">Wispr Flow</option>
+              </select>
+              <select id="mode" aria-label="Mode">
+                <option value="">Any mode</option>
+                <option value="none">No mode</option>
+              </select>
+            </div>
+            <div class="filterrow dates">
+              <label
+                >From
+                <input
+                  id="from"
+                  type="date"
+                  min="2000-01-01"
+                  max="2100-12-31"
+                  aria-describedby="date-note"
+              /></label>
+              <label
+                >To
+                <input
+                  id="to"
+                  type="date"
+                  min="2000-01-01"
+                  max="2100-12-31"
+                  aria-describedby="date-note"
+              /></label>
+            </div>
+            <p class="fieldnote" id="date-note" role="alert" hidden></p>
+            <div class="filterrow">
+              <select id="audio" aria-label="Audio">
+                <option value="">With or without audio</option>
+                <option value="1">With audio</option>
+                <option value="0">Text only</option>
+              </select>
+              <button type="button" id="clear">Clear filters</button>
+            </div>
+          </form>
+          <div class="listheading"><span id="count"></span><span id="order"></span></div>
+          <div id="records" aria-live="polite"></div>
+          <div class="pager">
+            <button type="button" id="previous" disabled>Previous</button><span id="page"></span
+            ><button type="button" id="next" disabled>Next</button>
+          </div>
+        </aside>
+        <article id="detail" tabindex="-1">
+          <div class="empty">
+            <h2>Choose a recording</h2>
+            <p>Read its cleaned and raw text, and play its audio.</p>
+          </div>
+        </article>
+      </main>
+    </section>
+
+    <section id="insights" class="view" hidden>
+      <div id="insights-body" class="pad"></div>
+    </section>
+
+    <section id="nas" class="view" hidden>
+      <div id="nas-body" class="pad"></div>
+    </section>
+
+    <footer>
+      <span>transcripts.lascari.dev · read only</span>
+      <a href="https://traces.lascari.dev">Trace runs on traces.lascari.dev</a>
+    </footer>
+  </body>
+</html>

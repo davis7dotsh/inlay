@@ -1,6 +1,7 @@
 // Mount an SMB share at a fixed folder with NetFS, for a LaunchDaemon with no GUI login.
 // A copy of agent-traces deploy/nas/nas-mount.swift.
-//   nas-mount <smb url without password> <mount folder> <user> <password file>
+//   nas-mount <smb url without password> <mount folder> <user> <password file> [--read-only]
+// With --read-only the mount is read-only (MNT_RDONLY): no file call through it can write.
 // The password is read from a mode 600 file inside this process and handed to NetFS in memory, so it is
 // never on a command line and never in `ps`. The mount is soft: when the NAS is gone, file calls fail
 // with an error instead of hanging, so the copy job sees a stale mount as an error.
@@ -8,8 +9,9 @@ import Foundation
 import NetFS
 
 let args = CommandLine.arguments
-guard args.count == 5, let url = URL(string: args[1]) else {
-  FileHandle.standardError.write("usage: nas-mount smb://host/share <mount folder> <user> <password file>\n".data(using: .utf8)!)
+let readOnly = args.count == 6 && args[5] == "--read-only"
+guard args.count == 5 || readOnly, let url = URL(string: args[1]) else {
+  FileHandle.standardError.write("usage: nas-mount smb://host/share <mount folder> <user> <password file> [--read-only]\n".data(using: .utf8)!)
   exit(2)
 }
 let mountDir = URL(fileURLWithPath: args[2], isDirectory: true)
@@ -29,7 +31,7 @@ openOptions[kNetFSForceNewSessionKey] = true
 let mountOptions = NSMutableDictionary()
 mountOptions[kNetFSMountAtMountDirKey] = true
 mountOptions[kNetFSSoftMountKey] = true
-mountOptions[kNetFSMountFlagsKey] = MNT_NOSUID | MNT_NODEV | MNT_DONTBROWSE
+mountOptions[kNetFSMountFlagsKey] = MNT_NOSUID | MNT_NODEV | MNT_DONTBROWSE | (readOnly ? MNT_RDONLY : 0)
 
 var mounts: Unmanaged<CFArray>? = nil
 let rc = NetFSMountURLSync(url as CFURL, mountDir as CFURL, user as CFString, password as CFString, openOptions, mountOptions, &mounts)

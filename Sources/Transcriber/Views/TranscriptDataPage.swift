@@ -34,10 +34,23 @@ private struct TranscriptArchiveWebView: NSViewRepresentable {
     func updateNSView(_ view: WKWebView, context: Context) {}
 
     final class Coordinator: NSObject, WKNavigationDelegate {
+        /// The NAS transcripts viewer is the only outside address the Data tab may open.
+        /// It opens in the default browser, never inside this WebView.
+        private static let nasViewerAddresses: Set<String> = [
+            "https://transcripts.lascari.dev",
+            "https://transcripts.lascari.dev/",
+        ]
+
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             if action.request.url?.absoluteString == "about:blank" {
                 decisionHandler(.allow)
+                return
+            }
+            if let url = action.request.url,
+               Self.nasViewerAddresses.contains(url.absoluteString) {
+                NSWorkspace.shared.open(url)
+                decisionHandler(.cancel)
                 return
             }
             guard let url = action.request.url,

@@ -16,6 +16,20 @@ header {
   justify-content: space-between;
   align-items: center;
 }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.naslink {
+  color: #355b45;
+  font-size: 13px;
+}
+.naslink:hover {
+  color: #264b3d;
+}
 .eyebrow {
   font-size: 10px;
   letter-spacing: 2px;

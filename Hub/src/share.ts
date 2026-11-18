@@ -4,7 +4,17 @@
 // (the share not mounted) is never written.
 import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  type FileHandle,
+} from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { HttpError } from "./errors.ts";
 import { artifactPath, type Sha256 } from "./record.ts";
@@ -39,6 +49,17 @@ const CHUNK = 1 << 20;
 const STALE_PARTIAL_MS = 60 * 60 * 1000;
 /// A temp file: .<final name>.<12 hex>.partial, such as .<sha>.flac.0123456789ab.partial
 const PARTIAL = /^\.[A-Za-z0-9][A-Za-z0-9._-]*\.[0-9a-f]{12}\.partial$/;
+
+/// Whether a path holds anything: a file, a folder or a link. Any error but "no entry" throws.
+async function exists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
 
 export class Share {
   /// The temp files this process is writing now. removeStalePartials never removes them, so an
@@ -93,9 +114,33 @@ export class Share {
   }
 
   /// Put bytes whose SHA-256 is sha at a share path through a temp file and a rename, then read
-  /// them back. A file that already holds these bytes is kept as it is. Returns whether it wrote.
+  /// them back. A file that already holds these bytes is kept as it is, and a file that holds
+  /// other bytes is replaced. Returns whether it wrote.
   async putFile(relative: string, bytes: Uint8Array, sha: Sha256): Promise<{ wrote: boolean }> {
     if ((await this.hash(relative)) === sha) return { wrote: false };
+    await this.write(relative, bytes, sha, "replace");
+    return { wrote: true };
+  }
+
+  /// Put bytes whose SHA-256 is sha at a share path that holds no file, through a temp file and a
+  /// rename, then read them back. Throws when the path holds a file: it never replaces one.
+  async putNewFile(relative: string, bytes: Uint8Array, sha: Sha256) {
+    await this.write(relative, bytes, sha, "new");
+  }
+
+  /// Move the file at a share path to a share path that holds no file. Throws when the target
+  /// holds a file: it never replaces one.
+  async move(from: string, to: string) {
+    const target = join(this.root, to);
+    await this.guard();
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await this.guard();
+    if (await exists(target)) throw new Error(`${to} holds a file. Nothing is moved`);
+    await this.guard();
+    await rename(join(this.root, from), target);
+  }
+
+  private async write(relative: string, bytes: Uint8Array, sha: Sha256, mode: "replace" | "new") {
     const final = join(this.root, relative);
     await this.guard();
     await mkdir(dirname(final), { recursive: true, mode: 0o700 });
@@ -120,6 +165,8 @@ export class Share {
         await file.close();
       }
       await this.guard();
+      if (mode === "new" && (await exists(final)))
+        throw new Error(`${relative} holds a file. Nothing is written`);
       await rename(temp, final);
     } catch (error) {
       // Outside the NAS window, remove the temp file now. Inside it, the next upload to this
@@ -139,7 +186,6 @@ export class Share {
         `the file read back from ${relative} holds other bytes`,
       );
     }
-    return { wrote: true };
   }
 
   /// The names in a share folder, or [] when there is no folder.
@@ -192,5 +238,106 @@ export class Share {
       await this.guard();
       await rm(path, { force: true });
     }
+  }
+}
+
+/// One FLAC under artifacts/, open for reading only, and its size.
+export type OpenArtifact = { file: FileHandle; size: number };
+
+/// Read-only access to the FLACs under artifacts/ for the viewer. It has no write step. Every step
+/// checks the share marker and the NAS window, and every chunk read checks the window again, so a
+/// stream that runs into 10:57 UTC stops at its next chunk. It never follows a link: the file opens
+/// with O_NOFOLLOW, no folder on the way may be a link, and the real path must lie in artifacts/.
+/// It opens with O_NONBLOCK and serves only a regular file, so a FIFO never blocks the open.
+export class ArtifactReader {
+  constructor(
+    private readonly root: string,
+    private readonly clock: Clock,
+  ) {}
+
+  private async guard() {
+    assertWindowOpen(this.clock());
+    try {
+      await stat(join(this.root, SHARE_MARKER));
+    } catch {
+      throw new HttpError(503, "share_unavailable", "the transcripts share is not mounted");
+    }
+    assertWindowOpen(this.clock());
+  }
+
+  /// Open artifacts/<2 hex>/<sha>.flac, or null when there is no file. The caller closes it.
+  async open(sha: Sha256): Promise<OpenArtifact | null> {
+    const artifacts = join(this.root, "artifacts");
+    const relative = artifactPath(sha);
+    const path = join(this.root, relative);
+    const refuse = () =>
+      new HttpError(403, "link_refused", "the audio path is a link or leaves artifacts/");
+    await this.guard();
+    let file: FileHandle;
+    try {
+      // O_NONBLOCK: a FIFO or a device opens at once, and the regular-file check below refuses it.
+      // A blocked open would hold a filesystem worker that the client sync routes also need.
+      file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    } catch (error) {
+      if (error instanceof Error && "code" in error) {
+        if (error.code === "ENOENT") return null;
+        if (error.code === "ELOOP" || error.code === "ENXIO" || error.code === "EOPNOTSUPP")
+          throw refuse();
+      }
+      throw error;
+    }
+    try {
+      const info = await file.stat();
+      if (!info.isFile())
+        throw new HttpError(403, "not_a_file", "the audio path is not a regular file");
+      for (const folder of [artifacts, dirname(path)]) {
+        await this.guard();
+        if (!(await lstat(folder)).isDirectory()) throw refuse();
+      }
+      await this.guard();
+      const real = await realpath(path);
+      if (real !== join(await realpath(artifacts), relative.slice("artifacts/".length)))
+        throw refuse();
+      const same = await stat(real);
+      if (same.dev !== info.dev || same.ino !== info.ino) throw refuse();
+      return { file, size: info.size };
+    } catch (error) {
+      await file.close();
+      throw error;
+    }
+  }
+
+  /// The bytes start to end (both included) of an open artifact, read in chunks of at most 1 MiB
+  /// that each check the NAS window. The stream closes the file when it ends, fails or is cancelled.
+  stream({ file }: OpenArtifact, start: number, end: number): ReadableStream<Uint8Array> {
+    let at = start;
+    let closed = false;
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      await file.close().catch(() => {});
+    };
+    return new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        try {
+          if (at > end) {
+            await close();
+            controller.close();
+            return;
+          }
+          assertWindowOpen(this.clock());
+          const want = Math.min(CHUNK, end - at + 1);
+          const buffer = new Uint8Array(want);
+          const { bytesRead } = await file.read(buffer, 0, want, at);
+          if (bytesRead === 0) throw new Error("the file ended before the range");
+          at += bytesRead;
+          controller.enqueue(buffer.subarray(0, bytesRead));
+        } catch (error) {
+          await close();
+          controller.error(error);
+        }
+      },
+      cancel: close,
+    });
   }
 }
