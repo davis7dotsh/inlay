@@ -4,6 +4,9 @@ node_modules/
 build/
 .local/
 bun.lock
+Windows/packages.lock.json
+Windows/bin/
+Windows/obj/
 Package.resolved
 **/Package.resolved
 Server/api/swift-generator.Package.resolved

@@ -1,0 +1,185 @@
+<Window x:Class="Inlay.Windows.MainWindow" x:ClassModifier="internal"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Inlay" Width="1020" Height="680" MinWidth="820" MinHeight="545"
+        WindowStartupLocation="CenterScreen" ThemeMode="System" UseLayoutRounding="True"
+        FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="14" Foreground="{DynamicResource Ink}"
+        Background="{DynamicResource CanvasBrush}" PreviewKeyDown="WindowKeyDown">
+    <Window.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Visuals.xaml"/></ResourceDictionary.MergedDictionaries></ResourceDictionary></Window.Resources>
+    <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="214"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <Border Background="{DynamicResource SidebarBrush}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
+            <DockPanel LastChildFill="True">
+                <StackPanel DockPanel.Dock="Top" Margin="21,24,14,19" Orientation="Horizontal">
+                    <Image Source="{StaticResource BrandTile}" Width="38" Height="38"/>
+                    <TextBlock Text="Inlay" FontFamily="Georgia, Constantia" FontSize="29" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+                <Grid DockPanel.Dock="Bottom" Margin="21,16,14,20" MinHeight="33">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <Ellipse x:Name="SideDot" Width="7" Height="7" HorizontalAlignment="Left" Fill="{DynamicResource Muted}"/>
+                    <TextBlock Grid.Column="1" x:Name="SideStatus" Style="{StaticResource Caption}" MaxHeight="48" TextTrimming="CharacterEllipsis"/>
+                </Grid>
+                <ListBox x:Name="Navigation" Margin="10,0" Background="Transparent" BorderThickness="0" Padding="0"
+                         ItemContainerStyle="{StaticResource NavRow}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         AutomationProperties.Name="Pages" SelectionChanged="NavigationChanged">
+                    <ListBoxItem Tag="Dictation" AutomationProperties.Name="Dictation"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource NavIcon}" Text="&#xE9D9;"/><TextBlock Text="Dictation"/></StackPanel></ListBoxItem>
+                    <ListBoxItem Tag="History" AutomationProperties.Name="History"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource NavIcon}" Text="&#xE81C;"/><TextBlock Text="History"/></StackPanel></ListBoxItem>
+                    <ListBoxItem Tag="Microphone" AutomationProperties.Name="Microphone"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource NavIcon}" Text="&#xE720;"/><TextBlock Text="Microphone"/></StackPanel></ListBoxItem>
+                    <ListBoxItem Tag="Server preferences" AutomationProperties.Name="Server preferences"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource NavIcon}" Text="&#xEDA2;"/><TextBlock Text="Server preferences"/></StackPanel></ListBoxItem>
+                    <ListBoxItem Tag="This PC" AutomationProperties.Name="This PC"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource NavIcon}" Text="&#xE7F8;"/><TextBlock Text="This PC"/></StackPanel></ListBoxItem>
+                </ListBox>
+            </DockPanel>
+        </Border>
+        <Grid Grid.Column="1" Background="{DynamicResource CanvasBrush}">
+            <ScrollViewer x:Name="DictationPage" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <Grid MaxWidth="760" Margin="30,32">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <DockPanel LastChildFill="True" Margin="0,3,0,0">
+                        <StackPanel x:Name="KeyCaps" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,18,0"/>
+                        <TextBlock x:Name="DictationHeading" Style="{StaticResource Heading}" TextWrapping="Wrap"/>
+                    </DockPanel>
+                    <Grid Grid.Row="1" Margin="0,25,0,30" MinHeight="34">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Ellipse x:Name="MainDot" Width="7" Height="7" Fill="{DynamicResource Muted}" HorizontalAlignment="Left"/>
+                        <TextBlock x:Name="MainStatus" Grid.Column="1" Margin="0,0,14,0" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                        <Button Grid.Column="2" x:Name="CheckConnection" Style="{StaticResource Action}" Content="Check connection" Click="RefreshClicked"/>
+                    </Grid>
+                    <DockPanel Grid.Row="2" Margin="0,0,0,10">
+                        <Button DockPanel.Dock="Right" x:Name="CopyLast" Style="{StaticResource Action}" Content="Copy" Click="CopyLastClicked"/>
+                        <TextBlock x:Name="TranscriptHeading" Style="{StaticResource Section}" Text="Last dictation"/>
+                    </DockPanel>
+                    <Grid Grid.Row="3">
+                        <Grid.RowDefinitions><RowDefinition Height="1"/><RowDefinition Height="145"/><RowDefinition Height="1"/><RowDefinition Height="53"/></Grid.RowDefinitions>
+                        <Border Style="{StaticResource Rule}"/>
+                        <TextBox x:Name="Transcript" Grid.Row="1" Margin="0,14" Style="{StaticResource ReadArea}" FontSize="16" AutomationProperties.Name="Last dictation"/>
+                        <TextBlock x:Name="TranscriptPlaceholder" Grid.Row="1" Text="Your next thought will appear here." Margin="0,14" VerticalAlignment="Top" Foreground="{DynamicResource Muted}" IsHitTestVisible="False"/>
+                        <DockPanel x:Name="LivePanel" Grid.Row="1" Visibility="Collapsed" VerticalAlignment="Center">
+                            <Button DockPanel.Dock="Right" Style="{StaticResource Action}" Content="Cancel" Click="CancelClicked"/>
+                            <StackPanel><TextBlock x:Name="LiveStatus" Style="{StaticResource Section}"/><TextBlock x:Name="LiveDetail" Style="{StaticResource Caption}" Margin="0,5,8,0"/></StackPanel>
+                        </DockPanel>
+                        <Border Grid.Row="2" Style="{StaticResource Rule}"/>
+                        <TextBlock x:Name="DeliveryMessage" Grid.Row="3" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,9,0,0" MaxHeight="40" TextTrimming="CharacterEllipsis"/>
+                    </Grid>
+                    <Grid Grid.Row="4"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Button x:Name="DictateTest" Style="{StaticResource Primary}" Height="38" Click="TestClicked"/>
+                        <Button Grid.Column="1" Style="{StaticResource Action}" Content="History" Margin="9,0,0,0" Click="HistoryClicked"/>
+                        <Button Grid.Column="2" Style="{StaticResource Action}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16" Content="&#xE713;" ToolTip="This PC preferences" AutomationProperties.Name="This PC preferences" Margin="9,0,0,0" Click="DeviceClicked"/>
+                    </Grid>
+                </Grid>
+            </ScrollViewer>
+
+            <Grid x:Name="HistoryPage" Margin="26" Visibility="Collapsed">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="45"/><RowDefinition/><RowDefinition Height="35"/></Grid.RowDefinitions>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" x:Name="HistoryRefresh" Style="{StaticResource Action}" Content="Refresh" Click="HistoryRefreshClicked"/>
+                    <ComboBox DockPanel.Dock="Right" x:Name="DeviceFilter" Width="145" Margin="8,0" AutomationProperties.Name="Filter history by device" SelectionChanged="DeviceFilterChanged"/>
+                    <TextBlock Text="History" Style="{StaticResource Heading}"/>
+                </DockPanel>
+                <TextBlock x:Name="HistoryMessage" Grid.Row="1" Style="{StaticResource Caption}"/>
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="0.9*"/><ColumnDefinition Width="1"/><ColumnDefinition Width="1.1*"/></Grid.ColumnDefinitions>
+                    <Grid Margin="0,0,12,0">
+                        <ListBox x:Name="Sessions" Background="Transparent" BorderThickness="0" Padding="0" ItemContainerStyle="{StaticResource Row}"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="Shared dictations" SelectionChanged="SessionChanged">
+                            <ListBox.ItemTemplate><DataTemplate><StackPanel Margin="11,8">
+                                <TextBlock Text="{Binding CreatedAt.LocalDateTime, StringFormat={}{0:g}}" Style="{StaticResource Caption}" TextWrapping="NoWrap"/>
+                                <TextBlock Text="{Binding Preview}" TextWrapping="Wrap" FontWeight="Normal" Margin="0,4,0,4" Height="40" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Ink}"/>
+                                <TextBlock Text="{Binding Device}" Style="{StaticResource Caption}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel></DataTemplate></ListBox.ItemTemplate>
+                        </ListBox>
+                        <TextBlock x:Name="EmptyHistory" Text="No dictations" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/>
+                    </Grid>
+                    <Border Grid.Column="1" Background="{DynamicResource Line}"/>
+                    <Grid Grid.Column="2" Margin="18,0,0,0">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="1"/><RowDefinition/></Grid.RowDefinitions>
+                        <DockPanel><Button DockPanel.Dock="Right" x:Name="CopySession" Style="{StaticResource Action}" Content="Copy" Click="CopySessionClicked"/>
+                            <TextBlock x:Name="SessionHeading" Margin="0,0,6,0" Style="{StaticResource Section}" TextWrapping="Wrap"/>
+                        </DockPanel>
+                        <TextBlock Grid.Row="1" x:Name="SessionMeta" Style="{StaticResource Caption}" Margin="0,6,0,12"/>
+                        <Border Grid.Row="2" Style="{StaticResource Rule}"/>
+                        <TextBox Grid.Row="3" x:Name="SessionTranscript" Margin="0,12,0,0" Style="{StaticResource ReadArea}" AutomationProperties.Name="Selected transcript"/>
+                    </Grid>
+                </Grid>
+                <DockPanel Grid.Row="3" Margin="0,3,0,0"><Button DockPanel.Dock="Right" x:Name="HistoryMore" Style="{StaticResource Action}" Content="Load older" Visibility="Collapsed" Click="MoreHistoryClicked"/>
+                    <TextBlock x:Name="SessionCount" Style="{StaticResource Caption}" VerticalAlignment="Center"/></DockPanel>
+            </Grid>
+
+            <ScrollViewer x:Name="MicPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel MaxWidth="760" Margin="28,27">
+                    <TextBlock Style="{StaticResource Heading}" Text="Microphone" Margin="0,0,0,20"/>
+                    <Border Style="{StaticResource Group}"><StackPanel>
+                        <DockPanel Margin="0,11"><TextBlock DockPanel.Dock="Left" Text="Choose input" Width="116" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="InputPicker" MinWidth="150" HorizontalAlignment="Stretch" MaxWidth="350" DisplayMemberPath="Name" SelectedValuePath="Id" AutomationProperties.Name="Microphone input" SelectionChanged="InputChanged"/>
+                        </DockPanel>
+                        <Border Style="{StaticResource Rule}"/>
+                        <DockPanel Margin="0,13"><TextBlock Text="Next dictation"/><TextBlock x:Name="ResolvedInput" Style="{StaticResource Caption}" FontSize="14" TextAlignment="Right"/></DockPanel>
+                    </StackPanel></Border>
+                    <Grid Margin="1,20,1,18" Height="30"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="130"/></Grid.ColumnDefinitions>
+                        <TextBlock x:Name="MicMeterLabel" Style="{StaticResource Caption}"/>
+                        <ProgressBar x:Name="MicMeter" Grid.Column="1" Minimum="0" Maximum="1" Height="5" VerticalAlignment="Center" Foreground="{DynamicResource Accent}" Background="{DynamicResource Line}" AutomationProperties.Name="Microphone level"/>
+                    </Grid>
+                    <Button x:Name="MicrophoneTest" Style="{StaticResource Primary}" Height="38" Click="TestClicked"/>
+                    <TextBlock x:Name="MicMessage" Style="{StaticResource Caption}" Margin="1,12,1,4" MinHeight="18" AutomationProperties.LiveSetting="Polite"/>
+                    <TextBox x:Name="MicTranscript" Style="{StaticResource ReadArea}" FontSize="16" Height="76" Margin="1,0" Visibility="Hidden" AutomationProperties.Name="Microphone test transcript"/>
+                    <WrapPanel Margin="0,10,0,0"><Button x:Name="RefreshInputs" Style="{StaticResource Action}" Content="Refresh inputs" Click="RefreshClicked"/>
+                        <Button Style="{StaticResource Action}" Content="Microphone privacy settings" Margin="8,0,0,0" Click="PrivacyClicked"/></WrapPanel>
+                </StackPanel>
+            </ScrollViewer>
+
+            <ScrollViewer x:Name="ServerPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel MaxWidth="760" Margin="28,27">
+                    <TextBlock Style="{StaticResource Heading}" Text="Server preferences" Margin="0,0,0,16"/>
+                    <DockPanel><Button DockPanel.Dock="Right" x:Name="SaveShared" Style="{StaticResource Primary}" Content="Save changes" Click="SaveSharedClicked"/>
+                        <Button DockPanel.Dock="Right" x:Name="ReloadShared" Style="{StaticResource Action}" Content="Reload" Margin="8,0" Click="ReloadSharedClicked"/>
+                        <TextBlock x:Name="SharedMessage" Style="{StaticResource Caption}" MinHeight="37"/>
+                    </DockPanel>
+                    <StackPanel x:Name="SharedEditor" IsEnabled="False">
+                        <TextBlock Text="Processing" Style="{StaticResource Section}" Margin="4,20,0,9"/>
+                        <Border Style="{StaticResource Group}"><StackPanel>
+                            <DockPanel Margin="0,11"><ComboBox x:Name="LanguagePicker" Width="180" DockPanel.Dock="Right" DisplayMemberPath="Name" SelectedValuePath="Code" AutomationProperties.Name="Proofreading language" SelectionChanged="PreferenceSelectionChanged"/>
+                                <TextBlock Text="Proofreading language" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <Border Style="{StaticResource Rule}"/>
+                            <CheckBox x:Name="Proofreading" Content="Proofread with Qwen" Foreground="{DynamicResource Ink}" Margin="0,13" Checked="PreferenceToggleChanged" Unchecked="PreferenceToggleChanged"/>
+                            <Border Style="{StaticResource Rule}"/>
+                            <TextBlock Text="Cleanup instructions" Margin="0,12,0,8"/>
+                            <TextBox x:Name="Prompt" Height="142" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Margin="0,0,0,12" Padding="8" AutomationProperties.Name="Cleanup instructions" TextChanged="PreferenceTextChanged"/>
+                        </StackPanel></Border>
+                        <TextBlock Text="Vocabulary" Style="{StaticResource Section}" Margin="4,20,0,9"/>
+                        <TextBox x:Name="Vocabulary" Height="97" Padding="8" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.Name="Shared vocabulary" TextChanged="PreferenceTextChanged"/>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+
+            <ScrollViewer x:Name="DevicePage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel MaxWidth="760" Margin="28,27">
+                    <TextBlock Text="This PC" Style="{StaticResource Heading}" Margin="0,0,0,20"/>
+                    <TextBlock Text="Connection" Style="{StaticResource Section}" Margin="4,0,0,9"/>
+                    <Border Style="{StaticResource Group}"><StackPanel>
+                        <DockPanel Margin="0,10"><TextBlock Text="Server address" Width="118" VerticalAlignment="Center"/>
+                            <TextBox x:Name="EndpointBox" Padding="7,4" AutomationProperties.Name="Server address"/>
+                        </DockPanel><Border Style="{StaticResource Rule}"/>
+                        <DockPanel Margin="0,10"><TextBlock Text="Server token" Width="118" VerticalAlignment="Center"/>
+                            <PasswordBox x:Name="TokenBox" Padding="7,4" AutomationProperties.Name="Server enrollment token"/>
+                        </DockPanel><Border Style="{StaticResource Rule}"/>
+                        <DockPanel Margin="0,10"><TextBlock Text="Device name" Width="118" VerticalAlignment="Center"/>
+                            <TextBox x:Name="DeviceNameBox" Padding="7,4" AutomationProperties.Name="Device name"/>
+                        </DockPanel>
+                    </StackPanel></Border>
+                    <TextBlock Style="{StaticResource Caption}" Text="Enter the server’s enrollment token on first connection." Margin="4,8,0,0"/>
+                    <DockPanel Margin="0,13,0,0"><Button x:Name="Connect" DockPanel.Dock="Right" Style="{StaticResource Primary}" Content="Connect" Click="ConnectClicked"/>
+                        <TextBlock x:Name="DeviceMessage" Style="{StaticResource Caption}" Margin="4,0,12,0" MinHeight="38"/>
+                    </DockPanel>
+                    <TextBlock Text="Dictation" Style="{StaticResource Section}" Margin="4,21,0,9"/>
+                    <Border Style="{StaticResource Group}"><StackPanel>
+                        <DockPanel Margin="0,12"><TextBlock Text="Dictation key"/><TextBlock x:Name="DeviceKey" Style="{StaticResource Caption}" FontSize="14" TextAlignment="Right"/></DockPanel>
+                        <Border Style="{StaticResource Rule}"/>
+                        <DockPanel Margin="0,12"><TextBlock Text="Trigger"/><TextBlock x:Name="DeviceTrigger" Style="{StaticResource Caption}" FontSize="14" TextAlignment="Right"/></DockPanel>
+                        <Border Style="{StaticResource Rule}"/>
+                        <CheckBox x:Name="AutoCopyDictations" Content="Copy each dictation to the clipboard" Foreground="{DynamicResource Ink}" Margin="0,13" Click="AutoCopyClicked"/>
+                    </StackPanel></Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

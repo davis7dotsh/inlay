@@ -1,0 +1,38 @@
+name: Windows client
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "Windows/**"
+      - "global.json"
+      - "Server/api/openapi.yaml"
+      - ".github/workflows/windows.yml"
+      - "Resources/NAudio-LICENSE.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - run: dotnet restore Windows/Inlay.csproj --locked-mode
+      - run: dotnet publish Windows/Inlay.csproj --no-restore -c Release -warnaserror -o build/windows
+      - name: Build the per-user installer
+        shell: pwsh
+        run: |
+          choco upgrade nsis.install --version=3.13.0 --allow-downgrade --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /WX "/DBUILD_ID=$($env:GITHUB_SHA.Substring(0, 7))" Windows\setup.nsi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Inlay-windows-x64
+          path: |
+            build/windows/Inlay.exe
+            build/windows/Inlay-Setup.exe
+          if-no-files-found: error
