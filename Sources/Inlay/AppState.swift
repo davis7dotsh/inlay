@@ -15,3 +15,21 @@ enum ModelStatus: Equatable {
     case missing, downloading, verifying, installed, failed
 }
 
+/// Readiness observed for the model serving the HUD's current take. A loaded
+/// helper can still be slow; never infer a cold start from elapsed time alone.
+struct HUDModelState: Equatable {
+    enum Stage { case speech, proofreading }
+    let generationID: UUID
+    let stage: Stage
+    let startedAt = Date()
+    var ready: Bool?
+    var hadColdStart = false
+
+    mutating func observe(ready: Bool) {
+        self.ready = ready
+        hadColdStart = hadColdStart || !ready
+    }
+
+    var isCold: Bool { ready == false || hadColdStart }
+}
+

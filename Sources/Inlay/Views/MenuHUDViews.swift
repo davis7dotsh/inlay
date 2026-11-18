@@ -228,7 +228,7 @@ struct DictationHUD: View {
             .opacity(expanded ? 0 : 1)
             .allowsHitTesting(!expanded)
             .accessibilityHidden(expanded)
-            .accessibilityLabel(controller.activity.isBusy ? stageText : hudLabel)
+            .accessibilityLabel(controller.activity.isBusy ? processingLabel : hudLabel)
             .accessibilityHint(controller.activity.isBusy ? "" : !showsSavedTake && result.needsAttention ? "Open Inlay for details" : "Dismiss status")
             .accessibilityIdentifier("hud.circle")
         }
@@ -246,10 +246,10 @@ struct DictationHUD: View {
             if controller.canCancelWithEscape { controller.cancelDictation() }
             else if !controller.activity.isBusy { controller.dismissFeedback() }
         }
-        .help(controller.errorMessage ?? hudLabel)
+        .help(controller.errorMessage ?? (controller.activity.isBusy ? processingLabel : hudLabel))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(InlayBuild.current.displayName) dictation")
-        .accessibilityValue(controller.errorMessage ?? hudLabel)
+        .accessibilityValue(controller.errorMessage ?? (controller.activity.isBusy ? processingLabel : hudLabel))
         .accessibilityIdentifier("hud.status")
     }
 
@@ -266,6 +266,8 @@ struct DictationHUD: View {
                 } else if controller.activity == .starting {
                     InlayMark(size: 18)
                     Text("Starting").lineLimit(1)
+                } else if let model = controller.hudModelState {
+                    modelProgress(model)
                 } else {
                     ProgressView().controlSize(.small)
                     Text(stageText).lineLimit(1).minimumScaleFactor(0.8)
@@ -285,6 +287,44 @@ struct DictationHUD: View {
             }
         }
         .padding(.horizontal, 12)
+    }
+
+    /// A normal stage looks as it always has; elapsed time appears only once it
+    /// is slow, and the amber snowflake only when the server reported its model
+    /// was not ready.
+    private func modelProgress(_ model: HUDModelState) -> some View {
+        HStack(spacing: 8) {
+            coldOrProgressIcon(model)
+            TimelineView(.periodic(from: model.startedAt, by: 1)) { context in
+                let elapsed = max(0, Int(context.date.timeIntervalSince(model.startedAt)))
+                let detail: String? = model.ready == false ? "Loading model · \(elapsed)s"
+                    : model.hadColdStart ? "Cold start · \(elapsed)s"
+                    : elapsed >= 3 ? "\(elapsed)s" : nil
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(stageText).lineLimit(1).minimumScaleFactor(0.8)
+                    if let detail {
+                        Text(detail)
+                            .font(.system(size: 9, weight: .medium).monospacedDigit())
+                            .foregroundStyle(model.isCold ? InlayPalette.warning : InlayPalette.muted)
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: detail == nil)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("hud.model-state")
+            }
+        }
+    }
+
+    @ViewBuilder private func coldOrProgressIcon(_ model: HUDModelState) -> some View {
+        if model.isCold {
+            Image(systemName: "snowflake")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(InlayPalette.warning)
+                .accessibilityHidden(true)
+        } else {
+            ProgressView().controlSize(.small)
+        }
     }
 
     private var attentionContent: some View {
@@ -330,7 +370,8 @@ struct DictationHUD: View {
         case .idle, .starting, .recording:
             InlayMark(size: 21)
         case .transcribing, .delivering:
-            ProgressView().controlSize(.small)
+            if let model = controller.hudModelState { coldOrProgressIcon(model) }
+            else { ProgressView().controlSize(.small) }
         case .success, .failed:
             Image(systemName: showsSavedTake ? "internaldrive" : result.hudSymbol)
                 .font(.system(size: 18, weight: .semibold))
@@ -362,6 +403,12 @@ struct DictationHUD: View {
         let stage = controller.hudProgressText ?? hudLabel
         return controller.pendingDictationCount > 1
             ? "\(stage) · \(controller.pendingDictationCount - 1) more" : stage
+    }
+
+    private var processingLabel: String {
+        guard let model = controller.hudModelState else { return stageText }
+        if model.ready == false { return "\(stageText). Loading model." }
+        return model.hadColdStart ? "\(stageText). After a cold start." : stageText
     }
 
     private func activateCircle() {

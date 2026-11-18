@@ -8,7 +8,7 @@ enum Limits {
     static let contextTokens = 8192
     static let outputTokens = 2048
     static let inferenceSeconds: Double = 15
-    static let engineVersion = "mlx-swift-0.31.4-lm-3.31.4-inlay2"
+    static let engineVersion = "mlx-swift-0.31.4-lm-3.31.4-inlay4"
 }
 
 struct EngineFailure: Error, Sendable {
@@ -74,6 +74,17 @@ func trim(_ text: String) -> String {
     text.trimmingCharacters(in: CharacterSet(charactersIn: " \r\n\t"))
 }
 
+/// Observed token delivery timings, not isolated GPU kernel timings. No user text.
+struct InferenceMetrics: Encodable, Sendable {
+    let elapsedSeconds: Double
+    let tokenizationSeconds: Double?
+    let inputTokens: Int?
+    let timeToFirstTokenSeconds: Double?
+    let outputTokens: Int
+    let generationSeconds: Double?
+    let generationTokensPerSecond: Double?
+}
+
 struct EngineEvent: Encodable, Sendable {
     let type: String
     var id: String? = nil
@@ -81,6 +92,7 @@ struct EngineEvent: Encodable, Sendable {
     var text: String? = nil
     var elapsed: Double? = nil
     var engineVersion: String? = nil
+    var metrics: InferenceMetrics? = nil
 }
 
 /// All output is protocol JSON. Never print prompts, transcripts, or upstream errors.

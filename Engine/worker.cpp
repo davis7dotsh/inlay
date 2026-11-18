@@ -388,6 +388,12 @@ int main(int argc, char **argv) {
     whisper_log_set(libraryLog, nullptr);
     parakeet_log_set(libraryLog, nullptr);
     ggml_log_set(libraryLog, nullptr);
+#if defined(__APPLE__)
+    // ggml otherwise drops GPU residency after three idle minutes, even when
+    // the model is still loaded. Retain it through a normal day between takes;
+    // preserve an operator's explicit override.
+    setenv("GGML_METAL_RESIDENCY_KEEP_ALIVE_S", "86400", 0);
+#endif
     auto parameters = parakeet_context_default_params();
     parameters.use_gpu = true;
     const std::unique_ptr<parakeet_context, decltype(&parakeet_free)> context(
@@ -405,7 +411,19 @@ int main(int argc, char **argv) {
         emitError("The local speech detector could not load. Rebuild Inlay to restore it.");
         return 1;
     }
-    emit({{"type", "ready"}, {"engineVersion", std::string("parakeet.cpp/") + parakeet_version()}});
+    // Pay lazy graph/kernel setup during loading, before the first dictation.
+    std::vector<float> preparationAudio(PARAKEET_SAMPLE_RATE, 0.0f);
+    auto preparation = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
+    preparation.n_threads = threads;
+    preparation.no_context = true;
+    if (parakeet_full(context.get(), preparation, preparationAudio.data(),
+                      static_cast<int>(preparationAudio.size())) != 0) {
+        emitError("The speech model could not prepare for transcription.");
+        return 1;
+    }
+    json ready = {{"type", "ready"},
+        {"engineVersion", std::string("parakeet.cpp/") + parakeet_version() + "-inlay-resident1"}};
+    emit(ready);
 
     // Fixed-size reads prevent a malformed caller from allocating unbounded RAM.
     std::vector<char> buffer(maxRequestBytes + 1);

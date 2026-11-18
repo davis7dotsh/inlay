@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { MAXIMUM_RECORDING_SECONDS, type ModelHintUsage } from "../api";
 import { HelperProcess, type HelperResponse } from "./helper-process";
+import { logInfo, logWarn } from "../log";
 import { checkCancellation, InferenceError } from "./inference-error";
 import { ModelVerifier, type ModelPin } from "./model-verification";
 import {
@@ -68,6 +69,8 @@ export interface InferenceReadiness {
   message: string;
   speechLoaded: boolean;
   proofLoaded: boolean;
+  /** A loaded proofreader's wake has run long enough to mean its weights were paged out. */
+  proofWaking?: boolean;
 }
 
 export interface SpeechInferenceResult {
@@ -90,6 +93,8 @@ export interface ProofInferenceResult {
 export interface InferenceBackend {
   readiness(proofreadingEnabled?: boolean): Promise<InferenceReadiness>;
   warmUp(proofreadingEnabled?: boolean, signal?: AbortSignal): Promise<void>;
+  /** Touch an idle, loaded proofreader's weights while the user is still speaking. */
+  wakeProofreader?(): void;
   transcribe(
     audioPath: string,
     language: string,
@@ -156,6 +161,20 @@ function vocabularyDiagnostics(
   throw new InferenceError("invalidResponse", "Parakeet returned invalid vocabulary diagnostics.");
 }
 
+/** Waits for a promise that never rejects, unless the caller cancels first. */
+function abortable(promise: Promise<void>, signal?: AbortSignal) {
+  checkCancellation(signal);
+  if (!signal) return promise;
+  return new Promise<void>((resolve, reject) => {
+    const cancel = () => reject(new InferenceError("cancelled"));
+    signal.addEventListener("abort", cancel, { once: true });
+    void promise.then(() => {
+      signal.removeEventListener("abort", cancel);
+      resolve();
+    });
+  });
+}
+
 /** The helper executables own inference; the server owns paths, deadlines and pins. */
 export class NativeInference implements InferenceBackend {
   private readonly configuration: InferenceConfiguration;
@@ -165,6 +184,9 @@ export class NativeInference implements InferenceBackend {
   private readonly speechPin?: ModelPin;
   private readonly proofPin?: ModelPin;
   private readonly proofManifestSHA256?: string;
+  private proofWake?: Promise<void>;
+  private proofWakeStartedAt = 0;
+  private proofLastUsedAt = 0;
 
   constructor(configuration: ConfigurationInput) {
     this.configuration = createInferenceConfiguration(configuration);
@@ -237,6 +259,10 @@ export class NativeInference implements InferenceBackend {
             : "Models need to warm up.",
       speechLoaded: speechState.loaded,
       proofLoaded: proofState.loaded,
+      // A resident model answers the wake in well under a second; only a
+      // longer wake means the weights were paged out.
+      proofWaking:
+        this.proofWake !== undefined && performance.now() - this.proofWakeStartedAt > 1000,
     };
   }
 
@@ -267,6 +293,58 @@ export class NativeInference implements InferenceBackend {
     const [speech, proof] = await Promise.allSettled([loadSpeech(), loadProof()]);
     if (speech.status === "rejected") throw speech.reason;
     if (proof.status === "rejected") throw proof.reason;
+  }
+
+  /**
+   * macOS may page an idle helper's weights out under memory pressure; the
+   * next prefill then faults them back in and can exceed the correction
+   * deadline. A one-word correction at recording start does that work while
+   * the user speaks. It is skipped while the helper is loading, busy or used
+   * within the last minute (all leave the weights resident), and correct()
+   * waits for it rather than failing as busy. MLX only: the Linux CPU helper
+   * cannot answer even a resident wake fast enough to stay off a short take.
+   */
+  wakeProofreader() {
+    if (process.platform !== "darwin") return;
+    const state = this.proof.snapshot();
+    if (this.proofWake || !state.loaded || state.loading || state.busy) return;
+    if (performance.now() - this.proofLastUsedAt < 60_000) return;
+    const id = randomUUID();
+    const request = {
+      type: "correct",
+      id,
+      text: "Ready.",
+      terms: [],
+      language: "en",
+      systemPrompt: "Return only the cleaned transcript.",
+    };
+    const started = performance.now();
+    this.proofWakeStartedAt = started;
+    // The helper stops any correction at 15 s, so a stalled page-in ends as a
+    // per-request error; a failed wake retires the helper so the take's
+    // correction reloads it. The server deadline here is only a backstop.
+    const wake = this.proof
+      .request(request, id, this.configuration.proofLoadTimeout)
+      .then(
+        () => logInfo("proofreader_woken", { ms: Math.round(performance.now() - started) }),
+        (error) => {
+          const code = error instanceof InferenceError ? error.code : "unknown";
+          logWarn("proofreader_wake_failed", {
+            ms: Math.round(performance.now() - started),
+            code,
+          });
+          // At its hard deadline the MLX helper reports this request's error
+          // and then exits. Retire it now so the waiting correction loads a
+          // fresh helper instead of writing to the dying one.
+          if (code !== "cancelled")
+            this.proof.discard(new InferenceError("unavailable", "The Qwen wake failed."));
+        },
+      )
+      .finally(() => {
+        this.proofLastUsedAt = performance.now();
+        if (this.proofWake === wake) this.proofWake = undefined;
+      });
+    this.proofWake = wake;
   }
 
   async transcribe(
@@ -391,13 +469,14 @@ export class NativeInference implements InferenceBackend {
     if (bytes(JSON.stringify(request)) > 64 * 1024)
       throw new InferenceError("invalidRequest", "The encoded correction request exceeds 64 KB.");
     const digest = await this.verifier.verify(this.configuration.proofModel, this.proofPin, signal);
-    const response = await this.proof.request(
-      request,
-      request.id,
-      this.configuration.proofTimeout,
-      undefined,
-      signal,
-    );
+    // The helper takes one request at a time; let an in-flight wake finish.
+    // request() claims the helper synchronously once this loop exits.
+    while (this.proofWake) await abortable(this.proofWake, signal);
+    const response = await this.proof
+      .request(request, request.id, this.configuration.proofTimeout, undefined, signal)
+      .finally(() => {
+        this.proofLastUsedAt = performance.now();
+      });
     if (
       response.text === undefined ||
       !response.text.length ||

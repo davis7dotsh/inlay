@@ -19,7 +19,9 @@ enum InsertionMode {
 
 @MainActor
 final class InlayController: ObservableObject {
-    @Published var activity: DictationActivity = .idle
+    @Published var activity: DictationActivity = .idle {
+        didSet { if activity != .transcribing { hudModelState = nil } }
+    }
     let recordingFeedback = RecordingFeedback()
     @Published var recordingListHint: String?
     @Published private(set) var recordingInputName: String?
@@ -83,6 +85,7 @@ final class InlayController: ObservableObject {
     }
     @Published var statusMessage = "Connecting to server…"
     @Published private(set) var hudProgressText: String?
+    @Published private(set) var hudModelState: HUDModelState?
     @Published private(set) var serverHealth: ServerHealth?
     @Published private(set) var serverStatusMessage = "Connecting…"
     @Published private(set) var isCheckingServer = false
@@ -195,7 +198,9 @@ final class InlayController: ObservableObject {
     private var shortcutCheckTask: Task<Void, Never>?
     private var shortcutCheckStarted: TimeInterval = 0
     private var shortcutCheckEntries: [String] = []
-    private var sessionID = UUID()
+    private var sessionID = UUID() {
+        didSet { if sessionID != oldValue { hudModelState = nil } }
+    }
     private var activeGenerationID: UUID?
     private var activeClient: ServerClient?
     @MainActor
@@ -283,7 +288,7 @@ final class InlayController: ObservableObject {
         monitorTask = Task { [weak self] in
             var count = 0
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                do { try await Task.sleep(for: .seconds(self?.activity == .transcribing ? 1 : 5)) } catch { return }
                 guard let self, !isShuttingDown else { return }
                 await checkServer(refreshData: count % 3 == 0 && !isBusy)
                 count += 1
@@ -327,12 +332,31 @@ final class InlayController: ObservableObject {
         isCheckingServer = true
         let endpoint = preferences.endpoint
         let revision = connectionRevision
-        defer { isCheckingServer = false }
+        let observedSession = sessionID
+        let observedModel = hudModelState
+        var needsHUDObservation = false
+        defer {
+            isCheckingServer = false
+            if needsHUDObservation, !isShuttingDown {
+                Task { [weak self] in await self?.checkServer(refreshData: false) }
+            }
+        }
         do {
             let connection = try client()
             let health = try await connection.health()
             guard endpoint == preferences.endpoint, !Task.isCancelled else { return }
             serverHealth = health
+            if observedSession == sessionID,
+               observedModel?.generationID == hudModelState?.generationID,
+               observedModel?.stage == hudModelState?.stage,
+               observedModel?.startedAt == hudModelState?.startedAt {
+                updateHUDModelState(health)
+            } else {
+                // This response predates the current take/stage. Do not latch
+                // its loading state onto a newer one; fetch after releasing
+                // the health-check guard, including when refreshData awaits.
+                needsHUDObservation = hudModelState != nil
+            }
             serverStatusMessage = health.apiVersion != InlayAPI.version ? "Server API version is incompatible"
                 : (health.ready ? "Server online" : (health.message ?? "Server models are not ready"))
             if !isBusy, activity == .idle { statusMessage = isServerReady ? "Ready when you are" : serverStatusMessage }
@@ -1371,6 +1395,21 @@ final class InlayController: ObservableObject {
 
     private func applyProgress(_ generation: GenerationRecord, session: UUID) {
         guard sessionID == session, !isCapturing else { return }
+        let modelStage: HUDModelState.Stage? = switch generation.status {
+        case .transcribing: .speech
+        case .proofreading: .proofreading
+        default: nil
+        }
+        if let modelStage {
+            if hudModelState?.generationID != generation.id || hudModelState?.stage != modelStage {
+                hudModelState = HUDModelState(generationID: generation.id, stage: modelStage)
+                // Check immediately on a stage change, then use the normal
+                // monitor. Cached pre-recording readiness can hide a restart.
+                Task { [weak self] in await self?.checkServer(refreshData: false) }
+            }
+        } else {
+            hudModelState = nil
+        }
         switch generation.status {
         case .receiving: statusMessage = "Finishing upload…"; hudProgressText = "Uploading"
         case .queued:
@@ -1385,6 +1424,12 @@ final class InlayController: ObservableObject {
         case .completed: statusMessage = "Preparing result…"; hudProgressText = "Preparing"
         case .failed, .cancelled: statusMessage = generation.error ?? "Processing stopped"; hudProgressText = nil
         }
+    }
+
+    private func updateHUDModelState(_ health: ServerHealth) {
+        guard activity == .transcribing, var state = hudModelState else { return }
+        state.observe(ready: state.stage == .speech ? health.speech.ready : health.proofreading.ready)
+        hudModelState = state
     }
 
     private func deliver(_ record: GenerationRecord, to destination: InsertionDestination,
