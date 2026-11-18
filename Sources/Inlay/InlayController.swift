@@ -158,7 +158,7 @@ final class InlayController: ObservableObject {
         isServerReady || (!preferences.token.isEmpty && (serverHealth == nil || serverHealth?.apiVersion == InlayAPI.version)
                           && (try? ServerEndpoint(preferences.endpoint)) != nil)
     }
-    var canTest: Bool { isServerReady && permissions.microphone && microphones.resolution.device != nil && !isCapturing }
+    var canTest: Bool { isServerReady && permissions.microphone && microphones.resolution.device != nil && !isCapturing && !isRecordingKey }
     var insertionMode: InsertionMode { Self.insertionMode(for: permissions) }
     static func insertionMode(for snapshot: PermissionSnapshot) -> InsertionMode {
         if snapshot.accessibility { return .insertion }
@@ -628,7 +628,7 @@ final class InlayController: ObservableObject {
     }
 
     func toggleTestRecording() {
-        guard !hotkey.isHoldingFn else { return }
+        guard !hotkey.isHoldingFn, !isRecordingKey else { return }
         if isCapturing { finishDictation() }
         else { beginDictation(isTest: true) }
     }
@@ -1036,7 +1036,7 @@ final class InlayController: ObservableObject {
     /// only on true, so a rejected start cannot leave a phantom recording.
     @discardableResult
     private func beginDictation(isTest: Bool) -> Bool {
-        guard !isCapturing, !isShuttingDown else { return false }
+        guard !isCapturing, !isShuttingDown, !isRecordingKey else { return false }
         permissions = PermissionSnapshot.capture()
         stopShortcutCheck()
         // A rejected press isn't a new take. Report why it can't start without
@@ -1563,11 +1563,25 @@ final class InlayController: ObservableObject {
         let current = PermissionSnapshot.capture()
         if current != permissions { permissions = current }
         audioDevices.refresh()
-        if permissions.canListenForHotkey {
+        if permissions.canListenForHotkey, !isRecordingKey {
             isHotkeyActive = hotkey.start()
         } else {
             hotkey.stop()
             isHotkeyActive = false
+        }
+    }
+
+    @Published private(set) var isRecordingKey = false
+
+    func setKeyRecording(_ recording: Bool) {
+        guard isRecordingKey != recording else { return }
+        isRecordingKey = recording
+        if recording {
+            stopShortcutCheck()
+            hotkey.stop()
+            isHotkeyActive = false
+        } else {
+            refreshPermissions()
         }
     }
 
@@ -1595,7 +1609,7 @@ final class InlayController: ObservableObject {
     }
 
     func startShortcutCheck() {
-        guard !isBusy, !isCheckingShortcut else { return }
+        guard !isBusy, !isCheckingShortcut, !isRecordingKey else { return }
         refreshPermissions()
         shortcutCheckStarted = ProcessInfo.processInfo.systemUptime
         shortcutCheckEntries = []

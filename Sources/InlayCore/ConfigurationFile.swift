@@ -65,7 +65,10 @@ public actor ConfigurationFile {
             let afterData = try encoded(desired)
             _ = try decoded(afterData)
             let after = try object(afterData)
-            let changedKeys = after.keys.filter { key in
+            // Optional Codable fields disappear when cleared. Compare both key
+            // sets so removing a custom trigger is persisted, while unrelated
+            // external and unknown preferences retain their latest values.
+            let changedKeys = Set(before.keys).union(after.keys).filter { key in
                 (before[key] as? NSObject)?.isEqual(after[key]) != true
             }
             let directory = try openDirectory(create: false)

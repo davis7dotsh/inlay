@@ -365,5 +365,6 @@ extension InlayController {
     /// these prerequisites apply only when beginning a new dictation.
     var canStartDictationFromUI: Bool {
         canStartDictation && permissions.microphone && microphones.resolution.device != nil && insertionMode != .unavailable
+            && !isRecordingKey
     }
 }
