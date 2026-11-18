@@ -20,7 +20,9 @@ struct AudioHardwareClient {
     let observe: (AudioObjectID, AudioObjectPropertySelector, AudioObjectPropertyScope, @escaping @MainActor () -> Void) -> AudioDeviceObservation?
 
     static var live: Self {
-        Self(snapshot: AudioInputHardware.snapshot, observe: AudioDeviceObservation.observe)
+        Self(snapshot: AudioInputHardware.snapshot, observe: { object, selector, scope, onChange in
+            AudioDeviceObservation.observe(object, selector, scope, onChange)
+        })
     }
 }
 
@@ -132,11 +134,12 @@ final class AudioDeviceObservation {
         _ object: AudioObjectID,
         _ selector: AudioObjectPropertySelector,
         _ scope: AudioObjectPropertyScope,
+        element: AudioObjectPropertyElement = kAudioObjectPropertyElementMain,
         _ onChange: @escaping @MainActor () -> Void
     ) -> AudioDeviceObservation? {
-        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
         let block: AudioObjectPropertyListenerBlock = { _, _ in
-            // None of these metadata properties use the real-time IO callback.
+            // These metadata/control properties are delivered on the main queue, not the real-time IO callback.
             MainActor.assumeIsolated { onChange() }
         }
         guard AudioObjectAddPropertyListenerBlock(object, &address, .main, block) == noErr else { return nil }
