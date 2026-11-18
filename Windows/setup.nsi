@@ -3,7 +3,7 @@ RequestExecutionLevel user
 ManifestDPIAware true
 AllowSkipFiles off
 Name "Inlay"
-OutFile "../build/windows/Inlay-Setup.exe"
+OutFile "..\build\windows\Inlay-Setup.exe"
 ; Keep a portable installation at Programs\Inlay\Inlay.exe usable for rollback.
 InstallDir "$LOCALAPPDATA\Programs\Inlay\Client"
 Icon "Inlay.ico"
@@ -25,7 +25,7 @@ Icon "Inlay.ico"
 Section
     SetShellVarContext current
     SetOutPath "$INSTDIR"
-    File "../build/windows/Inlay.exe"
+    File "..\build\windows\Inlay.exe"
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     CreateShortcut "$SMPROGRAMS\Inlay.lnk" "$INSTDIR\Inlay.exe"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "Inlay"
