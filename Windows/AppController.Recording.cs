@@ -98,7 +98,9 @@ internal sealed partial class AppController
             {
                 for (int wait = 0; wait < 20 && TextDelivery.ShortcutHeld(); wait++) await Task.Delay(50, ct);
                 ct.ThrowIfCancellationRequested();
-                try
+                // A third key while the chord was still held interrupts the gesture after the cap.
+                if (previewOnly) (receipt, message) = ("failed", "Nothing was inserted. The shortcut was interrupted.");
+                else try
                 {
                     var result = destination != null ? TextDelivery.Insert(destination, completed.InsertionText)
                         : await AccessibleDelivery.InsertAsync(await accessible!, completed.InsertionText, ct);
