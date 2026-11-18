@@ -23,6 +23,7 @@ private struct DevicePreferencesForm: View {
     @State private var showingDiagnostics = false
     @State private var deviceToRevoke: DeviceSummary?
     @StateObject private var triggerRecorder = TriggerKeyRecorder()
+    @StateObject private var updates = UpdateChecker()
 
     private var usesPlainHTTP: Bool { (try? ServerEndpoint(endpoint))?.usesPlainHTTP ?? false }
 
@@ -212,6 +213,7 @@ private struct DevicePreferencesForm: View {
                             .foregroundStyle(InlayPalette.muted)
                     }
                 }
+                UpdateCheckRow(checker: updates)
                 Text("Quitting this app leaves your server running.")
                     .font(.caption)
                     .foregroundStyle(InlayPalette.muted)
@@ -485,6 +487,47 @@ struct ServerPreferencesPage: View {
     }
 }
 
+private struct UpdateCheckRow: View {
+    @ObservedObject var checker: UpdateChecker
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        LabeledContent {
+            if case .available(_, let page) = checker.state {
+                Button("Open download page") { openURL(page) }
+                    .accessibilityIdentifier("preferences.open-update")
+            } else {
+                Button(checker.state == .checking ? "Checking…" : "Check for updates") { checker.check() }
+                    .disabled(checker.state == .checking)
+                    .accessibilityIdentifier("preferences.check-updates")
+            }
+        } label: {
+            Text("Updates")
+            if let detail {
+                Text(detail).foregroundStyle(isWarning ? InlayPalette.warning : InlayPalette.muted)
+            }
+        }
+    }
+
+    private var isWarning: Bool {
+        if case .failed = checker.state { return true }
+        return false
+    }
+
+    private var detail: String? {
+        let name = InlayBuild.current.displayName
+        switch checker.state {
+        case .idle, .checking: return nil
+        case .current: return "\(name) is up to date."
+        case .noRelease: return "No Inlay release has been published yet."
+        case .available(let version, _):
+            return InlayBuild.current.isDevelopment
+                ? "Inlay \(version) is available. Pull and rebuild to update this development build."
+                : "Inlay \(version) is available. Quit Inlay, then replace it with the downloaded app."
+        case .failed(let message): return message
+        }
+    }
+}
 
 /// Captures one function-key press for the custom trigger. Text-typing keys
 /// are rejected (with a message) instead of recorded, so an Escape press
