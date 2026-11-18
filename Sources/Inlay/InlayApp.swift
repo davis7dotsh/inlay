@@ -288,7 +288,8 @@ private final class DictationPanel: NSPanel {
         container.addSubview(hostedHUD)
         hostedHUD.frame = DictationPanelLayout.contentFrame(in: frame.size)
         noticeSubscription = controller.recordingFeedback.$limitNotice
-            .map { $0 != nil }
+            .combineLatest(controller.$pendingPersistenceError)
+            .map { notice, persistenceError in notice != nil || persistenceError != nil }
             .removeDuplicates()
             .sink { [weak self] visible in self?.setNoticeVisible(visible) }
         activitySubscription = controller.$activity.removeDuplicates().sink { [weak self] activity in

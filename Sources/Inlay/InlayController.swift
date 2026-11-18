@@ -30,6 +30,13 @@ final class InlayController: ObservableObject {
     @Published private(set) var lastDeliveryStatus: DictationDeliveryStatus = .none
     @Published private(set) var attentionPresented = false
     @Published var errorMessage: String?
+    @Published private(set) var pendingPersistenceError: String?
+    @Published private(set) var undoDeadline: Date?
+    private var undoTake: PendingDictation?
+    private var undoTask: Task<Void, Never>?
+    private var undoExpiresAt: ContinuousClock.Instant?
+    var isUndoPending: Bool { undoTake != nil }
+    private static let undoWindow: Double = 8
     @Published var permissions: PermissionSnapshot
     @Published var isHotkeyActive = false
     @Published private(set) var isCheckingShortcut = false
@@ -124,7 +131,7 @@ final class InlayController: ObservableObject {
     let microphones: MicrophonePreferencesStore
     let preferences: ClientPreferencesStore
     private let pendingStore: PendingGenerationsStore
-    private var pendingEntries: [PendingGenerationEntry]
+    @Published private var pendingEntries: [PendingGenerationEntry]
     private var connectionRevision = 0
     /// Client data directory; takes are spooled under its `recordings` folder.
     private let clientRoot: URL
@@ -211,6 +218,8 @@ final class InlayController: ObservableObject {
         var task: Task<Void, Never>?
         var sealed = false
         var resolved = false
+        let gate = TakeDeliveryGate()
+        var settlingReceipt = false
         /// Nil until the destination resolves; list continuation keys off its anchor.
         var target: (destination: InsertionDestination, anchor: DictationDestination?)?
 
@@ -222,6 +231,8 @@ final class InlayController: ObservableObject {
 
         /// Stops work but keeps the spool, so quitting never loses a take.
         func cancel() {
+            gate.decide(insert: false)
+            guard gate.state != .dispatching, !settlingReceipt else { return }
             task?.cancel(); upload?.cancel(); destination?.cancel()
         }
     }
@@ -375,6 +386,7 @@ final class InlayController: ObservableObject {
                 refreshServer()
                 return
             }
+            keepCancelledTake()
             serverHealth = nil
             serverStatusMessage = Self.connectionMessage(error)
             if !isBusy, activity == .idle { statusMessage = serverStatusMessage }
@@ -391,6 +403,7 @@ final class InlayController: ObservableObject {
         connectionRevision += 1
         continuationAnchors.removeAll()
         // Other servers' pending receipts stay on disk until the user switches back.
+        keepCancelledTake()
         recoveryTask?.cancel()
         spoolRetries.removeAll()
         if previousEndpoint != preferences.endpoint { undeliveredResults.removeAll() }
@@ -640,32 +653,65 @@ final class InlayController: ObservableObject {
     }
 
     func cancelDictation() {
-        guard isBusy else { return }
-        var discardError: String?
-        if isCapturing {
-            let generation = activeGenerationID
-            let connection = activeClient
-            let spool = activeSpool
-            resetSession()
-            discardError = discardRecording(spool)
-            if let generation, let connection { Task { try? await connection.cancel(generation) } }
-        } else if activity.isBusy, let index = pendingDictations.lastIndex(where: { $0.session == sessionID }) {
-            let pending = pendingDictations.remove(at: index)
-            pending.cancel()
-            if let id = pending.id {
-                if let endpoint = pending.spool.manifest.endpoint, !removePendingEntry(id, endpoint: endpoint) {
-                    discardError = "Could not save the cancellation. This result may reappear after relaunch."
-                }
-                Task { try? await pending.client.cancel(id) }
+        // Only the explicit HUD dismissal closes Undo. A duplicate Escape from
+        // the key listener/view cannot dismiss the window it just opened.
+        guard !isUndoPending else { return }
+        // A microphone test is never pasted, so cancelling it discards it as before.
+        if activity == .recording, !isTestSession,
+           ProcessInfo.processInfo.systemUptime - recordingStart >= 0.25 {
+            finishDictation(cancelled: true)
+        } else if isCapturing {
+            discardCapture()
+        } else if let pending = pendingDictations.last(where: { $0.session == sessionID }),
+                  !pending.settlingReceipt {
+            if pending.spool.manifest.isTest { discardPendingTest(pending) }
+            // A take saved only on this Mac is never pasted, so there is nothing to undo.
+            else if pending.upload == nil { pending.gate.keepInHistory() }
+            else if pending.gate.hold() { openUndoWindow(for: pending) }
+            else if pending.gate.state == .deliver, pending.gate.requiresOriginalSelection {
+                // A deliberate second Cancel after Undo revokes permission,
+                // without opening another window or stopping transcription.
+                pending.gate.keepInHistory()
+                statusMessage = "Saving to history…"
             }
-            discardError = discardRecording(pending.spool) ?? discardError
         } else if let earlier = pendingDictations.last {
-            // The HUD shows a settled result or error. Dismissing it must not
-            // cancel older work that the HUD does not show.
             errorMessage = nil
             showEarlierDictation(earlier)
-            return
         }
+    }
+
+    private func discardCapture() {
+        let generation = activeGenerationID
+        let connection = activeClient
+        let spool = activeSpool
+        resetSession()
+        let discardError = discardRecording(spool)
+        if let generation, let connection { Task { try? await connection.cancel(generation) } }
+        let remaining = pendingDictations.last
+        if let remaining { showEarlierDictation(remaining) }
+        else {
+            activity = .idle; hudProgressText = nil
+            statusMessage = "Cancelled"; errorMessage = nil
+            onHUDVisibility?(false)
+        }
+        if let discardError {
+            if remaining == nil { showError(discardError) }
+            else { errorMessage = discardError; announceOutcome(discardError, .failure) }
+        }
+        refreshServer()
+    }
+
+    private func discardPendingTest(_ pending: PendingDictation) {
+        pendingDictations.removeAll { $0 === pending }
+        pending.cancel()
+        var discardError: String?
+        if let id = pending.id {
+            if let endpoint = pending.spool.manifest.endpoint, !removePendingEntry(id, endpoint: endpoint) {
+                discardError = "Could not save the cancellation. This result may reappear after relaunch."
+            }
+            Task { try? await pending.client.cancel(id) }
+        }
+        discardError = discardRecording(pending.spool) ?? discardError
         let remaining = pendingDictations.last?.session
         sessionID = remaining ?? UUID()
         activity = remaining == nil ? .idle : .transcribing
@@ -687,6 +733,60 @@ final class InlayController: ObservableObject {
             failedDiscards.insert(spool.id)
             return "Could not confirm the discard. Before reopening Inlay, check the recording at \(spool.directory.path)."
         }
+    }
+
+    func undoCancellation() {
+        guard let take = undoTake else { return }
+        // The deadline is authoritative even if the timer's main-actor turn is delayed.
+        guard let undoExpiresAt, ContinuousClock.now < undoExpiresAt else { keepCancelledTake(); return }
+        clearUndo(for: take)
+        take.gate.decide(insert: true)
+        if take.session == sessionID { statusMessage = "Finishing captured dictation…" }
+    }
+
+    func keepCancelledTake() {
+        guard let take = undoTake else { return }
+        take.gate.decide(insert: false)
+        clearUndo(for: take)
+        if take.session == sessionID { statusMessage = "Saving to history…" }
+    }
+
+    private func openUndoWindow(for take: PendingDictation) {
+        guard let id = take.id, let endpoint = take.spool.manifest.endpoint else { take.gate.keepInHistory(); return }
+        hudTask?.cancel()
+        // Save intent before waiting for capture teardown or final frame counts.
+        if let index = pendingEntries.firstIndex(where: { $0.id == id && $0.endpoint == endpoint }) {
+            pendingEntries[index].disposition = .historyOnly
+        } else {
+            pendingEntries.append(.init(id: id, endpoint: endpoint,
+                inferenceFrames: nil, originalFrames: nil, isTest: take.spool.manifest.isTest,
+                sealedAt: Date(), disposition: .historyOnly))
+        }
+        savePendingEntries()
+        undoTake = take
+        let expiresAt = ContinuousClock.now.advanced(by: .seconds(Self.undoWindow))
+        undoExpiresAt = expiresAt
+        undoDeadline = Date().addingTimeInterval(Self.undoWindow)
+        statusMessage = "Cancelled · Saving to history"
+        onHUDVisibility?(true)
+        undoTask = Task { [weak self] in
+            do { try await Task.sleep(until: expiresAt, clock: .continuous) } catch { return }
+            guard let self, undoTake === take else { return }
+            keepCancelledTake()
+        }
+    }
+
+    private func closeCancelledDeliveries() {
+        keepCancelledTake()
+        for pending in pendingDictations where pending.gate.requiresOriginalSelection {
+            pending.gate.keepInHistory()
+        }
+    }
+
+    private func clearUndo(for take: PendingDictation) {
+        guard undoTake === take else { return }
+        undoTask?.cancel(); undoTask = nil
+        undoTake = nil; undoDeadline = nil; undoExpiresAt = nil
     }
 
     private func showEarlierDictation(_ pending: PendingDictation) {
@@ -728,13 +828,70 @@ final class InlayController: ObservableObject {
         refreshHistory()
     }
 
-    private func addPendingEntry(id: UUID, endpoint: String, finish: FinishGenerationRequest, isTest: Bool) throws {
-        guard !pendingEntries.contains(where: { $0.id == id && $0.endpoint == endpoint }) else { return }
-        let next = pendingEntries + [PendingGenerationEntry(
+    /// A cancellation intent can precede the frame counts; keep it and any receipt.
+    private func addPendingEntry(id: UUID, endpoint: String, finish: FinishGenerationRequest, isTest: Bool,
+                                 disposition: PendingDeliveryDisposition? = nil) throws {
+        let previous = pendingEntries.first { $0.id == id && $0.endpoint == endpoint }
+        if let previous, previous.inferenceFrames != nil { return }
+        let next = pendingEntries.filter { $0.id != id || $0.endpoint != endpoint } + [PendingGenerationEntry(
             id: id, endpoint: endpoint, inferenceFrames: finish.inferenceFrames, originalFrames: finish.originalFrames,
-            continuationID: finish.continuationID, isTest: isTest, sealedAt: Date())]
+            continuationID: finish.continuationID, isTest: isTest, sealedAt: Date(),
+            disposition: previous?.disposition ?? disposition, receipt: previous?.receipt)]
         guard pendingStore.save(next) else { throw CocoaError(.fileWriteUnknown) }
         pendingEntries = next
+        if pendingPersistenceError != nil { pendingPersistenceError = nil }
+    }
+
+    @discardableResult
+    private func savePendingEntries() -> Bool {
+        let saved = pendingStore.save(pendingEntries)
+        let message = "Could not save dictation recovery on this Mac. Cancelled text will not be pasted automatically; keep Inlay open until History is updated."
+        if !saved, pendingPersistenceError == nil { announceOutcome(message, .attention) }
+        pendingPersistenceError = saved ? nil : message
+        return saved
+    }
+
+    private func pendingEntryIndex(for pending: PendingDictation) -> Int? {
+        guard let id = pending.id, let endpoint = pending.spool.manifest.endpoint else { return nil }
+        return pendingEntries.firstIndex { $0.id == id && $0.endpoint == endpoint }
+    }
+
+    private func saveReceipt(_ receipt: DeliveryReceipt, for pending: PendingDictation) {
+        guard let index = pendingEntryIndex(for: pending) else { return }
+        pendingEntries[index].receipt = receipt
+        savePendingEntries()
+    }
+
+    /// Runs synchronously at the final write/copy boundary, after AX checks.
+    private func authorizeDelivery(_ pending: PendingDictation) -> Bool {
+        guard pending.gate.state == .deliver else { return pending.gate.state == .dispatching }
+        if pending.gate.requiresOriginalSelection {
+            guard let index = pendingEntryIndex(for: pending) else { return false }
+            pendingEntries[index].disposition = .attempted
+            pendingEntries[index].receipt = DeliveryReceipt(status: "unconfirmed",
+                message: "Undo insertion was interrupted. Check the original field before copying.")
+            guard savePendingEntries() else {
+                pendingEntries[index].disposition = .historyOnly
+                pendingEntries[index].receipt = nil
+                pending.gate.keepInHistory()
+                return false
+            }
+        }
+        return pending.gate.beginDelivery()
+    }
+
+    func pendingHistoryLabel(_ id: UUID) -> String? {
+        guard let entry = pendingEntries.first(where: { $0.id == id && $0.endpoint == preferences.endpoint }) else { return nil }
+        if let receipt = entry.receipt {
+            switch receipt.status {
+            case "cancelled": return "Not pasted · Sync pending"
+            case "inserted": return "Pasted · Sync pending"
+            case "copied": return "Copied · Sync pending"
+            case "unconfirmed": return "Check insertion · Sync pending"
+            default: return "Ready to copy · Sync pending"
+            }
+        }
+        return entry.disposition == .historyOnly ? "Not pasted · Sync pending" : nil
     }
 
     private var deviceIdentity: DeviceIdentity { .init(id: preferences.deviceID, name: preferences.deviceName) }
@@ -864,7 +1021,7 @@ final class InlayController: ObservableObject {
         guard remaining.count != pendingEntries.count else { return true }
         pendingEntries = remaining
         if endpoint == preferences.endpoint { undeliveredResults.removeAll { $0.id == id } }
-        return pendingStore.save(pendingEntries)
+        return savePendingEntries()
     }
 
     /// Surfaces takes that finished on the server while this app was not
@@ -892,7 +1049,14 @@ final class InlayController: ObservableObject {
             guard isUnowned(entry) else { continue }
             switch record.status {
             case .completed:
-                if record.delivery == nil, !record.finalText.isEmpty {
+                if record.delivery == nil, let receipt = entry.receipt ?? (entry.disposition == .historyOnly
+                    ? DeliveryReceipt(status: "cancelled", message: "Saved to history. Not pasted.") : nil) {
+                    do {
+                        try await connection.delivery(entry.id, receipt: receipt)
+                        removeIfStillPending(entry)
+                        refreshHistory()
+                    } catch {}
+                } else if record.delivery == nil, !record.finalText.isEmpty {
                     if !undeliveredResults.contains(where: { $0.id == record.id }) {
                         undeliveredResults.append(record)
                     }
@@ -900,8 +1064,11 @@ final class InlayController: ObservableObject {
             case .failed, .cancelled:
                 removePendingEntry(entry.id, endpoint: endpoint)
             case .receiving:
+                // A cancellation may have been persisted before upload finished.
+                // Keep that intent, but never seal with fabricated counts.
+                guard let inferenceFrames = entry.inferenceFrames else { continue }
                 do {
-                    let finish = FinishGenerationRequest(inferenceFrames: entry.inferenceFrames, originalFrames: entry.originalFrames,
+                    let finish = FinishGenerationRequest(inferenceFrames: inferenceFrames, originalFrames: entry.originalFrames,
                                                          continuationID: entry.continuationID)
                     do { _ = try await connection.finish(entry.id, value: finish) }
                     catch let error as ServerClientError {
@@ -915,7 +1082,7 @@ final class InlayController: ObservableObject {
                 } catch let ServerClientError.rejected(status, _, _) where (400..<500).contains(status) && ![401, 403, 408, 429].contains(status) {
                     // Auth failures may come from a credential the user has just
                     // replaced; they do not prove the speech is unrecoverable.
-                    removeIfStillPending(entry)
+                    if entry.disposition == nil { removeIfStillPending(entry) }
                 } catch {}
             case .queued, .transcribing, .proofreading:
                 break
@@ -963,6 +1130,7 @@ final class InlayController: ObservableObject {
     }
 
     func dismissFeedback() {
+        if isUndoPending { keepCancelledTake(); return }
         guard !activity.isBusy else { return }
         hudTask?.cancel()
         attentionPresented = false
@@ -977,6 +1145,7 @@ final class InlayController: ObservableObject {
     func shutdown() {
         guard !isShuttingDown else { return }
         isShuttingDown = true
+        closeCancelledDeliveries()
         wisprImport.shutdown()
         stopShortcutCheck()
         // Quitting stops an incomplete recording; its spool stays on disk and
@@ -1056,6 +1225,7 @@ final class InlayController: ObservableObject {
         guard isTest || Self.insertionMode(for: permissions) != .unavailable else {
             return reject("Allow Accessibility or Input Monitoring access, then try again.")
         }
+        keepCancelledTake()
         hudTask?.cancel(); errorMessage = nil; attentionPresented = false
         // Confirmed cursor moves matter only to takes that overlap them.
         if pendingDictations.isEmpty { insertionRebases.removeAll() }
@@ -1155,21 +1325,21 @@ final class InlayController: ObservableObject {
     /// trusted after sleep, lock, or device loss, so this never auto-inserts.
     private func salvageDictation(reason: String) {
         guard isCapturing else { return }
-        guard activity == .recording else { cancelDictation(); return }
+        guard activity == .recording else { discardCapture(); return }
         finishDictation(interruption: reason)
     }
 
-    private func finishDictation(atLimit: Bool = false, interruption: String? = nil) {
+    private func finishDictation(atLimit: Bool = false, interruption: String? = nil, cancelled: Bool = false) {
         guard isCapturing else { return }
         // A take ended by the duration limit must not leave a double-tap
         // latch behind, matching the failure and cancel paths.
         hotkey.clearLatchedTake()
         recorder.stopAcceptingAudio()
         outputMuter.restore()
-        guard activity == .recording else { cancelDictation(); return }
+        guard activity == .recording else { discardCapture(); return }
         let releasedAt = ProcessInfo.processInfo.systemUptime
         destinationTask?.finish()
-        guard releasedAt - recordingStart >= 0.25 else { cancelDictation(); showError("Too short — hold the key, speak, then release."); return }
+        guard releasedAt - recordingStart >= 0.25 else { discardCapture(); showError("Too short — hold the key, speak, then release."); return }
         guard let connection = activeClient, let spool = activeSpool, let endpoint = spool.manifest.endpoint else {
             failSession("The recording could not be saved on this Mac.", cancelServer: true); return
         }
@@ -1189,6 +1359,11 @@ final class InlayController: ObservableObject {
         let knownDestination: InsertionDestination? = test || interruption != nil || sessionClipboardOnly ? .clipboard : capturedDestination
         pending.target = knownDestination.map { Self.resolve($0, isTest: test, releasedAt: releasedAt) }
         pendingDictations.append(pending)
+        if cancelled {
+            // A take saved only on this Mac is never pasted, so there is nothing to undo.
+            if pending.upload == nil { pending.gate.keepInHistory() }
+            else if pending.gate.hold() { openUndoWindow(for: pending) }
+        }
         activeGenerationID = nil; activeClient = nil; self.uploadTask = nil; activeSpool = nil
         destinationTask = nil; insertionDestination = nil; recordingListHint = nil; recordingInputName = nil
         let stopped = recorder.stopCapture()
@@ -1197,6 +1372,8 @@ final class InlayController: ObservableObject {
         let task = Task { [weak self] in
             guard let self else { return }
             defer {
+                pending.gate.decide(insert: false)
+                clearUndo(for: pending)
                 if pending.resolved, let id = pending.id { removePendingEntry(id, endpoint: endpoint) }
                 pendingDictations.removeAll { $0 === pending }
                 if !isShuttingDown { refreshSavedRecordingCount() }
@@ -1253,7 +1430,8 @@ final class InlayController: ObservableObject {
                 // Record the seal before sending it; without that record a lost
                 // response could later re-upload a take the server already has.
                 try pending.spool.recordSeal(id: id, finish: finish)
-                try addPendingEntry(id: id, endpoint: endpoint, finish: finish, isTest: test)
+                try addPendingEntry(id: id, endpoint: endpoint, finish: finish, isTest: test,
+                                    disposition: pending.gate.requiresOriginalSelection ? .historyOnly : nil)
                 pending.sealed = true // A lost response is not a rejected seal.
                 var result: GenerationRecord
                 do { result = try await connection.finish(id, value: finish) }
@@ -1277,22 +1455,28 @@ final class InlayController: ObservableObject {
                 // Processing and uploads overlap. Clipboard/paste transactions
                 // remain ordered and each keeps its original destination.
                 await precedingDelivery?.value
-                await waitForCaptureRelease()
+                await waitForDeliveryPermission(pending)
                 try Task.checkCancellation()
                 let deliveryDestination = rebasedDestination(resolved)
                 var receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
-                                            clipboardCount: clipboardCount, session: current)
-                try Task.checkCancellation()
+                                            clipboardCount: clipboardCount, session: current, pending: pending)
+                // Quitting before dispatch records no outcome, so the take is
+                // offered for copy after relaunch.
+                if Task.isCancelled, pending.gate.state == .deliver { throw CancellationError() }
                 if interruption != nil {
                     let message = "Recording was interrupted. \(receipt.message ?? "")".trimmingCharacters(in: .whitespaces)
                     receipt.message = message
                     if sessionID == current { lastDelivery = message; errorMessage = nil }
                 }
-                do { try await connection.delivery(id, receipt: receipt) }
-                catch { continuationAnchors.removeAll { $0.generationID == id } }
-                try Task.checkCancellation()
+                // A cancel after dispatch cannot interrupt confirmation or its receipt.
+                pending.settlingReceipt = true
+                saveReceipt(receipt, for: pending)
+                do {
+                    try await connection.delivery(id, receipt: receipt)
+                    pending.resolved = true
+                } catch { continuationAnchors.removeAll { $0.generationID == id } }
                 // Other takes can change the shared last-delivery state during the receipt request.
-                let delivered = DictationDeliveryStatus(rawValue: receipt.status) ?? .failed
+                let delivered: DictationDeliveryStatus = receipt.status == "cancelled" ? .kept : (DictationDeliveryStatus(rawValue: receipt.status) ?? .failed)
                 if sessionID == current {
                     hudProgressText = nil
                     activity = delivered == .failed ? .failed : .success
@@ -1302,7 +1486,7 @@ final class InlayController: ObservableObject {
                     } else { dismissHUDAfter(seconds: 1.7) }
                     let outcomeSound: OutcomeFeedback.Sound =
                         switch delivered {
-                        case .inserted, .tested, .listUpdated: .success
+                        case .inserted, .tested, .listUpdated, .kept: .success
                         case .copied, .unconfirmed: .attention
                         case .failed, .none: .failure
                         }
@@ -1312,7 +1496,6 @@ final class InlayController: ObservableObject {
                     if !lastRecordingSavedLocally { errorMessage = message }
                     announceOutcome(message, .attention)
                 }
-                pending.resolved = true
                 refreshServer()
             } catch {
                 pending.upload?.cancel(); pending.destination?.cancel()
@@ -1389,7 +1572,7 @@ final class InlayController: ObservableObject {
 
     private func deliver(_ record: GenerationRecord, to destination: InsertionDestination,
                          anchor: DictationDestination?, isTest: Bool, clipboardCount: Int,
-                         session: UUID) async -> DeliveryReceipt {
+                         session: UUID, pending: PendingDictation) async -> DeliveryReceipt {
         var transcript = record.previewText.isEmpty ? record.finalText : record.previewText
         let message: String
         let deliveryStatus: DictationDeliveryStatus
@@ -1399,6 +1582,10 @@ final class InlayController: ObservableObject {
             message = "Test complete. Nothing was pasted."
             deliveryStatus = .tested
             status = record.finalText.isEmpty ? "No speech detected" : "Ready to copy"
+        } else if record.insertionText.isEmpty, record.continuation == nil, record.previewText.isEmpty {
+            message = "No speech detected"; deliveryStatus = .none; status = message
+        } else if pending.gate.state == .historyOnly {
+            message = "Saved to history. Not pasted."; deliveryStatus = .kept; status = "Saved to history"
         } else if record.insertionText.isEmpty {
             if record.continuation == nil && record.previewText.isEmpty {
                 message = "No speech detected"; deliveryStatus = .none
@@ -1413,14 +1600,25 @@ final class InlayController: ObservableObject {
         } else {
             if sessionID == session { activity = .delivering; statusMessage = "Inserting at your cursor…"; hudProgressText = "Inserting" }
             let inserter = TextInserter()
-            let outcome = await inserter.deliver(record.insertionText, copying: record.finalText,
-                                                  to: destination, clipboardUnchangedSince: clipboardCount,
-                                                  waitUntilReady: { await self.waitForCaptureRelease() },
-                                                  isCaptureActive: { self.isHoldingCapture },
-                                                  preservingClipboard: preserveClipboard)
-            guard !Task.isCancelled else { return DeliveryReceipt(status: "failed", message: "Delivery cancelled") }
+            var attempted: InsertionOutcome
+            repeat {
+                await waitForDeliveryPermission(pending)
+                attempted = await inserter.deliver(record.insertionText, copying: record.finalText,
+                    to: destination, clipboardUnchangedSince: clipboardCount,
+                    waitUntilReady: { await self.waitForDeliveryPermission(pending) },
+                    isCaptureActive: { self.isHoldingCapture || pending.gate.state == .undoPending },
+                    preservingClipboard: preserveClipboard,
+                    requiresKnownSelection: { pending.gate.requiresOriginalSelection },
+                    deliveryAllowed: { pending.gate.state != .historyOnly },
+                    beginDelivery: { self.authorizeDelivery(pending) })
+                // A metadata-only failure can return without ever dispatching.
+                // If Cancel arrived during that await, settle Undo before a receipt.
+            } while pending.gate.state == .undoPending
+            let outcome: InsertionOutcome = pending.gate.state == .historyOnly ? .withheld : attempted
             if let anchor { continuationAnchors.removeAll { $0.destination == anchor } }
             switch outcome {
+            case .withheld:
+                message = "Saved to history. Not pasted."; deliveryStatus = .kept; status = "Saved to history"
             case .inserted:
                 if let target = inserter.confirmedAnchor {
                     if let original = destination.target {
@@ -1450,7 +1648,7 @@ final class InlayController: ObservableObject {
             lastDeliveryStatus = deliveryStatus
             if sessionID == session { statusMessage = status }
         }
-        return DeliveryReceipt(status: deliveryStatus.rawValue, message: message)
+        return DeliveryReceipt(status: deliveryStatus == .kept ? "cancelled" : deliveryStatus.rawValue, message: message)
     }
 
     private func rebasedDestination(_ destination: InsertionDestination) -> InsertionDestination {
@@ -1461,20 +1659,29 @@ final class InlayController: ObservableObject {
     /// Delivery never overlaps a hold, including a press still inside its acceptance delay.
     private var isHoldingCapture: Bool { isCapturing || hotkey.isHoldInProgress }
 
-    private func waitForCaptureRelease() async {
-        while isHoldingCapture, (try? await Task.sleep(for: .milliseconds(50))) != nil {}
+    private func waitForDeliveryPermission(_ pending: PendingDictation) async {
+        while !Task.isCancelled {
+            await pending.gate.waitForDecision()
+            guard pending.gate.state != .historyOnly else { return }
+            guard isHoldingCapture else { return }
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+        }
     }
 
     private func stopPendingDictations() {
+        keepCancelledTake()
         for pending in pendingDictations {
+            // Keep no-paste uploads running long enough to persist real counts;
+            // dispatched transactions always finish their receipt bookkeeping.
+            if pending.gate.requiresOriginalSelection || pending.gate.state == .dispatching || pending.settlingReceipt { continue }
             pending.cancel()
             if !pending.sealed, let id = pending.id {
                 if let endpoint = pending.spool.manifest.endpoint { removePendingEntry(id, endpoint: endpoint) }
                 Task { try? await pending.client.cancel(id) }
             }
         }
-        pendingDictations.removeAll()
-        deliveryTail = nil
+        pendingDictations.removeAll { !$0.gate.requiresOriginalSelection && $0.gate.state != .dispatching && !$0.settlingReceipt }
+        if pendingDictations.isEmpty { deliveryTail = nil }
         insertionRebases.removeAll()
     }
 
@@ -1528,7 +1735,7 @@ final class InlayController: ObservableObject {
         hudTask?.cancel()
         hudTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
-            guard let self, !activity.isBusy else { return }
+            guard let self, !activity.isBusy, !isUndoPending else { return }
             if clearAttention { attentionPresented = false }
             // A newer take's result was shown; return the HUD to earlier work.
             if !lastRecordingSavedLocally, let earlier = pendingDictations.last { showEarlierDictation(earlier); return }
@@ -1554,6 +1761,7 @@ final class InlayController: ObservableObject {
 
     private func restForSystem() {
         stopShortcutCheck()
+        closeCancelledDeliveries()
         // Salvage a live take (best effort before suspend) and leave sealed
         // pendings running: their recovery continues after wake.
         if isCapturing { salvageDictation(reason: "Recording interrupted while your Mac was away.") }

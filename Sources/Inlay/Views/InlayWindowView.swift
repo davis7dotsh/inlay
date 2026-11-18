@@ -269,8 +269,8 @@ struct DictationPage: View {
                 }
                 Spacer()
                 Button { controller.cancelDictation() } label: { Image(systemName: "xmark") }
-                    .help(controller.isCapturing ? "Discard this recording without transcribing it" : "Cancel processing this dictation")
-                    .accessibilityLabel(controller.isCapturing ? "Discard recording" : "Cancel dictation")
+                    .help(controller.isCapturing ? "Stop recording without pasting it. A usable dictation is kept in History" : "Cancel processing this dictation")
+                    .accessibilityLabel(controller.isCapturing ? "Cancel recording" : "Cancel dictation")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if showsSavedTake {
