@@ -28,7 +28,7 @@ jobs:
         run: |
           choco upgrade nsis.install --version=3.13.0 --allow-downgrade --yes --no-progress
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /WX "/DBUILD_ID=$($env:GITHUB_SHA.Substring(0, 7))" Windows/setup.nsi
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /WX "/DBUILD_ID=$($env:GITHUB_SHA.Substring(0, 7))" Windows\setup.nsi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Inlay-windows-x64
