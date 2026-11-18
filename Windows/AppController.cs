@@ -111,6 +111,7 @@ internal sealed partial class AppController : IClientUi, IDisposable
     {
         if (take != null || connecting) throw new InvalidOperationException("Finish the current operation first.");
     }
+    public bool HasConnection => api != null;
     private InlayApi Connected => api ?? throw new InvalidOperationException("Connect to a server in This PC first.");
 
     public void Dispose()

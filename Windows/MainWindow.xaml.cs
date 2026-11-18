@@ -239,7 +239,13 @@ internal partial class MainWindow : Window
             TokenBox.Clear(); EndpointBox.Text = app.State.Endpoint; DeviceNameBox.Text = app.State.DeviceName;
             ResetSharedPages(); DeviceMessage.Text = app.State.ServerStatus;
         }
-        catch (Exception ex) { DeviceMessage.Text = ex.Message; }
+        catch (Exception ex)
+        {
+            // The previous connection stays active. Never leave the form naming a server dictation won't use.
+            EndpointBox.Text = app.State.Endpoint; DeviceNameBox.Text = app.State.DeviceName;
+            DeviceMessage.Text = !app.HasConnection ? ex.Message
+                : $"{ex.Message} Still connected to {app.State.Endpoint}.";
+        }
         finally { TokenBox.Clear(); connecting = false; EndpointBox.IsEnabled = DeviceNameBox.IsEnabled = TokenBox.IsEnabled = true; Render(); }
     }
     private void AutoCopyClicked(object sender, RoutedEventArgs e)

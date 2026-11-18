@@ -93,7 +93,9 @@ internal sealed class Microphone : IAsyncDisposable
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(abort.Token, external);
         var token = lifetime.Token;
-        var queue = Channel.CreateBounded<MicrophoneChunk>(new BoundedChannelOptions(512)
+        // Hold a whole capped take (250 ms chunks for both streams) so a slow link
+        // delays the upload instead of aborting the take. RAM only, never disk.
+        var queue = Channel.CreateBounded<MicrophoneChunk>(new BoundedChannelOptions(MaxSeconds * 4 * 2 + 8)
         {
             SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait
         });

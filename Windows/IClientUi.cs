@@ -10,6 +10,7 @@ internal interface IClientUi
 {
     ClientUiState State { get; }
     event Action? Changed;
+    bool HasConnection { get; }
     Task RefreshAsync();
     Task ConnectAsync(string endpoint, string token, string deviceName);
     Task ToggleTestAsync();
