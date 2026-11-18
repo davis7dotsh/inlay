@@ -7,7 +7,9 @@
 #   2. Mount or repair the share when it is not healthy (mounted read-write, marker there, a write
 #      probe passes), never in the NAS window, and at most once in 5 minutes: the NAS
 #      blocks an address after 10 failed sign-ins in 5 minutes.
-#   3. Start the hub. Every 15 minutes outside the window, check the mount again.
+#   3. Start the hub. Every 15 minutes outside the window, check the mount again, and from 03:00
+#      local time make the day's database copy on the share once (src/backup.ts), at most one try
+#      an hour.
 #   4. When the ssh session ends (launchd stopped hub-job), its stdin closes and the hub stops.
 set -uo pipefail
 app=@APP@
@@ -44,6 +46,24 @@ mount_check() {
   /bin/bash "$app/deploy/mount.sh" || say "the mount failed. Share routes answer 503 until a later check mounts it." >&2
 }
 
+# The day's database copy, once a day from 03:00 local time (after the 23:30 client syncs). A failed
+# copy tries again an hour later. The copy takes seconds and never runs in the NAS window.
+backup_check() {
+  in_window && return 0
+  [ "$((10#$(date +%H)))" -ge 3 ] || return 0
+  local today done="$state/last-backup-day" try="$state/last-backup-try"
+  today=$(date +%F)
+  [ "$(cat "$done" 2>/dev/null)" = "$today" ] && return 0
+  if [ -f "$try" ] && [ $(( $(date +%s) - $(stat -f %m "$try") )) -lt 3600 ]; then return 0; fi
+  touch "$try"
+  healthy || { say "the share is not ready. The database copy waits for the next check."; return 0; }
+  if (cd "$app" && perl -e 'alarm 1800; exec @ARGV' "$bun" "$app/src/backup.ts" --day "$today"); then
+    echo "$today" > "$done"
+  else
+    say "the database copy failed. It tries again in an hour."
+  fi
+}
+
 pkill -u "$(id -u)" -f "^$bun $app/src/main.ts" && sleep 1
 mount_check
 
@@ -53,7 +73,7 @@ cd "$app" || exit 1
 hub=$!
 ( cat <&3 >/dev/null; say "the ssh session ended. Stopping the hub."; kill -TERM "$hub" 2>/dev/null ) &
 watcher=$!
-( while sleep 900; do mount_check; done ) </dev/null &
+( while sleep 900; do mount_check; backup_check; done ) </dev/null &
 checker=$!
 exec 3<&-
 wait "$hub"

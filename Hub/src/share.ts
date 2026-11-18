@@ -1,11 +1,11 @@
-// The transcripts share: the only place the hub reads or writes audio. Every file step first checks
-// the share marker, and every chunk read or written checks the NAS window, so a request that runs
-// into 10:57 UTC stops at its next chunk, and a bare mount point (the share not mounted) is never
-// written.
+// The transcripts share: the only place the hub reads or writes audio and the database copies.
+// Every file step first checks the share marker, and every chunk read or written checks the NAS
+// window, so a request that runs into 10:57 UTC stops at its next chunk, and a bare mount point
+// (the share not mounted) is never written.
 import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { HttpError } from "./errors.ts";
 import { artifactPath, type Sha256 } from "./record.ts";
 
@@ -37,7 +37,8 @@ export const SHARE_MARKER = ".transcriber-hub-share";
 const CHUNK = 1 << 20;
 /// A temp file older than this belongs to no live upload (a post times out long before).
 const STALE_PARTIAL_MS = 60 * 60 * 1000;
-const PARTIAL = /^\.[0-9a-f]{64}\.flac\.[0-9a-f]{12}\.partial$/;
+/// A temp file: .<final name>.<12 hex>.partial, such as .<sha>.flac.0123456789ab.partial
+const PARTIAL = /^\.[A-Za-z0-9][A-Za-z0-9._-]*\.[0-9a-f]{12}\.partial$/;
 
 export class Share {
   /// The temp files this process is writing now. removeStalePartials never removes them, so an
@@ -86,25 +87,32 @@ export class Share {
     }
   }
 
-  /// Put the FLAC at artifacts/<2 hex>/<sha>.flac through a temp file and a rename, then read it
-  /// back. A file that already holds these bytes is kept as it is. Returns whether it wrote.
-  async putFlac(sha: Sha256, flac: Uint8Array): Promise<{ wrote: boolean }> {
-    const relative = artifactPath(sha);
+  /// Put the FLAC at artifacts/<2 hex>/<sha>.flac. Returns whether it wrote.
+  putFlac(sha: Sha256, flac: Uint8Array): Promise<{ wrote: boolean }> {
+    return this.putFile(artifactPath(sha), flac, sha);
+  }
+
+  /// Put bytes whose SHA-256 is sha at a share path through a temp file and a rename, then read
+  /// them back. A file that already holds these bytes is kept as it is. Returns whether it wrote.
+  async putFile(relative: string, bytes: Uint8Array, sha: Sha256): Promise<{ wrote: boolean }> {
     if ((await this.hash(relative)) === sha) return { wrote: false };
     const final = join(this.root, relative);
     await this.guard();
     await mkdir(dirname(final), { recursive: true, mode: 0o700 });
     await this.removeStalePartials(dirname(final));
-    // A temp name that a stopped post leaves behind is recognizable: .<sha>.flac.<random>.partial
-    const temp = join(dirname(final), `.${sha}.flac.${randomBytes(6).toString("hex")}.partial`);
+    // A temp name that a stopped write leaves behind is recognizable: .<name>.<random>.partial
+    const temp = join(
+      dirname(final),
+      `.${basename(final)}.${randomBytes(6).toString("hex")}.partial`,
+    );
     await this.guard();
     this.activePartials.add(temp);
     try {
       const file = await open(temp, "wx", 0o600);
       try {
-        for (let at = 0; at < flac.length;) {
+        for (let at = 0; at < bytes.length;) {
           assertWindowOpen(this.clock());
-          at += (await file.write(flac, at, Math.min(CHUNK, flac.length - at))).bytesWritten;
+          at += (await file.write(bytes, at, Math.min(CHUNK, bytes.length - at))).bytesWritten;
         }
         assertWindowOpen(this.clock());
         await file.sync();
@@ -128,10 +136,45 @@ export class Share {
       throw new HttpError(
         502,
         "readback_mismatch",
-        "the FLAC read back from the share holds other bytes",
+        `the file read back from ${relative} holds other bytes`,
       );
     }
     return { wrote: true };
+  }
+
+  /// The names in a share folder, or [] when there is no folder.
+  async list(folder: string): Promise<string[]> {
+    await this.guard();
+    try {
+      return await readdir(join(this.root, folder));
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+      throw error;
+    }
+  }
+
+  /// The bytes of the file at a share path, read in chunks that each check the NAS window.
+  async read(relative: string): Promise<Uint8Array> {
+    await this.guard();
+    const file = await open(join(this.root, relative), constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const chunks: Uint8Array[] = [];
+      for (;;) {
+        assertWindowOpen(this.clock());
+        const buffer = new Uint8Array(CHUNK);
+        const { bytesRead } = await file.read(buffer, 0, CHUNK, null);
+        if (bytesRead === 0) break;
+        chunks.push(buffer.subarray(0, bytesRead));
+      }
+      return Buffer.concat(chunks);
+    } finally {
+      await file.close();
+    }
+  }
+
+  async remove(relative: string) {
+    await this.guard();
+    await rm(join(this.root, relative), { force: true });
   }
 
   /// Remove temp files older than an hour in one artifacts folder: what a failed or stopped upload
