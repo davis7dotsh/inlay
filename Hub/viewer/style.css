@@ -609,6 +609,15 @@ th {
   background: #fbf0ec;
   color: #8f2f22;
 }
+.banner .cause {
+  margin-top: 8px;
+}
+.banner .cause strong {
+  margin-bottom: 2px;
+}
+.stale {
+  color: #8f2f22;
+}
 .banner.unknown {
   border-color: #e6d7b5;
   background: #fbf5e6;

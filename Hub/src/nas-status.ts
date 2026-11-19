@@ -21,7 +21,11 @@
 //   last sync       HUB_CONFIG/last-sync.json, which the hub writes after each 200 POST /v1/records,
 //                   or the newest such line in HUB_LOG while that file does not exist yet
 // The high-water alarm is set when a live count is below the highest count in any manifest, in db/
-// or db/superseded. The backup age is the time since the newest manifest was made.
+// or db/superseded, or when any manifest has a count below the highest count of an earlier manifest
+// (by its day, then its created_at), even when the live database has recovered since. Each drop
+// names its table, and a manifest drop also names its day. The backup age is the time since the
+// newest manifest was made, and backup_stale is true when it is over 26 hours. The viewer computes
+// the age again from created_at at page load, so an old status file still turns red.
 // Each value it cannot read is {"unavailable": true, "reason": ...}, never 0, and the top-level
 // unavailable list names each one.
 // It writes HUB_NAS_STATUS (default ~/data/transcripts/nas-status.json) through a temp file and a
@@ -54,11 +58,13 @@ const TABLES = ["recordings", "transcriptions", "cleanups", "audio", "devices"] 
 type Table = (typeof TABLES)[number];
 type Counts = Record<Table, number>;
 const MANIFEST = /^transcripts-(\d{4}-\d{2}-\d{2})\.json$/;
-const SUPERSEDED_MANIFEST = /^transcripts-\d{4}-\d{2}-\d{2}\.json\.\d{8}T\d{6}Z$/;
+const SUPERSEDED_MANIFEST = /^transcripts-(\d{4}-\d{2}-\d{2})\.json\.\d{8}T\d{6}Z$/;
 /// A DSM snapshot name, such as GMT-06-2026.11.18-04.00.01: the local time and its UTC offset.
 const SNAPSHOT = /^GMT([+-])(\d{2})-(\d{4})\.(\d{2})\.(\d{2})-(\d{2})\.(\d{2})\.(\d{2})$/;
 /// The oldest snapshots.json whose share totals are used. DSM task 5 writes it once a day.
 const TOTALS_MAX_HOURS = 36;
+/// A newest database copy older than this sets backup_stale. The viewer uses the same limit.
+const BACKUP_MAX_HOURS = 26;
 const BUSY_TIMEOUT_MS = 10_000;
 const LOG_TAIL_BYTES = 8 << 20;
 const MAX_JSON_BYTES = 8 << 20;
@@ -350,8 +356,8 @@ function parseManifest(text: string, where: string): Manifest {
 type Manifests = {
   /// The manifests in db/, oldest day first.
   days: { day: string; manifest: Manifest }[];
-  /// The manifests in db/superseded.
-  superseded: Manifest[];
+  /// The manifests in db/superseded, with the day in each name.
+  superseded: { day: string; manifest: Manifest }[];
 };
 
 /// Every manifest. Any one that does not read makes the whole set unavailable, so the highest
@@ -380,12 +386,13 @@ async function readManifests(): Promise<Manifests> {
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
   }
-  for (const name of names.sort())
-    if (SUPERSEDED_MANIFEST.test(name)) {
-      const path = join(folder, name);
-      checkWindow();
-      superseded.push(parseManifest(await readSmall(path), path));
-    }
+  for (const name of names.sort()) {
+    const day = SUPERSEDED_MANIFEST.exec(name)?.[1];
+    if (!day) continue;
+    const path = join(folder, name);
+    checkWindow();
+    superseded.push({ day, manifest: parseManifest(await readSmall(path), path) });
+  }
   return { days, superseded };
 }
 
@@ -443,26 +450,73 @@ function backupAge(manifests: Maybe<Manifests>) {
   if (!newest) return unavailable("the share holds no database copy manifest");
   const made = Date.parse(newest.created_at);
   if (!Number.isFinite(made)) return unavailable(`the newest manifest has no valid created_at`);
-  return { hours: hoursSince(made), newest_created_at: iso(made), day: manifests.days.at(-1)!.day };
+  const hours = hoursSince(made);
+  return {
+    hours,
+    newest_created_at: iso(made),
+    day: manifests.days.at(-1)!.day,
+    max_hours: BACKUP_MAX_HOURS,
+    // The raw age decides, not the rounded hours, so a copy 26 h 1 min old is stale.
+    backup_stale: Date.now() - made > BACKUP_MAX_HOURS * 3_600_000,
+  };
 }
 
 function highWater(live: Maybe<DatabaseNumbers>, manifests: Maybe<Manifests>) {
   if (isUnavailable(live)) return unavailable(`the live counts: ${live.reason}`);
   if (isUnavailable(manifests)) return unavailable(`the manifests: ${manifests.reason}`);
-  const all = [...manifests.days.map((d) => d.manifest), ...manifests.superseded];
+  // Every manifest in the order it was made: by day, then by created_at. A superseded manifest
+  // of a day was made before the one that replaced it.
+  const made = (m: Manifest) => {
+    const ms = Date.parse(m.created_at);
+    return Number.isFinite(ms) ? ms : 0;
+  };
+  const all = [...manifests.days, ...manifests.superseded].sort(
+    (a, b) => a.day.localeCompare(b.day) || made(a.manifest) - made(b.manifest),
+  );
   if (!all.length) return unavailable("the share holds no database copy manifest");
   const highest: Partial<Counts> = {};
-  for (const m of all)
+  const highestDay: Partial<Record<Table, string>> = {};
+  const drops: (
+    | {
+        kind: "manifest";
+        table: Table;
+        day: string;
+        count: number;
+        highest: number;
+        highest_day: string;
+      }
+    | { kind: "live"; table: Table; live: number; highest: number; highest_day: string }
+  )[] = [];
+  for (const { day, manifest } of all)
     for (const t of TABLES) {
-      const n = m.counts[t];
-      if (typeof n === "number" && n > (highest[t] ?? -1)) highest[t] = n;
+      const n = manifest.counts[t];
+      if (typeof n !== "number") continue;
+      const high = highest[t];
+      if (high !== undefined && n < high)
+        drops.push({
+          kind: "manifest",
+          table: t,
+          day,
+          count: n,
+          highest: high,
+          highest_day: highestDay[t]!,
+        });
+      if (high === undefined || n > high) {
+        highest[t] = n;
+        highestDay[t] = day;
+      }
     }
-  const drops = TABLES.flatMap((t) => {
+  for (const t of TABLES) {
     const high = highest[t];
-    return high !== undefined && live.counts[t] < high
-      ? [{ table: t, live: live.counts[t], highest: high }]
-      : [];
-  });
+    if (high !== undefined && live.counts[t] < high)
+      drops.push({
+        kind: "live",
+        table: t,
+        live: live.counts[t],
+        highest: high,
+        highest_day: highestDay[t]!,
+      });
+  }
   return {
     alarm: drops.length > 0,
     drops,
@@ -670,6 +724,7 @@ try {
     path: statusPath,
     unavailable: status.unavailable.map((u) => u.field),
     alarm: isUnavailable(status.high_water) ? null : status.high_water.alarm,
+    backup_stale: isUnavailable(status.backup_age) ? null : status.backup_age.backup_stale,
   });
   process.exit(0);
 } catch (error) {

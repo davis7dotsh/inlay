@@ -773,39 +773,104 @@ function sharesTable(shares) {
   return t;
 }
 
-function alarmBanner(hw) {
-  if (!isObject(hw)) hw = MISSING;
+/// A newest database copy older than this turns the banner red. nas-status.ts uses the same limit.
+const BACKUP_MAX_HOURS = 26;
+
+/// The age of the newest database copy now, from its created_at against this page's clock, so a
+/// status file that is itself old still turns red. Unavailable when the file gives no valid time.
+function backupAgeNow(s) {
+  const age = isObject(s.backup_age) ? s.backup_age : MISSING;
+  if (isUnavailable(age)) return age;
+  const share = Array.isArray(s.shares)
+    ? s.shares.find((x) => isObject(x) && x.name === "transcripts")
+    : undefined;
+  const created =
+    age.newest_created_at ??
+    (isObject(share?.newest_backup) ? share.newest_backup.created_at : undefined);
+  const made = typeof created === "string" ? Date.parse(created) : NaN;
+  if (!Number.isFinite(made))
+    return { unavailable: true, reason: "the status file gives no valid creation time" };
+  const hours = (Date.now() - made) / 3_600_000;
+  // The file's own alarm state must be readable for a green banner. An age this page computes as
+  // over the limit stays red even then, because that cause is known without the file's flag.
+  const readable =
+    typeof age.backup_stale === "boolean" && typeof age.newest_created_at === "string";
+  if (!readable && hours <= BACKUP_MAX_HOURS)
+    return { unavailable: true, reason: "the status file gives no valid backup alarm state" };
+  return { hours, day: age.day, flagged: age.backup_stale === true };
+}
+
+const hoursText = (h) => `${Math.round(h * 10) / 10} h`;
+
+function dropText(d) {
+  if (d.kind === "manifest")
+    return `${d.table}: ${number(d.count)} in the ${d.day} manifest, below ${number(d.highest)} in the earlier ${d.highest_day} manifest (${number(d.highest - d.count)} fewer)`;
+  return `${d.table}: ${number(d.live)} live, ${number(d.highest)} in a backup manifest (${number(d.highest - d.live)} fewer)`;
+}
+
+/// The alarm banner. It is red when a count dropped (the high-water alarm) or when the newest
+/// database copy is over 26 hours old, and it names each cause that fired. It is unknown when no
+/// cause fired and a state cannot be read. Only then is it green.
+function alarmBanner(s) {
+  let hw = isObject(s.high_water) ? s.high_water : MISSING;
   // Only a boolean alarm is a verified state. A missing or malformed alarm is unknown.
   if (!isUnavailable(hw) && typeof hw.alarm !== "boolean")
     hw = { unavailable: true, reason: "the status file gives no alarm state" };
-  if (isUnavailable(hw)) {
-    const b = node("div", undefined, "banner unknown");
-    b.append(
-      node("strong", "High-water alarm: unknown"),
-      node("span", hw.reason || "no reason given"),
-    );
-    return b;
-  }
-  if (hw.alarm === true) {
+  const age = backupAgeNow(s);
+  const stale = !isUnavailable(age) && (age.hours > BACKUP_MAX_HOURS || age.flagged);
+  const highWater = !isUnavailable(hw) && hw.alarm === true;
+
+  if (highWater || stale) {
     const b = node("div", undefined, "banner alarm");
     b.setAttribute("role", "alert");
-    b.append(node("strong", "High-water alarm: a live count is below a backup"));
-    for (const d of Array.isArray(hw.drops) ? hw.drops.filter(isObject) : [])
-      b.append(
+    const causes = [
+      highWater && "a count dropped below a backup",
+      stale && "the newest backup is old",
+    ];
+    b.append(node("strong", `Alarm: ${causes.filter(Boolean).join(", and ")}`));
+    if (highWater) {
+      const part = node("div", undefined, "cause");
+      part.append(node("strong", "High-water alarm: a count is below an earlier backup"));
+      for (const d of Array.isArray(hw.drops) ? hw.drops.filter(isObject) : [])
+        part.append(node("div", dropText(d)));
+      b.append(part);
+    }
+    if (stale) {
+      const part = node("div", undefined, "cause");
+      part.append(
+        node("strong", `Backup age alarm: the newest copy is ${hoursText(age.hours)} old`),
         node(
           "div",
-          `${d.table}: ${number(d.live)} live, ${number(d.highest)} in a backup manifest (${number(d.highest - d.live)} fewer)`,
+          `The newest database copy${age.day ? ` (${age.day})` : ""} is over ${BACKUP_MAX_HOURS} hours old at this page's time.`,
         ),
       );
+      b.append(part);
+    }
+    if (isUnavailable(hw))
+      b.append(node("div", `High-water alarm: unknown. ${hw.reason || "no reason given"}`));
+    if (isUnavailable(age))
+      b.append(node("div", `Backup age: unknown. ${age.reason || "no reason given"}`));
+    return b;
+  }
+  if (isUnavailable(hw) || isUnavailable(age)) {
+    const b = node("div", undefined, "banner unknown");
+    b.append(node("strong", "Alarm state: unknown"));
+    if (isUnavailable(hw))
+      b.append(node("div", `High-water alarm: ${hw.reason || "no reason given"}`));
+    if (isUnavailable(age)) b.append(node("div", `Backup age: ${age.reason || "no reason given"}`));
     return b;
   }
   const b = node("div", undefined, "banner");
   const m = hw.manifests || {};
   b.append(
-    node("strong", "High-water alarm: off"),
+    node("strong", "Alarms off"),
     node(
-      "span",
-      `Every live count is at or above its highest count in ${number(m.in_db)} manifests in db/ and ${number(m.in_superseded)} in db/superseded.`,
+      "div",
+      `High-water alarm: off. No count is below an earlier count in ${number(m.in_db)} manifests in db/ and ${number(m.in_superseded)} in db/superseded.`,
+    ),
+    node(
+      "div",
+      `Backup age alarm: off. The newest copy is ${hoursText(age.hours)} old, within ${BACKUP_MAX_HOURS} hours.`,
     ),
   );
   return b;
@@ -914,7 +979,7 @@ function nasParts(data) {
     ? `Checked ${when(s.checked_at)} (${ago(s.checked_at)}).`
     : "The check time is not in the status file.";
   top.textContent = `${checked} The daily status job writes this file after 07:30 Central. A page load never touches the NAS.`;
-  parts.push(alarmBanner(s.high_water), top);
+  parts.push(alarmBanner(s), top);
 
   parts.push(
     block(
@@ -933,7 +998,13 @@ function nasParts(data) {
     miniCard(
       "BACKUP AGE",
       value(s.backup_age, (a) => {
-        const span = node("strong", `${a.hours} h`);
+        // The age now, from created_at, never only the hours the file was written with.
+        const now = backupAgeNow(s);
+        const span = node(
+          "strong",
+          isUnavailable(now) ? `${a.hours} h` : hoursText(now.hours),
+          !isUnavailable(now) && now.hours > BACKUP_MAX_HOURS ? "stale" : undefined,
+        );
         span.append(
           node("small", `Newest copy ${a.day}, made ${when(a.newest_created_at)}`, "sub"),
         );
