@@ -10,6 +10,9 @@
 // Log: one JSON line per record and one per run, to ~/Library/Logs/transcriber-hub-sync.log and stdout.
 // --hub and --pin replace the configured addresses and pin for one run (live checks).
 // Exit 0 when the run finished, 75 when it stopped early (the rest wait for the next run), 1 on error.
+// An error also goes to GlitchTip, project transcriber-hub-sync (error-reporting.ts), when the DSN is in
+// GLITCHTIP_DSN_TRANSCRIBER_HUB_SYNC or in ~/workspace/.env (envsync writes it). With no DSN, or with GlitchTip down,
+// the run is the same and keeps its exit code. The flush before exit waits 2 s at most.
 import {
   appendFileSync,
   closeSync,
@@ -27,6 +30,12 @@ import { stamp } from "../../../Hub/src/ids.ts";
 import { loadTarget } from "./config.ts";
 import { ConfirmStore } from "./confirms.ts";
 import { deleteDryRun } from "./delete-dry-run.ts";
+import {
+  dsnFromEnv,
+  reportError,
+  startErrorReporting,
+  stopErrorReporting,
+} from "./error-reporting.ts";
 import { assertHttps } from "./hub-client.ts";
 import { runSync } from "./sync.ts";
 
@@ -56,6 +65,18 @@ function log(line: Record<string, unknown>) {
   appendFileSync(values.log, text, { mode: 0o600 });
   process.stdout.write(text);
 }
+
+// Flush the SDK, then exit with the run's code.
+async function exit(code: number): Promise<never> {
+  await stopErrorReporting();
+  process.exit(code);
+}
+
+await startErrorReporting({
+  source: "transcriber-hub-sync",
+  log: (line) => log({ event: "errors", detail: line }),
+  readDsn: dsnFromEnv("GLITCHTIP_DSN_TRANSCRIBER_HUB_SYNC", join(home, "workspace", ".env")),
+});
 
 try {
   if (values.since) stamp(values.since); // refuse a bad time before anything else
@@ -91,7 +112,7 @@ try {
     }
     const { entries, ...summary } = result;
     log({ event: "delete_dry_run", ...summary, records: entries.length, out });
-    process.exit(result.stopped ? 75 : 0);
+    await exit(result.stopped ? 75 : 0);
   }
   const summary = await runSync({
     archiveRoot: values.archive,
@@ -108,11 +129,12 @@ try {
     only: values.only ?? null,
     dry_run: values["dry-run"],
   });
-  process.exit(summary.stopped ? 75 : 0);
+  await exit(summary.stopped ? 75 : 0);
 } catch (error) {
   log({
     event: "run",
     error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
   });
-  process.exit(1);
+  reportError(error, "run");
+  await exit(1);
 }

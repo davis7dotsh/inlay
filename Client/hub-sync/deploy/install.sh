@@ -3,8 +3,9 @@
 #   Client/hub-sync/deploy/install.sh [commit]      (default HEAD)
 # It copies Client/hub-sync and Hub/src of that commit to ~/.local/share/transcriber-hub-client/
 # releases/<commit>/ and points current at it, so the job never runs from a checkout that switches
-# branches. It copies config.json and hub-cert.pem to ~/.config/transcriber-hub-client/. The token
-# comes from token.sh. It removes nothing but the job's own earlier LaunchAgent registration.
+# branches, and installs the job's pinned dependencies there from Client/hub-sync/bun.lock. It copies
+# config.json and hub-cert.pem to ~/.config/transcriber-hub-client/. The token comes from token.sh. It removes
+# nothing but the job's own earlier LaunchAgent registration.
 set -euo pipefail
 umask 077
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -27,6 +28,8 @@ mkdir -p "$share/releases" "$config" "$HOME/.local/state/transcriber-hub-client"
 if [ ! -d "$release" ]; then
   tmp=$(mktemp -d "$share/releases/.new.XXXXXX")
   git -C "$repo" archive "$commit" Client/hub-sync Hub/src | tar -x -C "$tmp"
+  # The pinned runtime dependencies (@sentry/bun for GlitchTip) from Client/hub-sync/bun.lock, without dev tools.
+  (cd "$tmp/Client/hub-sync" && "$bun" install --frozen-lockfile --production --silent)
   mv "$tmp" "$release"
 fi
 ln -sfn "$release" "$share/current"

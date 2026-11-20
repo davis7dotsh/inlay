@@ -5,6 +5,7 @@
   It runs at 23:30 local time. When the Mac sleeps through 23:30, launchd runs it once after wake.
   install.sh fills in __HOME__ and __BUN__ and copies this file to ~/Library/LaunchAgents.
   The sync writes its own log lines (no token) to ~/Library/Logs/transcriber-hub-sync.log.
+  bun runs with no auto-install: a dependency missing from the release turns GlitchTip off and never reaches the registry.
   It runs without --since: each run sends every Transcriber and Wispr Flow record without a stored confirm.
 -->
 <plist version="1.0">
@@ -14,6 +15,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>__BUN__</string>
+    <string>--no-install</string>
     <string>__HOME__/.local/share/transcriber-hub-client/current/Client/hub-sync/src/main.ts</string>
   </array>
   <key>EnvironmentVariables</key>
