@@ -7,7 +7,7 @@ import { checkServerIdentity, type PeerCertificate } from "node:tls";
 import type { Held, RecordPost } from "../../../Hub/src/record.ts";
 
 export type HubTarget = {
-  addresses: string[]; // base URLs in the order to try, such as https://10.10.20.128:8797
+  addresses: string[]; // base URLs in the order to try, such as https://10.10.20.129:8797
   ca: string; // PEM of the hub certificate
   pin: string; // sha256/<base64 SHA-256 of the SPKI DER>
   token: string;
